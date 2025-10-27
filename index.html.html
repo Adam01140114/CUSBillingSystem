@@ -1,0 +1,3301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  />
+  <title>CUS Billing - Admin Portal</title>
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+    import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCxfnleg4jI9C3xPI_UabT81vIsnPjukSY",
+      authDomain: "cus-billing-e84eb.firebaseapp.com",
+      projectId: "cus-billing-e84eb",
+      storageBucket: "cus-billing-e84eb.firebasestorage.app",
+      messagingSenderId: "606152504829",
+      appId: "1:606152504829:web:6d14518df4a56ecfe81594",
+      measurementId: "G-FKLJNHMWHV"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // Sample admin credentials
+    const adminCredentials = {
+      email: 'admin@cus.com',
+      password: 'admin123'
+    };
+
+    // Customer data (starts empty, customers added through admin interface)
+    let customers = [];
+
+    // Locations data (starts empty, locations added through import or admin interface)
+    let locations = [];
+
+    // Format phone number as (xxx)-xxx-xxxx
+    function formatPhoneNumber(phone) {
+      // Remove all non-digit characters
+      const cleaned = phone.replace(/\D/g, '');
+      
+      // Format as (xxx)-xxx-xxxx
+      if (cleaned.length === 10) {
+        return `(${cleaned.slice(0, 3)})-${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
+      }
+      
+      // Return original if not 10 digits
+      return phone;
+    }
+
+    // Format phone number input as user types
+    window.formatPhoneInput = function(input) {
+      let value = input.value.replace(/\D/g, ''); // Remove all non-digits
+      
+      if (value.length >= 6) {
+        // Format as (xxx)-xxx-xxxx
+        value = `(${value.slice(0, 3)})-${value.slice(3, 6)}-${value.slice(6, 10)}`;
+      } else if (value.length >= 3) {
+        // Format as (xxx)-xxx
+        value = `(${value.slice(0, 3)})-${value.slice(3)}`;
+      } else if (value.length > 0) {
+        // Format as (xxx
+        value = `(${value}`;
+      }
+      
+      input.value = value;
+    };
+
+    // Format date as mm/dd/yyyy
+    function formatDate(dateString) {
+      if (!dateString || dateString === 'Never') {
+        return 'Never';
+      }
+      
+      // If already in mm/dd/yyyy format, return as is
+      if (dateString.includes('/')) {
+        return dateString;
+      }
+      
+      // If in yyyy-mm-dd format, convert to mm/dd/yyyy
+      if (dateString.includes('-')) {
+        const parts = dateString.split('-');
+        if (parts.length === 3) {
+          return `${parts[1]}/${parts[2]}/${parts[0]}`;
+        }
+      }
+      
+      return dateString;
+    }
+
+    // Firestore functions
+    async function saveLocationsToFirestore() {
+      try {
+        const locationsRef = collection(db, 'locations');
+        // Clear existing locations first
+        const existingLocations = await getDocs(locationsRef);
+        existingLocations.forEach(doc => {
+          deleteDoc(doc.ref);
+        });
+        
+        // Add all current locations
+        for (const location of locations) {
+          await addDoc(locationsRef, location);
+        }
+        console.log('Locations saved to Firestore');
+      } catch (error) {
+        console.error('Error saving locations:', error);
+      }
+    }
+
+    async function loadLocationsFromFirestore() {
+      try {
+        const locationsRef = collection(db, 'locations');
+        const snapshot = await getDocs(locationsRef);
+        locations = [];
+        snapshot.forEach(doc => {
+          locations.push({ id: doc.id, ...doc.data() });
+        });
+        filteredLocations = [...locations];
+        updateLocationsTable();
+        console.log('Locations loaded from Firestore');
+      } catch (error) {
+        console.error('Error loading locations:', error);
+      }
+    }
+
+    async function saveCustomersToFirestore() {
+      try {
+        const customersRef = collection(db, 'customers');
+        // Clear existing customers first
+        const existingCustomers = await getDocs(customersRef);
+        existingCustomers.forEach(doc => {
+          deleteDoc(doc.ref);
+        });
+        
+        // Add all current customers using their ID as document ID
+        for (const customer of customers) {
+          const customerRef = doc(customersRef, customer.id);
+          await setDoc(customerRef, customer);
+        }
+        console.log('Customers saved to Firestore');
+      } catch (error) {
+        console.error('Error saving customers:', error);
+      }
+    }
+
+    async function loadCustomersFromFirestore() {
+      try {
+        const customersRef = collection(db, 'customers');
+        const snapshot = await getDocs(customersRef);
+        customers = [];
+        snapshot.forEach(doc => {
+          customers.push({ id: doc.id, ...doc.data() });
+        });
+        filteredCustomers = [...customers];
+        updateCustomerTable();
+        console.log('Customers loaded from Firestore:', customers.length, 'customers');
+        console.log('Customer data:', customers);
+      } catch (error) {
+        console.error('Error loading customers:', error);
+      }
+    }
+
+    let currentUser = null;
+    let filteredCustomers = [...customers];
+    let filteredLocations = [...locations];
+    let currentView = 'accounts'; // 'accounts' or 'locations'
+
+    // Show dashboard immediately (no authentication required)
+    function showDashboard() {
+      updateDashboard();
+    }
+
+    // Reset bills on first of month
+    function resetMonthlyBills() {
+      const now = new Date();
+      const isFirstOfMonth = now.getDate() === 1;
+      
+      if (isFirstOfMonth) {
+        customers.forEach(customer => {
+          // Reset current bill to full amount on first of month
+          customer.currentBill = 170;
+          customer.pastDue = 0;
+          // Update payment status based on past due amount
+          updateCustomerPaymentStatus(customer);
+        });
+        
+        // Save updated customers to Firestore
+        saveCustomersToFirestore();
+        console.log('Monthly bills reset for all customers');
+      }
+    }
+
+    // Initialize dashboard on page load
+    document.addEventListener('DOMContentLoaded', async function() {
+      showDashboard();
+      // Load data from Firestore
+      await loadLocationsFromFirestore();
+      await loadCustomersFromFirestore();
+      // Update customer payment statuses based on past due amounts
+      updateAllCustomerPaymentStatuses();
+      // Reset bills if it's the first of the month
+      resetMonthlyBills();
+      // Update location statuses based on customers
+      updateLocationStatuses();
+      // Update stats after data is loaded
+      updateStats();
+    });
+
+    // Switch between accounts and locations views
+    window.switchView = function(view) {
+      currentView = view;
+      const accountsTab = document.getElementById('accountsTab');
+      const locationsTab = document.getElementById('locationsTab');
+      const accountsContent = document.getElementById('accountsContent');
+      const locationsContent = document.getElementById('locationsContent');
+      
+      if (view === 'accounts') {
+        accountsTab.classList.add('bg-blue-600', 'text-white');
+        accountsTab.classList.remove('bg-slate-200', 'text-slate-700');
+        locationsTab.classList.add('bg-slate-200', 'text-slate-700');
+        locationsTab.classList.remove('bg-blue-600', 'text-white');
+        accountsContent.classList.remove('hidden');
+        locationsContent.classList.add('hidden');
+      } else {
+        locationsTab.classList.add('bg-blue-600', 'text-white');
+        locationsTab.classList.remove('bg-slate-200', 'text-slate-700');
+        accountsTab.classList.add('bg-slate-200', 'text-slate-700');
+        accountsTab.classList.remove('bg-blue-600', 'text-white');
+        locationsContent.classList.remove('hidden');
+        accountsContent.classList.add('hidden');
+      }
+      updateDashboard();
+    };
+
+    // Switch between settings accounts and locations views
+    window.switchSettingsView = function(view) {
+      const accountsTab = document.getElementById('settingsAccountsTab');
+      const locationsTab = document.getElementById('settingsLocationsTab');
+      const accountsContent = document.getElementById('settingsAccountsContent');
+      const locationsContent = document.getElementById('settingsLocationsContent');
+      
+      if (view === 'accounts') {
+        accountsTab.classList.add('bg-blue-600', 'text-white');
+        accountsTab.classList.remove('bg-slate-200', 'text-slate-700');
+        locationsTab.classList.add('bg-slate-200', 'text-slate-700');
+        locationsTab.classList.remove('bg-blue-600', 'text-white');
+        accountsContent.classList.remove('hidden');
+        locationsContent.classList.add('hidden');
+        updateSettingsCustomerTable();
+      } else {
+        locationsTab.classList.add('bg-blue-600', 'text-white');
+        locationsTab.classList.remove('bg-slate-200', 'text-slate-700');
+        accountsTab.classList.add('bg-slate-200', 'text-slate-700');
+        accountsTab.classList.remove('bg-blue-600', 'text-white');
+        locationsContent.classList.remove('hidden');
+        accountsContent.classList.add('hidden');
+        updateSettingsLocationsTable();
+      }
+    };
+
+    function updateDashboard() {
+      console.log('updateDashboard called, customers array length:', customers.length);
+      updateStats();
+      updateLocationStatuses(); // Update location statuses based on customers
+      if (currentView === 'accounts') {
+        updateCustomerTable();
+      } else {
+        updateLocationsTable();
+      }
+    }
+
+    // Update customer payment status based on past due amount
+    function updateCustomerPaymentStatus(customer) {
+      // Don't change status if it's inactive or pending closing (these are manually set)
+      if (customer.paymentStatus === 'inactive' || customer.paymentStatus === 'pending closing') {
+        return;
+      }
+      
+      if (customer.pastDue > 0) {
+        customer.paymentStatus = 'overdue';
+      } else {
+        customer.paymentStatus = 'current';
+      }
+    }
+
+    // Update all customer payment statuses
+    function updateAllCustomerPaymentStatuses() {
+      customers.forEach(customer => {
+        updateCustomerPaymentStatus(customer);
+      });
+    }
+
+    // Update location statuses based on associated customers
+    function updateLocationStatuses() {
+      locations.forEach(location => {
+        // Check if there's a customer associated with this location
+        const associatedCustomer = customers.find(customer => 
+          customer.address === location.address || 
+          customer.name === location.currentResident
+        );
+        
+        if (associatedCustomer) {
+          // Location has an active customer
+          location.status = 'occupied';
+          location.currentResident = associatedCustomer.name;
+          location.ownerFullName = associatedCustomer.name;
+          // Split name into first and last
+          const nameParts = associatedCustomer.name.split(' ');
+          location.ownerFirstName = nameParts[0] || '';
+          location.ownerLastName = nameParts.slice(1).join(' ') || '';
+        } else {
+          // No customer associated - set to inactive
+          location.status = 'inactive';
+          location.currentResident = null;
+          location.ownerFullName = '';
+          location.ownerFirstName = '';
+          location.ownerLastName = '';
+        }
+      });
+      
+      // Update filtered locations
+      filteredLocations = [...locations];
+    }
+
+    function updateStats() {
+      console.log('Updating stats with customers:', customers);
+      const totalCustomers = customers.length;
+      const overdueCustomers = customers.filter(c => c.paymentStatus === 'overdue').length;
+      const currentCustomers = customers.filter(c => c.paymentStatus === 'current').length;
+      
+      // Calculate total revenue from payment history
+      let totalRevenue = 0;
+      customers.forEach(customer => {
+        if (customer.paymentHistory && Array.isArray(customer.paymentHistory) && customer.paymentHistory.length > 0) {
+          customer.paymentHistory.forEach(payment => {
+            totalRevenue += payment.amountPaid;
+          });
+        }
+      });
+
+      console.log('Stats calculated:', { totalCustomers, overdueCustomers, currentCustomers, totalRevenue });
+
+      document.getElementById('totalCustomers').textContent = totalCustomers;
+      document.getElementById('overdueCustomers').textContent = overdueCustomers;
+      document.getElementById('currentCustomers').textContent = currentCustomers;
+      document.getElementById('totalRevenue').textContent = `$${totalRevenue.toFixed(2)}`;
+    }
+
+    function updateCustomerTable() {
+      const tbody = document.getElementById('customerTableBody');
+      tbody.innerHTML = '';
+
+      filteredCustomers.forEach(customer => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800';
+        
+        const statusClass = customer.paymentStatus === 'overdue' 
+          ? 'bg-red-100 text-red-800' 
+          : customer.paymentStatus === 'inactive'
+          ? 'bg-gray-100 text-gray-800'
+          : customer.paymentStatus === 'pending closing'
+          ? 'bg-yellow-100 text-yellow-800'
+          : 'bg-green-100 text-green-800';
+        
+        // Calculate due date as last day of current month
+        const now = new Date();
+        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        const dueDateStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getFullYear();
+        
+        // Check if customer has paid early (before due date)
+        const hasPaidEarly = customer.lastPayment && customer.lastPayment !== 'Never' && 
+                            customer.lastPayment.includes('/') && 
+                            new Date(customer.lastPayment) < new Date(dueDateStr);
+        
+        // Calculate actual amount based on breakdown logic
+        const serviceCost = calculateProratedServiceCost(customer);
+        const lateFee = customer.pastDue > 0 ? 20 : 0; // $20 late fee
+        const totalAmount = hasPaidEarly ? 0 : (serviceCost + lateFee);
+        
+        row.innerHTML = `
+          <td class="px-6 py-4 whitespace-nowrap text-center">
+            <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'accountNumber', '${customer.accountNumber}')" 
+                 title="Double-click to edit">
+              ${customer.accountNumber}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center">
+            <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'name', '${customer.name}')" 
+                 title="Double-click to edit">
+              ${customer.name}
+            </div>
+            <div class="text-sm text-slate-500 dark:text-slate-400 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'email', '${customer.email}')" 
+                 title="Double-click to edit">
+              ${customer.email}
+            </div>
+            <div class="text-sm text-slate-500 dark:text-slate-400 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'phone', '${customer.phone}')" 
+                 title="Double-click to edit">
+              ${formatPhoneNumber(customer.phone)}
+            </div>
+          </td>
+          <td class="px-6 py-4 text-center">
+            <div class="text-sm text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'address', '${customer.address}')" 
+                 title="Double-click to edit">
+              <div class="font-medium whitespace-nowrap">${customer.address.split(',')[0].trim()}</div>
+              <div class="text-slate-500 dark:text-slate-400 whitespace-nowrap">${customer.address.split(',').slice(1).join(',').trim()}</div>
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded ${statusClass}" 
+                  ondblclick="editCustomerField('${customer.id}', 'paymentStatus', '${customer.paymentStatus}')" 
+                  title="Double-click to edit">
+              ${customer.paymentStatus.charAt(0).toUpperCase() + customer.paymentStatus.slice(1)}
+            </span>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center text-sm text-slate-900 dark:text-slate-100">
+            <div class="font-medium">$${totalAmount.toFixed(2)}</div>
+            <button onclick="showAmountDetails('${customer.id}')" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs">
+              View Details
+            </button>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center text-sm text-slate-500 dark:text-slate-400">
+            <div class="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'dueDate', '${dueDateStr}')" 
+                 title="Double-click to edit">
+              ${dueDateStr}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center text-sm text-slate-500 dark:text-slate-400">
+            <div class="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'lastPayment', '${customer.lastPayment}')" 
+                 title="Double-click to edit">
+              ${formatDate(customer.lastPayment)}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+            <div class="flex flex-col space-y-2">
+              <button onclick="showPaymentModal('${customer.id}')" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">
+                Mark Paid
+              </button>
+              <button onclick="showPaymentHistory('${customer.id}')" class="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300">
+                View History
+              </button>
+              <button onclick="deleteCustomer('${customer.id}')" class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
+                Delete
+              </button>
+            </div>
+          </td>
+        `;
+        
+        tbody.appendChild(row);
+      });
+    }
+
+    // Logout function (simply redirects to client page)
+    window.logout = function() {
+      window.location.href = 'billing.html';
+    };
+
+    // Module Management Functions
+    window.showPaymentModule = function() {
+      hideAllModules();
+      // Reset payment module to original form
+      resetPaymentForm();
+      document.getElementById('paymentModule').classList.remove('hidden');
+    };
+
+    window.showAddClientModule = function() {
+      hideAllModules();
+      // Reset add client module to original form
+      resetAddClientForm();
+      document.getElementById('addClientModule').classList.remove('hidden');
+    };
+
+    window.showSearchModule = function() {
+      hideAllModules();
+      // Clear search results and reset form
+      document.getElementById('searchByName').value = '';
+      document.getElementById('searchByStatus').value = '';
+      document.getElementById('searchResults').innerHTML = '';
+      document.getElementById('searchModule').classList.remove('hidden');
+    };
+
+    window.showSettingsModule = function() {
+      hideAllModules();
+      document.getElementById('settingsModule').classList.remove('hidden');
+      // Populate the settings tables
+      updateSettingsCustomerTable();
+      updateSettingsLocationsTable();
+    };
+
+    window.hideAllModules = function() {
+      document.getElementById('paymentModule').classList.add('hidden');
+      document.getElementById('addClientModule').classList.add('hidden');
+      document.getElementById('searchModule').classList.add('hidden');
+      document.getElementById('settingsModule').classList.add('hidden');
+    };
+
+    // Payment Module Functions
+    function populatePaymentCustomerSelect() {
+      const select = document.getElementById('paymentCustomerSelect');
+      select.innerHTML = '<option value="">Choose a customer...</option>';
+      
+      customers.forEach(customer => {
+        const option = document.createElement('option');
+        option.value = customer.id;
+        option.textContent = `${customer.name} (${customer.accountNumber})`;
+        select.appendChild(option);
+      });
+      
+      // Add event listener for customer selection
+      select.addEventListener('change', function() {
+        const customerId = this.value;
+        if (customerId) {
+          showCustomerPaymentInfo(customerId);
+        } else {
+          hideCustomerPaymentInfo();
+        }
+      });
+    }
+
+    function showCustomerPaymentInfo(customerId) {
+      const customer = customers.find(c => c.id === customerId);
+      if (customer) {
+        // Calculate prorated service cost based on when customer was added
+        const serviceCost = calculateProratedServiceCost(customer);
+        const lateFee = customer.pastDue > 0 ? 20 : 0;
+        const totalAmount = serviceCost + lateFee;
+        
+        // Calculate due date as last day of current month
+        const now = new Date();
+        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        const dueDateStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getFullYear();
+        
+        // Set up status indicator
+        const statusClass = customer.paymentStatus === 'overdue' 
+          ? 'bg-red-100 text-red-800' 
+          : customer.paymentStatus === 'inactive'
+          ? 'bg-gray-100 text-gray-800'
+          : customer.paymentStatus === 'pending closing'
+          ? 'bg-yellow-100 text-yellow-800'
+          : 'bg-green-100 text-green-800';
+        
+        document.getElementById('paymentAmountDue').textContent = `$${totalAmount.toFixed(2)}`;
+        document.getElementById('paymentPastDue').textContent = `$${customer.pastDue.toFixed(2)}`;
+        document.getElementById('paymentDueDate').textContent = dueDateStr;
+        document.getElementById('paymentLateFee').textContent = `$${lateFee.toFixed(2)}`;
+        document.getElementById('paymentAmount').value = (totalAmount + customer.pastDue).toFixed(2);
+        
+        // Update status indicator
+        const statusIndicator = document.getElementById('paymentStatusIndicator');
+        statusIndicator.className = `inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusClass}`;
+        statusIndicator.textContent = customer.paymentStatus.charAt(0).toUpperCase() + customer.paymentStatus.slice(1);
+        
+        // Update property location
+        document.getElementById('paymentPropertyLocation').textContent = customer.address;
+        
+        document.getElementById('customerPaymentInfo').classList.remove('hidden');
+      }
+    }
+
+    // Calculate prorated service cost based on when customer was added
+    function calculateProratedServiceCost(customer) {
+      const baseServiceCost = 170;
+      
+      // If customer was added this month, calculate proration
+      const now = new Date();
+      const customerAddedDate = new Date(customer.createdDate);
+      
+      // Check if customer was added in the current month
+      if (customerAddedDate.getMonth() === now.getMonth() && 
+          customerAddedDate.getFullYear() === now.getFullYear()) {
+        
+        // Calculate days remaining in the month from when they joined
+        const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        const totalDaysInMonth = lastDayOfMonth.getDate();
+        
+        // Days from when they joined to end of month
+        const daysRemaining = lastDayOfMonth.getDate() - customerAddedDate.getDate() + 1;
+        
+        // Calculate prorated amount
+        const proratedAmount = (baseServiceCost * daysRemaining) / totalDaysInMonth;
+        
+        return Math.round(proratedAmount * 100) / 100; // Round to 2 decimal places
+      }
+      
+      // If customer was added in a previous month, charge full amount
+      return baseServiceCost;
+    }
+
+    function hideCustomerPaymentInfo() {
+      document.getElementById('customerPaymentInfo').classList.add('hidden');
+    }
+
+    window.processPaymentFromModule = async function() {
+      const customerId = document.getElementById('paymentCustomerSelect').value;
+      const paymentAmount = parseFloat(document.getElementById('paymentAmount').value);
+      
+      if (!customerId) {
+        alert('Please select a customer');
+        return;
+      }
+      
+      if (!paymentAmount || paymentAmount <= 0) {
+        alert('Please enter a valid payment amount');
+        return;
+      }
+      
+      const customer = customers.find(c => c.id === customerId);
+      if (customer) {
+        // Process payment (same logic as existing processPayment function)
+        const today = new Date();
+        const formattedDate = (today.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                            today.getDate().toString().padStart(2, '0') + '/' + 
+                            today.getFullYear();
+        
+        // Add to payment history
+        if (!customer.paymentHistory) {
+          customer.paymentHistory = [];
+        }
+        customer.paymentHistory.push({
+          date: formattedDate,
+          amountPaid: paymentAmount,
+          amountDue: customer.pastDue + (customer.currentBill || 0)
+        });
+        
+        // Update customer balance
+        customer.pastDue = Math.max(0, customer.pastDue - paymentAmount);
+        
+        // If customer was pending closing and now has no balance, mark as inactive
+        if (customer.paymentStatus === 'pending closing' && customer.pastDue === 0 && customer.currentBill === 0) {
+          customer.paymentStatus = 'inactive';
+        } else {
+          // Update payment status based on past due amount
+          updateCustomerPaymentStatus(customer);
+        }
+        
+        // Update last payment
+        customer.lastPayment = formattedDate;
+        
+        // Save to Firestore
+        await saveCustomersToFirestore();
+        updateDashboard();
+        
+        // Show success screen instead of hiding module
+        showPaymentSuccessScreen(customer.name, paymentAmount);
+      }
+    };
+
+    // Show payment success screen
+    window.showPaymentSuccessScreen = function(customerName, amount) {
+      const paymentModule = document.getElementById('paymentModule');
+      paymentModule.innerHTML = `
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Payment Processed Successfully!</h3>
+          <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="text-center py-8">
+          <div class="w-16 h-16 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg class="w-8 h-8 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+          </div>
+          
+          <h4 class="text-xl font-semibold text-slate-800 dark:text-slate-200 mb-2">Payment Processed Successfully!</h4>
+          <p class="text-slate-600 dark:text-slate-400 mb-4">Payment of <span class="font-semibold text-green-600">$${amount.toFixed(2)}</span> has been processed for <span class="font-semibold">${customerName}</span></p>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-8">The payment has been recorded and the customer's account has been updated.</p>
+          
+          <div class="flex flex-col gap-4 justify-center">
+            <button 
+              onclick="resetPaymentForm()" 
+              class="bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
+            >
+              Make Another Payment
+            </button>
+            <button 
+              onclick="hideAllModules()" 
+              class="bg-slate-500 hover:bg-slate-600 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
+            >
+              Exit
+            </button>
+          </div>
+        </div>
+      `;
+    };
+
+    // Reset payment form
+    window.resetPaymentForm = function() {
+      const paymentModule = document.getElementById('paymentModule');
+      paymentModule.innerHTML = `
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Process Payment</h3>
+          <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-6">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Customer</label>
+            <select id="paymentCustomerSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+              <option value="">Choose a customer...</option>
+            </select>
+          </div>
+          
+          <div id="customerPaymentInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Current Amount Due</p>
+                <p id="paymentAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                <button id="viewDetailsBtn" onclick="showPaymentDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
+                  View Details
+                </button>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
+                <p id="paymentPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
+                <p id="paymentLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+              </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Property Location</p>
+                <p id="paymentPropertyLocation" class="text-sm font-medium text-slate-800 dark:text-slate-200">--</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Due Date</p>
+                <p id="paymentDueDate" class="text-lg font-semibold text-slate-800 dark:text-slate-200">--/--/----</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Account Status</p>
+                <span id="paymentStatusIndicator" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium">
+                  <!-- Status will be populated by JavaScript -->
+                </span>
+              </div>
+            </div>
+            
+            <div class="mb-4">
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Amount</label>
+              <input 
+                type="number" 
+                id="paymentAmount" 
+                step="0.01" 
+                min="0" 
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                placeholder="Enter payment amount"
+              >
+            </div>
+            
+            <button 
+              onclick="processPaymentFromModule()" 
+              class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+            >
+              Process Payment
+            </button>
+          </div>
+        </div>
+      `;
+      
+      // Repopulate the customer dropdown
+      populatePaymentCustomerSelect();
+    };
+
+    // Add Client Module Functions
+    function populateAddClientLocationSelect() {
+      const select = document.getElementById('newClientLocation');
+      select.innerHTML = '<option value="">Choose a location...</option><option value="add-new">+ Add New Location</option>';
+      
+      // Show all locations, not just available ones
+      locations.forEach(location => {
+        const option = document.createElement('option');
+        option.value = location.id;
+        option.textContent = `${location.address} (${location.status})`;
+        select.appendChild(option);
+      });
+      
+      // Add event listener for add new location
+      select.addEventListener('change', function() {
+        if (this.value === 'add-new') {
+          showAddLocationModal();
+        }
+      });
+    }
+
+    window.addClientFromModule = async function() {
+      const name = document.getElementById('newClientName').value.trim();
+      const email = document.getElementById('newClientEmail').value.trim();
+      const phone = document.getElementById('newClientPhone').value.replace(/\D/g, '');
+      const locationId = document.getElementById('newClientLocation').value;
+      
+      if (!name || !email || !phone || !locationId) {
+        alert('Please fill in all fields');
+        return;
+      }
+      
+      if (locationId === 'add-new') {
+        alert('Please select a location or add a new one first');
+        return;
+      }
+      
+      const selectedLocation = locations.find(l => l.id === locationId);
+      if (!selectedLocation) {
+        alert('Selected location not found');
+        return;
+      }
+      
+      // Check if location is already occupied
+      if (selectedLocation.status === 'occupied' && selectedLocation.currentResident) {
+        const currentResident = customers.find(c => c.name === selectedLocation.currentResident);
+        if (currentResident) {
+          showTransferOwnershipModal(selectedLocation, currentResident, { name, email, phone });
+          return;
+        }
+      }
+      
+      // Create new customer (same logic as existing addCustomer function)
+      const newCustomer = {
+        id: 'CUS-' + String(Date.now()).slice(-6), // Use accountNumber as ID
+        name: name,
+        email: email,
+        phone: phone,
+        address: selectedLocation.address,
+        accountNumber: 'CUS-' + String(Date.now()).slice(-6),
+        currentBill: 170,
+        pastDue: 0,
+        lastPayment: 'Never',
+        paymentHistory: [],
+        needsPasswordChange: true,
+        createdDate: new Date().toISOString()
+      };
+      
+      // Update payment status based on past due amount
+      updateCustomerPaymentStatus(newCustomer);
+      
+      customers.push(newCustomer);
+      filteredCustomers = [...customers];
+      
+      // Update location
+      selectedLocation.currentResident = name;
+      selectedLocation.status = 'occupied';
+      selectedLocation.ownerFullName = name;
+      const nameParts = name.split(' ');
+      selectedLocation.ownerFirstName = nameParts[0] || '';
+      selectedLocation.ownerLastName = nameParts.slice(1).join(' ') || '';
+      
+      // Save to Firestore
+      await saveCustomersToFirestore();
+      await saveLocationsToFirestore();
+      updateDashboard();
+      
+      // Show success screen instead of hiding module
+      showClientSuccessScreen();
+    };
+
+    // Show client success screen
+    window.showClientSuccessScreen = function() {
+      const addClientModule = document.getElementById('addClientModule');
+      addClientModule.innerHTML = `
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Client Successfully Added!</h3>
+          <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="text-center py-8">
+          <div class="w-16 h-16 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg class="w-8 h-8 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+          </div>
+          
+          <h4 class="text-xl font-semibold text-slate-800 dark:text-slate-200 mb-2">Client Added Successfully!</h4>
+          <p class="text-slate-600 dark:text-slate-400 mb-8">The client has been added to the system successfully</p>
+          
+          <div class="flex flex-col gap-4 justify-center">
+            <button 
+              onclick="resetAddClientForm()" 
+              class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
+            >
+              Add Another Client
+            </button>
+            <button 
+              onclick="hideAllModules()" 
+              class="bg-slate-500 hover:bg-slate-600 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
+            >
+              Exit
+            </button>
+          </div>
+        </div>
+      `;
+    };
+
+    // Reset add client form
+    window.resetAddClientForm = function() {
+      const addClientModule = document.getElementById('addClientModule');
+      addClientModule.innerHTML = `
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add New Client</h3>
+          <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
+            <input 
+              type="text" 
+              id="newClientName" 
+              class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+              placeholder="Enter full name"
+              required
+            >
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email</label>
+            <input 
+              type="email" 
+              id="newClientEmail" 
+              class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+              placeholder="Enter email address"
+              required
+            >
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Phone Number</label>
+            <input 
+              type="tel" 
+              id="newClientPhone" 
+              oninput="formatPhoneInput(this)"
+              class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+              placeholder="(xxx)-xxx-xxxx"
+              required
+            >
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Property Location</label>
+            <select id="newClientLocation" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200" required>
+              <option value="">Choose a location...</option>
+              <option value="add-new">+ Add New Location</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="mt-6">
+          <button 
+            onclick="addClientFromModule()" 
+            class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+          >
+            Create Client Account
+          </button>
+        </div>
+      `;
+      
+      // Repopulate the location dropdown
+      populateAddClientLocationSelect();
+    };
+
+    // Search Module Functions
+    window.performSearch = function() {
+      const nameQuery = document.getElementById('searchByName').value.toLowerCase().trim();
+      const statusFilter = document.getElementById('searchByStatus').value;
+      
+      let results = customers;
+      
+      // Filter by name
+      if (nameQuery) {
+        results = results.filter(customer => 
+          customer.name.toLowerCase().includes(nameQuery)
+        );
+      }
+      
+      // Filter by status
+      if (statusFilter) {
+        results = results.filter(customer => 
+          customer.paymentStatus === statusFilter
+        );
+      }
+      
+      displaySearchResults(results);
+    };
+
+    window.clearSearch = function() {
+      document.getElementById('searchByName').value = '';
+      document.getElementById('searchByStatus').value = '';
+      document.getElementById('searchResults').innerHTML = '';
+    };
+
+    function displaySearchResults(results) {
+      const container = document.getElementById('searchResults');
+      
+      if (results.length === 0) {
+        container.innerHTML = '<p class="text-slate-500 dark:text-slate-400 text-center py-8">No customers found matching your search criteria.</p>';
+        return;
+      }
+      
+      let html = '<div class="space-y-4">';
+      results.forEach(customer => {
+        const serviceCost = calculateProratedServiceCost(customer);
+        const lateFee = customer.pastDue > 0 ? 20 : 0;
+        const totalAmount = serviceCost + lateFee;
+        
+        const statusClass = customer.paymentStatus === 'overdue' ? 
+          'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' : 
+          customer.paymentStatus === 'inactive' ?
+          'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200' :
+          customer.paymentStatus === 'pending closing' ?
+          'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' :
+          'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+        
+        html += `
+          <div class="bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
+            <div class="flex justify-between items-start">
+              <div>
+                <h4 class="font-semibold text-slate-800 dark:text-slate-200">${customer.name}</h4>
+                <p class="text-sm text-slate-600 dark:text-slate-400">${customer.email}</p>
+                <p class="text-sm text-slate-600 dark:text-slate-400">${customer.accountNumber}</p>
+              </div>
+              <div class="text-right">
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusClass}">
+                  ${customer.paymentStatus.charAt(0).toUpperCase() + customer.paymentStatus.slice(1)}
+                </span>
+                <p class="text-lg font-semibold text-slate-800 dark:text-slate-200 mt-2">$${totalAmount.toFixed(2)}</p>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      
+      container.innerHTML = html;
+    }
+
+    // Add new customer
+    window.showAddCustomerModal = function() {
+      // Populate location dropdown with all locations
+      const locationSelect = document.getElementById('newCustomerLocation');
+      locationSelect.innerHTML = '<option value="">Select a property location</option>';
+      
+      locations.forEach(location => {
+        const option = document.createElement('option');
+        option.value = location.id;
+        option.textContent = `${location.address} (${location.status})`;
+        locationSelect.appendChild(option);
+      });
+      
+      document.getElementById('addCustomerModal').classList.remove('hidden');
+    };
+
+    window.hideAddCustomerModal = function() {
+      document.getElementById('addCustomerModal').classList.add('hidden');
+      document.getElementById('addCustomerForm').reset();
+    };
+
+    window.addCustomer = async function() {
+      const name = document.getElementById('newCustomerName').value;
+      const email = document.getElementById('newCustomerEmail').value;
+      const locationId = document.getElementById('newCustomerLocation').value;
+      const phone = document.getElementById('newCustomerPhone').value.replace(/\D/g, ''); // Store as digits only
+      
+      if (!name || !email || !locationId || !phone) {
+        alert('Please fill in all fields');
+        return;
+      }
+      
+      // Find the selected location
+      const selectedLocation = locations.find(l => l.id === locationId);
+      if (!selectedLocation) {
+        alert('Selected location not found');
+        return;
+      }
+      
+      if (selectedLocation.status === 'occupied') {
+        alert('This location is already occupied. Please select an available location.');
+        return;
+      }
+      
+      // Calculate current month's bill
+      const now = new Date();
+      const isNewMonth = now.getDate() === 1; // Check if it's the first of the month
+      
+      const newCustomer = {
+        id: `CUS-${String(customers.length + 1).padStart(6, '0')}`,
+        name: name,
+        email: email,
+        locationId: locationId,
+        address: selectedLocation.address,
+        accountNumber: `CUS-${String(customers.length + 1).padStart(6, '0')}`,
+        currentBill: isNewMonth ? 170 : 0, // New bill on 1st of month, otherwise 0
+        pastDue: 0,
+        lastPayment: 'Never',
+        needsPasswordChange: true,
+        createdDate: (() => {
+          const today = new Date();
+          return (today.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                 today.getDate().toString().padStart(2, '0') + '/' + 
+                 today.getFullYear();
+        })(),
+        phone: phone,
+        paymentHistory: [] // Track payment history
+      };
+      
+      // Update payment status based on past due amount
+      updateCustomerPaymentStatus(newCustomer);
+      
+      // Update location status and owner
+      selectedLocation.currentResident = name;
+      selectedLocation.status = 'occupied';
+      selectedLocation.ownerFirstName = name.split(' ')[0];
+      selectedLocation.ownerLastName = name.split(' ').slice(1).join(' ');
+      selectedLocation.ownerFullName = name;
+      
+      customers.push(newCustomer);
+      filteredCustomers = [...customers];
+      updateDashboard();
+      await saveCustomersToFirestore();
+      hideAddCustomerModal();
+      
+      alert('Customer added successfully!');
+    };
+
+    // Mark customer as paid
+    window.markAsPaid = async function(customerId) {
+      const customer = customers.find(c => c.id === customerId);
+      if (customer) {
+        const today = new Date();
+        const formattedDate = (today.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                            today.getDate().toString().padStart(2, '0') + '/' + 
+                            today.getFullYear();
+        
+        customer.pastDue = 0;
+        customer.lastPayment = formattedDate;
+        customer.currentBill = 0; // Reset current bill to 0 for early payment
+        // Update payment status based on past due amount
+        updateCustomerPaymentStatus(customer);
+        updateDashboard();
+        await saveCustomersToFirestore();
+        alert('Payment recorded successfully! Amount due is now $0.00 until next month.');
+      }
+    };
+
+    // Edit customer
+    window.editCustomer = async function(customerId) {
+      const customer = customers.find(c => c.id === customerId);
+      if (customer) {
+        const newName = prompt('Enter new name:', customer.name);
+        const newAddress = prompt('Enter new address:', customer.address);
+        
+        if (newName && newAddress) {
+          customer.name = newName;
+          customer.address = newAddress;
+          updateDashboard();
+          await saveCustomersToFirestore();
+          alert('Customer updated successfully!');
+        }
+      }
+    };
+
+    // Delete customer
+    window.deleteCustomer = async function(customerId) {
+      if (confirm('Are you sure you want to delete this customer? This will permanently delete their account and all associated data.')) {
+        const customer = customers.find(c => c.id === customerId);
+        
+        if (!customer) {
+          alert('Customer not found');
+          return;
+        }
+
+        try {
+          // Delete customer document from Firestore
+          const customerRef = doc(db, 'customers', customerId);
+          await deleteDoc(customerRef);
+          console.log('Customer deleted from Firestore:', customerId);
+          
+          // Remove from local arrays FIRST
+          customers = customers.filter(c => c.id !== customerId);
+          filteredCustomers = [...customers];
+          console.log('Customer removed from local arrays. Remaining customers:', customers.length);
+          
+          // Find and update the associated location
+          const associatedLocation = locations.find(l => l.currentResident === customer.name);
+          if (associatedLocation) {
+            associatedLocation.currentResident = null;
+            associatedLocation.status = 'available';
+            associatedLocation.ownerFirstName = '';
+            associatedLocation.ownerLastName = '';
+            associatedLocation.ownerFullName = '';
+            
+            // Update filtered locations if needed
+            const filteredLocationIndex = filteredLocations.findIndex(l => l.id === associatedLocation.id);
+            if (filteredLocationIndex !== -1) {
+              filteredLocations[filteredLocationIndex] = associatedLocation;
+            }
+            
+            // Save location changes to Firestore
+            await saveLocationsToFirestore();
+          }
+          
+          // Reload data from Firestore to ensure UI is in sync
+          await loadCustomersFromFirestore();
+          
+          // Update displays
+          updateDashboard();
+          updateSettingsCustomerTable();
+          
+          alert('Customer deleted successfully! Password will be reset to "password" on next login and all payment history has been cleared.');
+        } catch (error) {
+          console.error('Error deleting customer:', error);
+          alert('Error deleting customer: ' + error.message);
+        }
+      }
+    };
+
+    // Search customers
+    window.searchCustomers = function() {
+      const searchTerm = document.getElementById('customerSearch').value.toLowerCase();
+      filteredCustomers = customers.filter(customer => 
+        customer.name.toLowerCase().includes(searchTerm) ||
+        customer.email.toLowerCase().includes(searchTerm) ||
+        customer.accountNumber.toLowerCase().includes(searchTerm) ||
+        customer.address.toLowerCase().includes(searchTerm)
+      );
+      updateCustomerTable();
+    };
+
+    // Filter by status
+    window.filterByStatus = function(status) {
+      if (status === 'all') {
+        filteredCustomers = [...customers];
+      } else {
+        filteredCustomers = customers.filter(c => c.paymentStatus === status);
+      }
+      updateCustomerTable();
+    };
+
+    // Location management functions
+    function updateLocationsTable() {
+      const tbody = document.getElementById('locationsTableBody');
+      tbody.innerHTML = '';
+
+      filteredLocations.forEach(location => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800';
+        
+        const statusClass = location.status === 'occupied' 
+          ? 'bg-green-100 text-green-800' 
+          : location.status === 'inactive'
+          ? 'bg-gray-100 text-gray-800'
+          : 'bg-blue-100 text-blue-800';
+        
+        const statusText = location.status === 'occupied' 
+          ? 'Occupied' 
+          : location.status === 'inactive'
+          ? 'Inactive'
+          : 'Available';
+        
+        row.innerHTML = `
+          <td class="px-6 py-4 whitespace-nowrap">
+            <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editField('${location.id}', 'address', '${location.address}')" 
+                 title="Double-click to edit">
+              ${location.address}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">
+            ${location.currentResident ? `
+            <div class="font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editField('${location.id}', 'currentResident', '${location.currentResident}')" 
+                 title="Double-click to edit">
+              ${location.currentResident}
+            </div>
+            ` : `
+            <div class="font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editField('${location.id}', 'ownerFullName', '${location.ownerFullName || 'No Owner'}')" 
+                 title="Double-click to edit">
+              ${location.ownerFullName || 'No Owner'}
+            </div>
+            `}
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded ${statusClass}" 
+                  ondblclick="editField('${location.id}', 'status', '${location.status}')" 
+                  title="Double-click to edit">
+              ${statusText}
+            </span>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+            <button onclick="deleteLocation('${location.id}')" class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
+              Delete
+            </button>
+          </td>
+        `;
+        
+        tbody.appendChild(row);
+      });
+    }
+
+    // Settings module table update functions
+    function updateSettingsCustomerTable() {
+      const tbody = document.getElementById('settingsCustomerTableBody');
+      tbody.innerHTML = '';
+
+      filteredCustomers.forEach(customer => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800';
+        
+        const statusClass = customer.paymentStatus === 'overdue' 
+          ? 'bg-red-100 text-red-800' 
+          : customer.paymentStatus === 'inactive'
+          ? 'bg-gray-100 text-gray-800'
+          : customer.paymentStatus === 'pending closing'
+          ? 'bg-yellow-100 text-yellow-800'
+          : 'bg-green-100 text-green-800';
+        
+        // Calculate due date as last day of current month
+        const now = new Date();
+        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        const dueDateStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getFullYear();
+        
+        // Check if customer has paid early (before due date)
+        const hasPaidEarly = customer.lastPayment && customer.lastPayment !== 'Never' && 
+                            customer.lastPayment.includes('/') && 
+                            new Date(customer.lastPayment) < new Date(dueDateStr);
+        
+        // Calculate actual amount based on breakdown logic
+        const serviceCost = calculateProratedServiceCost(customer);
+        const lateFee = customer.pastDue > 0 ? 20 : 0; // $20 late fee
+        const totalAmount = hasPaidEarly ? 0 : (serviceCost + lateFee);
+        
+        row.innerHTML = `
+          <td class="px-6 py-4 whitespace-nowrap text-center">
+            <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'accountNumber', '${customer.accountNumber}')" 
+                 title="Double-click to edit">
+              ${customer.accountNumber}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center">
+            <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'name', '${customer.name}')" 
+                 title="Double-click to edit">
+              ${customer.name}
+            </div>
+            <div class="text-sm text-slate-500 dark:text-slate-400 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'email', '${customer.email}')" 
+                 title="Double-click to edit">
+              ${customer.email}
+            </div>
+            <div class="text-sm text-slate-500 dark:text-slate-400 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'phone', '${customer.phone}')" 
+                 title="Double-click to edit">
+              ${formatPhoneNumber(customer.phone)}
+            </div>
+          </td>
+          <td class="px-6 py-4 text-center">
+            <div class="text-sm text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'address', '${customer.address}')" 
+                 title="Double-click to edit">
+              <div class="font-medium whitespace-nowrap">${customer.address.split(',')[0].trim()}</div>
+              <div class="text-slate-500 dark:text-slate-400 whitespace-nowrap">${customer.address.split(',').slice(1).join(',').trim()}</div>
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded ${statusClass}" 
+                  ondblclick="editCustomerField('${customer.id}', 'paymentStatus', '${customer.paymentStatus}')" 
+                  title="Double-click to edit">
+              ${customer.paymentStatus.charAt(0).toUpperCase() + customer.paymentStatus.slice(1)}
+            </span>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center text-sm text-slate-900 dark:text-slate-100">
+            <div class="font-medium">$${totalAmount.toFixed(2)}</div>
+            <button onclick="showAmountDetails('${customer.id}')" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs">
+              View Details
+            </button>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center text-sm text-slate-500 dark:text-slate-400">
+            <div class="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'dueDate', '${dueDateStr}')" 
+                 title="Double-click to edit">
+              ${dueDateStr}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center text-sm text-slate-500 dark:text-slate-400">
+            <div class="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editCustomerField('${customer.id}', 'lastPayment', '${customer.lastPayment}')" 
+                 title="Double-click to edit">
+              ${formatDate(customer.lastPayment)}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+            <div class="flex flex-col space-y-2">
+              <button onclick="showPaymentModal('${customer.id}')" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">
+                Mark Paid
+              </button>
+              <button onclick="showPaymentHistory('${customer.id}')" class="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300">
+                View History
+              </button>
+              <button onclick="deleteCustomer('${customer.id}')" class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
+                Delete
+              </button>
+            </div>
+          </td>
+        `;
+        
+        tbody.appendChild(row);
+      });
+    }
+
+    function updateSettingsLocationsTable() {
+      const tbody = document.getElementById('settingsLocationsTableBody');
+      tbody.innerHTML = '';
+
+      filteredLocations.forEach(location => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800';
+        
+        const statusClass = location.status === 'occupied' 
+          ? 'bg-green-100 text-green-800' 
+          : location.status === 'inactive'
+          ? 'bg-gray-100 text-gray-800'
+          : 'bg-blue-100 text-blue-800';
+        
+        const statusText = location.status === 'occupied' 
+          ? 'Occupied' 
+          : location.status === 'inactive'
+          ? 'Inactive'
+          : 'Available';
+        
+        row.innerHTML = `
+          <td class="px-6 py-4 whitespace-nowrap">
+            <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editField('${location.id}', 'address', '${location.address}')" 
+                 title="Double-click to edit">
+              ${location.address}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">
+            ${location.currentResident ? `
+            <div class="font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editField('${location.id}', 'currentResident', '${location.currentResident}')" 
+                 title="Double-click to edit">
+              ${location.currentResident}
+            </div>
+            ` : `
+            <div class="font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
+                 ondblclick="editField('${location.id}', 'ownerFullName', '${location.ownerFullName || 'No Owner'}')" 
+                 title="Double-click to edit">
+              ${location.ownerFullName || 'No Owner'}
+            </div>
+            `}
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded ${statusClass}" 
+                  ondblclick="editField('${location.id}', 'status', '${location.status}')" 
+                  title="Double-click to edit">
+              ${statusText}
+            </span>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+            <button onclick="deleteLocation('${location.id}')" class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
+              Delete
+            </button>
+          </td>
+        `;
+        
+        tbody.appendChild(row);
+      });
+    }
+
+    // Search locations
+    window.searchLocations = function() {
+      const searchTerm = document.getElementById('locationSearch').value.toLowerCase();
+      filteredLocations = locations.filter(location => 
+        location.address.toLowerCase().includes(searchTerm) ||
+        location.propertyType.toLowerCase().includes(searchTerm) ||
+        (location.currentResident && location.currentResident.toLowerCase().includes(searchTerm))
+      );
+      updateLocationsTable();
+    };
+
+    // Filter locations by status
+    window.filterLocationsByStatus = function(status) {
+      if (status === 'all') {
+        filteredLocations = [...locations];
+      } else {
+        filteredLocations = locations.filter(l => l.status === status);
+      }
+      updateLocationsTable();
+    };
+
+    // Import locations from JSON
+    window.importLocations = async function() {
+      const fileInput = document.getElementById('locationFileInput');
+      const file = fileInput.files[0];
+      
+      if (!file) {
+        alert('Please select a JSON file');
+        return;
+      }
+      
+      const reader = new FileReader();
+      reader.onload = async function(e) {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (data.locations && Array.isArray(data.locations)) {
+            // Add new locations to existing ones
+            data.locations.forEach(newLocation => {
+              // Check if location already exists
+              const exists = locations.find(l => l.id === newLocation.id);
+              if (!exists) {
+                locations.push({
+                  ...newLocation,
+                  currentResident: null,
+                  status: 'available'
+                });
+              }
+            });
+            
+            filteredLocations = [...locations];
+            updateLocationsTable();
+            await saveLocationsToFirestore();
+            alert(`Successfully imported ${data.locations.length} locations!`);
+            fileInput.value = ''; // Clear the input
+          } else {
+            alert('Invalid JSON format. Expected "locations" array.');
+          }
+        } catch (error) {
+          alert('Error parsing JSON file: ' + error.message);
+        }
+      };
+      reader.readAsText(file);
+    };
+
+    // Show transfer ownership modal
+    window.showTransferOwnershipModal = function(location, currentResident, newClientData) {
+      // Store the data for later use
+      window.transferData = {
+        location: location,
+        currentResident: currentResident,
+        newClientData: newClientData
+      };
+      
+      // Populate the modal
+      document.getElementById('transferWarningName').textContent = currentResident.name;
+      document.getElementById('transferCurrentResident').textContent = currentResident.name;
+      document.getElementById('transferNewLocationLabel').textContent = currentResident.name;
+      document.getElementById('transferLocation').textContent = location.address;
+      document.getElementById('transferNewClient').textContent = newClientData.name;
+      document.getElementById('transferCurrentStatus').textContent = currentResident.paymentStatus.charAt(0).toUpperCase() + currentResident.paymentStatus.slice(1);
+      document.getElementById('transferBalance').textContent = `$${(currentResident.pastDue + (currentResident.currentBill || 0)).toFixed(2)}`;
+      
+      // Show appropriate message based on status
+      const statusMessage = document.getElementById('transferStatusMessage');
+      if (currentResident.paymentStatus === 'current') {
+        statusMessage.innerHTML = 'The current resident has a <strong>Current</strong> status and will be marked as <strong>Inactive</strong> after transfer.';
+        statusMessage.className = 'text-green-600 dark:text-green-400';
+      } else {
+        statusMessage.innerHTML = 'The current resident has an <strong>Overdue</strong> status and will be marked as <strong>Pending Closing</strong> until their balance is paid.';
+        statusMessage.className = 'text-red-600 dark:text-red-400';
+      }
+      
+      document.getElementById('transferOwnershipModal').classList.remove('hidden');
+    };
+
+    // Hide transfer ownership modal
+    window.hideTransferOwnershipModal = function() {
+      document.getElementById('transferOwnershipModal').classList.add('hidden');
+      document.getElementById('transferNewLocation').value = '';
+    };
+
+    // Process transfer ownership
+    window.processTransferOwnership = async function() {
+      const newLocation = document.getElementById('transferNewLocation').value.trim();
+      
+      if (!newLocation) {
+        alert('Please enter the new location for the current resident');
+        return;
+      }
+      
+      const { location, currentResident, newClientData } = window.transferData;
+      
+      try {
+        // Update current resident's location and status
+        currentResident.address = newLocation;
+        
+        // Set status based on payment status
+        if (currentResident.paymentStatus === 'current') {
+          currentResident.paymentStatus = 'inactive';
+        } else {
+          currentResident.paymentStatus = 'pending closing';
+        }
+        
+        // Update location to new resident
+        location.currentResident = newClientData.name;
+        location.ownerFullName = newClientData.name;
+        const nameParts = newClientData.name.split(' ');
+        location.ownerFirstName = nameParts[0] || '';
+        location.ownerLastName = nameParts.slice(1).join(' ') || '';
+        
+        // Create new customer
+        const newCustomer = {
+          id: 'CUS-' + String(Date.now()).slice(-6),
+          name: newClientData.name,
+          email: newClientData.email,
+          phone: newClientData.phone,
+          address: location.address,
+          accountNumber: 'CUS-' + String(Date.now()).slice(-6),
+          currentBill: 170,
+          pastDue: 0,
+          lastPayment: 'Never',
+          paymentHistory: [],
+          needsPasswordChange: true,
+          createdDate: new Date().toISOString()
+        };
+        
+        // Update payment status for new customer
+        updateCustomerPaymentStatus(newCustomer);
+        
+        // Add new customer
+        customers.push(newCustomer);
+        filteredCustomers = [...customers];
+        
+        // Save to Firestore
+        await saveCustomersToFirestore();
+        await saveLocationsToFirestore();
+        
+        // Update displays
+        updateDashboard();
+        updateSettingsCustomerTable();
+        
+        // Hide modal and show success
+        hideTransferOwnershipModal();
+        showClientSuccessScreen();
+        
+        console.log('Transfer completed successfully');
+      } catch (error) {
+        console.error('Error processing transfer:', error);
+        alert('Error processing transfer: ' + error.message);
+      }
+    };
+
+    // Show add location modal
+    window.showAddLocationModal = function() {
+      document.getElementById('addLocationModal').classList.remove('hidden');
+    };
+
+    // Hide add location modal
+    window.hideAddLocationModal = function() {
+      document.getElementById('addLocationModal').classList.add('hidden');
+      document.getElementById('addLocationForm').reset();
+    };
+
+    // Add new location
+    window.addLocation = async function() {
+      const street = document.getElementById('newLocationStreet').value;
+      const city = document.getElementById('newLocationCity').value;
+      const state = document.getElementById('newLocationState').value;
+      const zip = document.getElementById('newLocationZip').value;
+      
+      if (!street || !city || !state || !zip) {
+        alert('Please fill in all fields');
+        return;
+      }
+      
+      const fullAddress = `${street}, ${city}, ${state} ${zip}`;
+      
+      const newLocation = {
+        id: `LOC-${String(locations.length + 1).padStart(3, '0')}`,
+        address: fullAddress,
+        street: street,
+        city: city,
+        state: state,
+        zip: zip,
+        ownerFirstName: '',
+        ownerLastName: '',
+        ownerFullName: '',
+        currentResident: null,
+        status: 'available'
+      };
+      
+      locations.push(newLocation);
+      filteredLocations = [...locations];
+      updateLocationsTable();
+      updateSettingsLocationsTable();
+      await saveLocationsToFirestore();
+      hideAddLocationModal();
+      
+      // Update the location dropdowns and select the new location
+      updateLocationDropdowns(newLocation.id);
+      
+      alert('Location added successfully!');
+    };
+
+    // Update location dropdowns and select the new location
+    function updateLocationDropdowns(selectedLocationId) {
+      // Update Add Client Module dropdown
+      const addClientSelect = document.getElementById('newClientLocation');
+      if (addClientSelect) {
+        populateAddClientLocationSelect();
+        addClientSelect.value = selectedLocationId;
+      }
+      
+      // Update Add Customer Modal dropdown
+      const addCustomerSelect = document.getElementById('newCustomerLocation');
+      if (addCustomerSelect) {
+        // Repopulate the dropdown
+        addCustomerSelect.innerHTML = '<option value="">Select a property location</option>';
+        locations.forEach(location => {
+          const option = document.createElement('option');
+          option.value = location.id;
+          option.textContent = `${location.address} (${location.status})`;
+          addCustomerSelect.appendChild(option);
+        });
+        addCustomerSelect.value = selectedLocationId;
+      }
+    }
+
+    // Show import modal
+    window.showImportModal = function() {
+      document.getElementById('importModal').classList.remove('hidden');
+    };
+
+    // Hide import modal
+    window.hideImportModal = function() {
+      document.getElementById('importModal').classList.add('hidden');
+      document.getElementById('locationFileInput').value = '';
+    };
+
+    // Show payment details modal
+    window.showPaymentDetailsModal = function() {
+      const selectedCustomerId = document.getElementById('paymentCustomerSelect').value;
+      const customer = customers.find(c => c.id === selectedCustomerId);
+      
+      if (customer) {
+        // Calculate amounts (same logic as in showCustomerPaymentInfo)
+        const serviceCost = calculateProratedServiceCost(customer);
+        const lateFee = customer.pastDue > 0 ? 20 : 0;
+        const totalAmount = serviceCost + lateFee;
+        
+        // Populate the modal
+        document.getElementById('paymentDetailsCustomer').textContent = customer.name;
+        document.getElementById('paymentDetailsService').textContent = `$${serviceCost.toFixed(2)}`;
+        document.getElementById('paymentDetailsLateFee').textContent = `$${lateFee.toFixed(2)}`;
+        document.getElementById('paymentDetailsTotal').textContent = `$${totalAmount.toFixed(2)}`;
+        
+        // Show the modal
+        document.getElementById('paymentDetailsModal').classList.remove('hidden');
+      }
+    };
+
+    // Hide payment details modal
+    window.hidePaymentDetailsModal = function() {
+      document.getElementById('paymentDetailsModal').classList.add('hidden');
+    };
+
+    // Edit location
+    window.editLocation = function(locationId) {
+      const location = locations.find(l => l.id === locationId);
+      if (location) {
+        const newAddress = prompt('Enter new address:', location.address);
+        const newType = prompt('Enter property type:', location.propertyType);
+        
+        if (newAddress && newType) {
+          location.address = newAddress;
+          location.propertyType = newType;
+          updateLocationsTable();
+          alert('Location updated successfully!');
+        }
+      }
+    };
+
+    // Delete location
+    window.deleteLocation = async function(locationId) {
+      if (confirm('Are you sure you want to delete this location?')) {
+        locations = locations.filter(l => l.id !== locationId);
+        filteredLocations = [...locations];
+        updateLocationsTable();
+        updateSettingsLocationsTable(); // Update settings table as well
+        await saveLocationsToFirestore();
+        alert('Location deleted successfully!');
+      }
+    };
+
+    // Inline editing functionality
+    window.editField = function(locationId, fieldType, currentValue) {
+      const location = locations.find(l => l.id === locationId);
+      const customer = customers.find(c => c.id === locationId);
+      if (!location && !customer) return;
+
+      // Set up the edit modal
+      document.getElementById('editFieldType').textContent = fieldType.charAt(0).toUpperCase() + fieldType.slice(1);
+      document.getElementById('editFieldLocationId').value = locationId;
+      document.getElementById('editFieldFieldType').value = fieldType;
+      
+      // Check if this is a status field that should use a dropdown
+      const container = document.getElementById('editFieldInputContainer');
+      if (fieldType === 'paymentStatus') {
+        // Create dropdown for payment status
+        container.innerHTML = `
+          <select 
+            id="editFieldValue" 
+            class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            required
+          >
+            <option value="current" ${currentValue === 'current' ? 'selected' : ''}>Current</option>
+            <option value="overdue" ${currentValue === 'overdue' ? 'selected' : ''}>Overdue</option>
+            <option value="inactive" ${currentValue === 'inactive' ? 'selected' : ''}>Inactive</option>
+            <option value="pending closing" ${currentValue === 'pending closing' ? 'selected' : ''}>Pending Closing</option>
+          </select>
+        `;
+      } else {
+        // Use regular input for other fields
+        container.innerHTML = `
+          <input 
+            id="editFieldValue" 
+            type="text" 
+            class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Enter new value"
+            value="${currentValue}"
+            required
+          />
+        `;
+      }
+      
+      // Show the modal
+      document.getElementById('editFieldModal').classList.remove('hidden');
+    };
+
+    // Save field edit
+    window.saveFieldEdit = async function() {
+      const locationId = document.getElementById('editFieldLocationId').value;
+      const fieldType = document.getElementById('editFieldFieldType').value;
+      const newValue = document.getElementById('editFieldValue').value.trim();
+      
+      if (!newValue) {
+        alert('Please enter a value');
+        return;
+      }
+      
+      // Check if this is a customer or location field
+      const customer = customers.find(c => c.id === locationId);
+      const location = locations.find(l => l.id === locationId);
+      
+      if (customer) {
+        // Update customer field
+        if (fieldType === 'accountNumber') {
+          customer.accountNumber = newValue;
+        } else if (fieldType === 'name') {
+          customer.name = newValue;
+        } else if (fieldType === 'email') {
+          customer.email = newValue;
+        } else if (fieldType === 'phone') {
+          customer.phone = newValue;
+        } else if (fieldType === 'address') {
+          customer.address = newValue;
+        } else if (fieldType === 'paymentStatus') {
+          customer.paymentStatus = newValue;
+          // Note: Status will be automatically updated based on pastDue amount
+        } else if (fieldType === 'dueDate') {
+          customer.dueDate = newValue;
+        } else if (fieldType === 'lastPayment') {
+          customer.lastPayment = newValue;
+        }
+        
+        // Update filtered customers
+        const filteredIndex = filteredCustomers.findIndex(c => c.id === locationId);
+        if (filteredIndex !== -1) {
+          filteredCustomers[filteredIndex] = customer;
+        }
+        
+        // Refresh customer table
+        updateCustomerTable();
+        
+        // Save to Firestore
+        await saveCustomersToFirestore();
+      } else if (location) {
+        // Update location field
+        if (fieldType === 'address') {
+          location.address = newValue;
+        } else if (fieldType === 'ownerFullName') {
+          location.ownerFullName = newValue;
+          // Split the name into first and last name
+          const nameParts = newValue.split(' ');
+          location.ownerFirstName = nameParts[0] || '';
+          location.ownerLastName = nameParts.slice(1).join(' ') || '';
+        } else if (fieldType === 'currentResident') {
+          location.currentResident = newValue === 'Available' ? null : newValue;
+          location.status = newValue === 'Available' ? 'available' : 'occupied';
+        } else if (fieldType === 'status') {
+          location.status = newValue;
+        }
+        
+        // Update filtered locations
+        const filteredIndex = filteredLocations.findIndex(l => l.id === locationId);
+        if (filteredIndex !== -1) {
+          filteredLocations[filteredIndex] = location;
+        }
+        
+        // Refresh locations table
+        updateLocationsTable();
+        
+        // Save to Firestore
+        await saveLocationsToFirestore();
+      }
+      
+      // Hide the modal
+      document.getElementById('editFieldModal').classList.add('hidden');
+    };
+
+    // Cancel field edit
+    window.cancelFieldEdit = function() {
+      document.getElementById('editFieldModal').classList.add('hidden');
+    };
+
+    // Customer field editing functionality
+    window.editCustomerField = function(customerId, fieldType, currentValue) {
+      const customer = customers.find(c => c.id === customerId);
+      if (!customer) return;
+
+      // Set up the edit modal
+      document.getElementById('editFieldType').textContent = fieldType.charAt(0).toUpperCase() + fieldType.slice(1);
+      document.getElementById('editFieldValue').value = currentValue;
+      document.getElementById('editFieldLocationId').value = customerId;
+      document.getElementById('editFieldFieldType').value = fieldType;
+      
+      // Show the modal
+      document.getElementById('editFieldModal').classList.remove('hidden');
+    };
+
+    // Show amount details modal
+    window.showAmountDetails = function(customerId) {
+      const customer = customers.find(c => c.id === customerId);
+      if (!customer) return;
+
+      const serviceCost = calculateProratedServiceCost(customer);
+      const lateFee = customer.pastDue > 0 ? 20 : 0; // $20 late fee
+      const total = serviceCost + lateFee;
+
+      document.getElementById('amountDetailsCustomer').textContent = customer.name;
+      document.getElementById('amountDetailsService').textContent = `$${serviceCost.toFixed(2)}`;
+      document.getElementById('amountDetailsLateFee').textContent = `$${lateFee.toFixed(2)}`;
+      document.getElementById('amountDetailsTotal').textContent = `$${total.toFixed(2)}`;
+      
+      document.getElementById('amountDetailsModal').classList.remove('hidden');
+    };
+
+    // Hide amount details modal
+    window.hideAmountDetails = function() {
+      document.getElementById('amountDetailsModal').classList.add('hidden');
+    };
+
+    // Show payment modal
+    window.showPaymentModal = function(customerId) {
+      const customer = customers.find(c => c.id === customerId);
+      if (!customer) return;
+
+      const currentAmount = customer.currentBill + customer.pastDue;
+      document.getElementById('paymentCustomerName').textContent = customer.name;
+      document.getElementById('paymentCurrentAmount').textContent = `$${currentAmount.toFixed(2)}`;
+      document.getElementById('paymentAmount').value = '';
+      document.getElementById('paymentAmount').max = currentAmount;
+      document.getElementById('paymentCustomerId').value = customerId;
+      
+      document.getElementById('paymentModal').classList.remove('hidden');
+    };
+
+    // Hide payment modal
+    window.hidePaymentModal = function() {
+      document.getElementById('paymentModal').classList.add('hidden');
+    };
+
+    // Process payment
+    window.processPayment = async function() {
+      const customerId = document.getElementById('paymentCustomerId').value;
+      const paymentAmount = parseFloat(document.getElementById('paymentAmount').value);
+      
+      if (!paymentAmount || paymentAmount <= 0) {
+        alert('Please enter a valid payment amount');
+        return;
+      }
+
+      const customer = customers.find(c => c.id === customerId);
+      if (!customer) return;
+
+      const currentAmount = customer.currentBill + customer.pastDue;
+      if (paymentAmount > currentAmount) {
+        alert(`Payment amount cannot exceed current balance of $${currentAmount.toFixed(2)}`);
+        return;
+      }
+
+      // Record payment in history
+      const today = new Date();
+      const paymentDate = (today.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                         today.getDate().toString().padStart(2, '0') + '/' + 
+                         today.getFullYear();
+
+      const paymentRecord = {
+        date: paymentDate,
+        amountDue: currentAmount,
+        amountPaid: paymentAmount,
+        remainingBalance: currentAmount - paymentAmount
+      };
+
+      customer.paymentHistory.push(paymentRecord);
+
+      // Update customer balance
+      if (paymentAmount >= customer.currentBill) {
+        const remaining = paymentAmount - customer.currentBill;
+        customer.currentBill = 0;
+        customer.pastDue = Math.max(0, customer.pastDue - remaining);
+      } else {
+        customer.currentBill -= paymentAmount;
+      }
+
+      // Update last payment date
+      customer.lastPayment = paymentDate;
+      
+      // If customer was pending closing and now has no balance, mark as inactive
+      if (customer.paymentStatus === 'pending closing' && customer.pastDue === 0 && customer.currentBill === 0) {
+        customer.paymentStatus = 'inactive';
+      } else {
+        // Update payment status based on past due amount
+        updateCustomerPaymentStatus(customer);
+      }
+
+      // Save to Firestore
+      await saveCustomersToFirestore();
+      
+      // Update display
+      updateDashboard();
+      hidePaymentModal();
+      
+      alert(`Payment of $${paymentAmount.toFixed(2)} recorded successfully!`);
+    };
+
+    // Show payment history
+    window.showPaymentHistory = function(customerId) {
+      const customer = customers.find(c => c.id === customerId);
+      if (!customer) return;
+
+      document.getElementById('historyCustomerName').textContent = customer.name;
+      
+      const historyBody = document.getElementById('paymentHistoryBody');
+      historyBody.innerHTML = '';
+
+      // Check if paymentHistory exists and has items
+      if (!customer.paymentHistory || customer.paymentHistory.length === 0) {
+        historyBody.innerHTML = '<tr><td colspan="4" class="text-center text-slate-500 dark:text-slate-400 py-4">No payment history available</td></tr>';
+      } else {
+        customer.paymentHistory.forEach(payment => {
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${payment.date}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${payment.amountDue.toFixed(2)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${payment.amountPaid.toFixed(2)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${payment.remainingBalance.toFixed(2)}</td>
+          `;
+          historyBody.appendChild(row);
+        });
+      }
+
+      document.getElementById('paymentHistoryModal').classList.remove('hidden');
+    };
+
+    // Hide payment history modal
+    window.hidePaymentHistory = function() {
+      document.getElementById('paymentHistoryModal').classList.add('hidden');
+    };
+
+    // Keyboard shortcut to switch to client page
+    document.addEventListener('keydown', function(event) {
+      if (event.ctrlKey && event.shiftKey) {
+        event.preventDefault();
+        window.location.href = 'billing.html';
+      }
+    });
+  </script>
+  <style>
+    :root { color-scheme: light dark; }
+    body { background: radial-gradient(1200px 800px at 30% -10%, #e6f0ff 0%, #ffffff 45%) no-repeat; }
+    @media (prefers-color-scheme: dark) {
+      body { background: radial-gradient(1200px 800px at 30% -10%, #0b1220 0%, #0e1628 45%) no-repeat; }
+    }
+    .card { backdrop-filter: saturate(1.2) blur(8px); }
+    .modal-show { display: flex !important; }
+    .safe-pad { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+    .tap { -webkit-tap-highlight-color: transparent; }
+  </style>
+</head>
+<body class="min-h-screen text-slate-800 dark:text-slate-100 tap">
+  <div class="mx-auto max-w-7xl px-4 pt-6 pb-24 safe-pad">
+    
+
+    <!-- Dashboard Screen -->
+    <div id="dashboardScreen">
+      <!-- Header -->
+      <header class="flex justify-between items-center mb-8">
+        <div>
+          <h1 class="text-3xl font-bold text-slate-800 dark:text-slate-200">CUS Admin Dashboard</h1>
+          <p class="text-slate-600 dark:text-slate-400">Manage customer accounts and billing</p>
+        </div>
+        <button 
+          onclick="logout()" 
+          class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+        >
+          Go to Client
+        </button>
+      </header>
+
+      <!-- Stats Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div class="card rounded-2xl bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black/5 dark:ring-white/10 p-6 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200" onclick="showSettingsModule()">
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              <div class="w-8 h-8 bg-blue-100 dark:bg-blue-900 rounded-lg flex items-center justify-center">
+                <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+          </svg>
+              </div>
+            </div>
+            <div class="ml-4">
+              <p class="text-sm font-medium text-slate-600 dark:text-slate-400">Total Customers</p>
+              <p id="totalCustomers" class="text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card rounded-2xl bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black/5 dark:ring-white/10 p-6 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200" onclick="showSettingsModule()">
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              <div class="w-8 h-8 bg-green-100 dark:bg-green-900 rounded-lg flex items-center justify-center">
+                <svg class="w-5 h-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+              </div>
+            </div>
+            <div class="ml-4">
+              <p class="text-sm font-medium text-slate-600 dark:text-slate-400">Current</p>
+              <p id="currentCustomers" class="text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card rounded-2xl bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black/5 dark:ring-white/10 p-6 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200" onclick="showSettingsModule()">
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              <div class="w-8 h-8 bg-red-100 dark:bg-red-900 rounded-lg flex items-center justify-center">
+                <svg class="w-5 h-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+          </svg>
+              </div>
+            </div>
+            <div class="ml-4">
+              <p class="text-sm font-medium text-slate-600 dark:text-slate-400">Overdue</p>
+              <p id="overdueCustomers" class="text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="card rounded-2xl bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black/5 dark:ring-white/10 p-6 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200" onclick="showSettingsModule()">
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              <div class="w-8 h-8 bg-purple-100 dark:bg-purple-900 rounded-lg flex items-center justify-center">
+                <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
+                </svg>
+              </div>
+            </div>
+            <div class="ml-4">
+              <p class="text-sm font-medium text-slate-600 dark:text-slate-400">Total Revenue</p>
+              <p id="totalRevenue" class="text-2xl font-semibold text-slate-900 dark:text-slate-100">$0.00</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Modules -->
+      <div id="actionModules" class="mb-8">
+        <!-- Payment Module -->
+        <div id="paymentModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
+          <div class="flex justify-between items-center mb-6">
+            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Process Payment</h3>
+            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Customer</label>
+              <select id="paymentCustomerSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+                <option value="">Choose a customer...</option>
+              </select>
+            </div>
+            
+            <div id="customerPaymentInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Current Amount Due</p>
+                  <p id="paymentAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                  <button id="viewDetailsBtn" onclick="showPaymentDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
+                    View Details
+                  </button>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
+                  <p id="paymentPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
+                  <p id="paymentLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                </div>
+              </div>
+              
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Property Location</p>
+                  <p id="paymentPropertyLocation" class="text-sm font-medium text-slate-800 dark:text-slate-200">--</p>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Due Date</p>
+                  <p id="paymentDueDate" class="text-lg font-semibold text-slate-800 dark:text-slate-200">--/--/----</p>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Account Status</p>
+                  <span id="paymentStatusIndicator" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium">
+                    <!-- Status will be populated by JavaScript -->
+                  </span>
+                </div>
+              </div>
+              
+              <div class="mb-4">
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Amount</label>
+                <input 
+                  type="number" 
+                  id="paymentAmount" 
+                  step="0.01" 
+                  min="0" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="Enter payment amount"
+                >
+              </div>
+              
+              <button 
+                onclick="processPaymentFromModule()" 
+                class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                Process Payment
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add Client Module -->
+        <div id="addClientModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
+          <div class="flex justify-between items-center mb-6">
+            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add New Client</h3>
+            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
+              <input 
+                type="text" 
+                id="newClientName" 
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                placeholder="Enter full name"
+                required
+              >
+            </div>
+            
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email</label>
+              <input 
+                type="email" 
+                id="newClientEmail" 
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                placeholder="Enter email address"
+                required
+              >
+            </div>
+            
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Phone Number</label>
+              <input 
+                type="tel" 
+                id="newClientPhone" 
+                oninput="formatPhoneInput(this)"
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                placeholder="(xxx)-xxx-xxxx"
+                required
+              >
+            </div>
+            
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Property Location</label>
+              <select id="newClientLocation" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200" required>
+                <option value="">Choose a location...</option>
+                <option value="add-new">+ Add New Location</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="mt-6">
+            <button 
+              onclick="addClientFromModule()" 
+              class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+            >
+              Create Client Account
+            </button>
+          </div>
+        </div>
+
+        <!-- Search Module -->
+        <div id="searchModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
+          <div class="flex justify-between items-center mb-6">
+            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Search Accounts</h3>
+            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          
+          <div class="space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search by Name</label>
+                <input 
+                  type="text" 
+                  id="searchByName" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="Enter customer name..."
+                >
+              </div>
+              
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Filter by Status</label>
+                <select id="searchByStatus" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+                  <option value="">All Status</option>
+                  <option value="current">Current</option>
+                  <option value="overdue">Overdue</option>
+                </select>
+              </div>
+            </div>
+            
+            <div class="flex space-x-4">
+              <button 
+                onclick="performSearch()" 
+                class="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                Search
+              </button>
+              <button 
+                onclick="clearSearch()" 
+                class="bg-slate-500 hover:bg-slate-600 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                Clear
+              </button>
+            </div>
+            
+            <div id="searchResults" class="mt-6">
+              <!-- Search results will be displayed here -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Settings Module -->
+        <div id="settingsModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
+          <div class="flex justify-between items-center mb-6">
+            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Settings & Management</h3>
+            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+      </div>
+
+      <!-- Tab Navigation -->
+      <div class="flex space-x-1 mb-6">
+            <button 
+              id="settingsAccountsTab"
+              onclick="switchSettingsView('accounts')" 
+              class="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium"
+            >
+              Accounts
+            </button>
+            <button 
+              id="settingsLocationsTab"
+              onclick="switchSettingsView('locations')" 
+              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
+            >
+              Locations
+            </button>
+          </div>
+
+          <!-- Accounts Section -->
+          <div id="settingsAccountsContent">
+            <div class="flex justify-between items-center mb-6">
+              <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">Customer Accounts</h4>
+              <button 
+                onclick="showAddCustomerModal()" 
+                class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Add New Customer
+              </button>
+            </div>
+
+            <!-- Search and Filter -->
+            <div class="flex flex-col md:flex-row gap-4 mb-6">
+              <div class="flex-1">
+                <input 
+                  id="settingsCustomerSearch" 
+                  type="text" 
+                  placeholder="Search customers..." 
+                  class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onkeyup="searchCustomers()"
+                />
+              </div>
+              <div>
+                <select 
+                  onchange="filterByStatus(this.value)" 
+                  class="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All Status</option>
+                  <option value="current">Current</option>
+                  <option value="overdue">Overdue</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Customer Table -->
+            <div class="overflow-x-auto">
+              <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-700">
+                  <tr>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Account</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Customer</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Due</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Due Date</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Last Payment</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="settingsCustomerTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
+                  <!-- Customer rows will be populated by JavaScript -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Locations Section -->
+          <div id="settingsLocationsContent" class="hidden">
+            <div class="flex justify-between items-center mb-6">
+              <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">Property Locations</h4>
+              <div class="flex gap-3">
+                <button 
+                  onclick="showAddLocationModal()" 
+                  class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  Add Location
+                </button>
+                <button 
+                  onclick="showImportModal()" 
+                  class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  Import Locations
+                </button>
+              </div>
+            </div>
+
+            <!-- Search and Filter -->
+            <div class="flex flex-col md:flex-row gap-4 mb-6">
+              <div class="flex-1">
+                <input 
+                  id="settingsLocationSearch" 
+                  type="text" 
+                  placeholder="Search locations..." 
+                  class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onkeyup="searchLocations()"
+                />
+              </div>
+              <div>
+                <select 
+                  onchange="filterLocationsByStatus(this.value)" 
+                  class="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All Status</option>
+                  <option value="occupied">Occupied</option>
+                  <option value="available">Available</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Locations Table -->
+            <div class="overflow-x-auto">
+              <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-700">
+                  <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Owner & Resident</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="settingsLocationsTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
+                  <!-- Location rows will be populated by JavaScript -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Action Buttons -->
+      <div class="flex flex-col items-center gap-4 mb-8">
+        <button 
+          onclick="showPaymentModule()" 
+          class="w-full max-w-2xl bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
+          </svg>
+          <span class="text-base">Make Payment</span>
+        </button>
+        
+        <button 
+          onclick="showAddClientModule()" 
+          class="w-full max-w-2xl bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
+          </svg>
+          <span class="text-base">Add Client</span>
+        </button>
+        
+        <button 
+          onclick="showSearchModule()" 
+          class="w-full max-w-2xl bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <span class="text-base">Search</span>
+        </button>
+        
+        <button 
+          onclick="showSettingsModule()" 
+          class="w-full max-w-2xl bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          <span class="text-base">Settings</span>
+        </button>
+      </div>
+
+      <!-- Tab Navigation -->
+      <div class="flex space-x-1 mb-6 hidden">
+        <button 
+          id="accountsTab"
+          onclick="switchView('accounts')" 
+          class="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium"
+        >
+          Accounts
+        </button>
+        <button 
+          id="locationsTab"
+          onclick="switchView('locations')" 
+          class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
+        >
+          Locations
+        </button>
+      </div>
+
+      <!-- Accounts Section -->
+      <div id="accountsContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Customer Accounts</h2>
+          <button 
+            onclick="showAddCustomerModal()" 
+            class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Add New Customer
+          </button>
+        </div>
+
+        <!-- Search and Filter -->
+        <div class="flex flex-col md:flex-row gap-4 mb-6">
+          <div class="flex-1">
+            <input 
+              id="customerSearch" 
+              type="text" 
+              placeholder="Search customers..." 
+              class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onkeyup="searchCustomers()"
+            />
+          </div>
+          <div>
+            <select 
+              onchange="filterByStatus(this.value)" 
+              class="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">All Status</option>
+              <option value="current">Current</option>
+              <option value="overdue">Overdue</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Customer Table -->
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-700">
+              <tr>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Account</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Customer</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Due</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Due Date</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Last Payment</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="customerTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
+              <!-- Customer rows will be populated by JavaScript -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Locations Section -->
+      <div id="locationsContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Property Locations</h2>
+          <div class="flex gap-3">
+            <button 
+              onclick="showAddLocationModal()" 
+              class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Add Location
+            </button>
+            <button 
+              onclick="showImportModal()" 
+              class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
+            >
+              Import Locations
+            </button>
+          </div>
+        </div>
+
+        <!-- Search and Filter -->
+        <div class="flex flex-col md:flex-row gap-4 mb-6">
+          <div class="flex-1">
+            <input 
+              id="locationSearch" 
+              type="text" 
+              placeholder="Search locations..." 
+              class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onkeyup="searchLocations()"
+            />
+          </div>
+          <div>
+            <select 
+              onchange="filterLocationsByStatus(this.value)" 
+              class="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">All Status</option>
+              <option value="occupied">Occupied</option>
+              <option value="available">Available</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Locations Table -->
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-700">
+              <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Owner & Resident</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
+                <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="locationsTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
+              <!-- Location rows will be populated by JavaScript -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Customer Modal -->
+    <div id="addCustomerModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add New Customer</h3>
+          <button 
+            onclick="hideAddCustomerModal()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <form id="addCustomerForm" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
+            <input 
+              id="newCustomerName" 
+              type="text" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Enter customer's full name"
+              required
+            />
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email Address</label>
+            <input 
+              id="newCustomerEmail" 
+              type="email" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="customer@email.com"
+              required
+            />
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Phone Number</label>
+            <input 
+              id="newCustomerPhone" 
+              type="tel" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="(916) 555-0123"
+              oninput="formatPhoneInput(this)"
+              required
+            />
+          </div>
+          
+          
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Property Location</label>
+            <select 
+              id="newCustomerLocation" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            >
+              <option value="">Select a property location</option>
+              <!-- Options will be populated by JavaScript -->
+            </select>
+          </div>
+          
+          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
+            <p class="text-sm text-blue-800 dark:text-blue-200">
+              <strong>Note:</strong> The customer will be able to log in using their email address and the temporary password "password".
+            </p>
+          </div>
+          
+          <div class="flex gap-3">
+            <button 
+              type="button"
+              onclick="hideAddCustomerModal()" 
+              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="button"
+              onclick="addCustomer()" 
+              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+            >
+              Add Customer
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Add Location Modal -->
+    <div id="addLocationModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add New Location</h3>
+          <button 
+            onclick="hideAddLocationModal()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <form id="addLocationForm" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Street Address</label>
+            <input 
+              id="newLocationStreet" 
+              type="text" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="123 Main Street"
+              required
+            />
+          </div>
+          
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">City</label>
+              <input 
+                id="newLocationCity" 
+                type="text" 
+                class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Sacramento"
+                required
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">State</label>
+              <input 
+                id="newLocationState" 
+                type="text" 
+                class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="CA"
+                required
+              />
+            </div>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ZIP Code</label>
+            <input 
+              id="newLocationZip" 
+              type="text" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="95814"
+              required
+            />
+          </div>
+          
+          
+          <div class="flex gap-3">
+            <button 
+              type="button"
+              onclick="hideAddLocationModal()" 
+              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="button"
+              onclick="addLocation()" 
+              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+            >
+              Add Location
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Payment Modal -->
+    <div id="paymentModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Record Payment</h3>
+          <button 
+            onclick="hidePaymentModal()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-4">
+          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
+            <h4 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Customer: <span id="paymentCustomerName"></span></h4>
+            <p class="text-sm text-blue-800 dark:text-blue-200">Current Balance: <span id="paymentCurrentAmount" class="font-bold"></span></p>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Amount</label>
+            <input 
+              id="paymentAmount" 
+              type="number" 
+              step="0.01"
+              min="0.01"
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Enter payment amount"
+              required
+            />
+          </div>
+          
+          <div class="flex gap-3">
+            <button 
+              type="button"
+              onclick="hidePaymentModal()" 
+              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="button"
+              onclick="processPayment()" 
+              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+            >
+              Record Payment
+            </button>
+          </div>
+        </div>
+        
+        <!-- Hidden input for tracking -->
+        <input type="hidden" id="paymentCustomerId" />
+      </div>
+    </div>
+
+    <!-- Payment History Modal -->
+    <div id="paymentHistoryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-4xl w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Payment History - <span id="historyCustomerName"></span></h3>
+          <button 
+            onclick="hidePaymentHistory()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-700">
+              <tr>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Date</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Due</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Paid</th>
+                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Remaining Balance</th>
+              </tr>
+            </thead>
+            <tbody id="paymentHistoryBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
+              <!-- Payment history rows will be populated by JavaScript -->
+            </tbody>
+          </table>
+        </div>
+        
+        <div class="mt-6">
+          <button 
+            type="button"
+            onclick="hidePaymentHistory()" 
+            class="w-full bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Amount Details Modal -->
+    <div id="amountDetailsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Amount Breakdown</h3>
+          <button 
+            onclick="hideAmountDetails()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-4">
+          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
+            <h4 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Customer: <span id="amountDetailsCustomer"></span></h4>
+          </div>
+          
+          <div class="space-y-3">
+            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
+              <span class="text-slate-600 dark:text-slate-400">Sewage Service</span>
+              <span class="font-medium" id="amountDetailsService">$150.00</span>
+            </div>
+            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
+              <span class="text-slate-600 dark:text-slate-400">Late Fee</span>
+              <span class="font-medium" id="amountDetailsLateFee">$0.00</span>
+            </div>
+            <div class="flex justify-between items-center py-3 bg-slate-50 dark:bg-slate-700 rounded-lg px-4">
+              <span class="font-semibold text-slate-800 dark:text-slate-200">Total Due</span>
+              <span class="font-bold text-lg" id="amountDetailsTotal">$170.00</span>
+            </div>
+          </div>
+          
+          <button 
+            type="button"
+            onclick="hideAmountDetails()" 
+            class="w-full bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Field Modal -->
+    <div id="editFieldModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Edit <span id="editFieldType">Field</span></h3>
+          <button 
+            onclick="cancelFieldEdit()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">New Value</label>
+            <div id="editFieldInputContainer">
+              <input 
+                id="editFieldValue" 
+                type="text" 
+                class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Enter new value"
+                required
+              />
+            </div>
+          </div>
+          
+          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
+            <p class="text-sm text-blue-800 dark:text-blue-200">
+              <strong>Tip:</strong> For status, use "available" or "occupied". For residents, use "Available" to make the property available.
+            </p>
+          </div>
+          
+          <div class="flex gap-3">
+            <button 
+              type="button"
+              onclick="cancelFieldEdit()" 
+              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="button"
+              onclick="saveFieldEdit()" 
+              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+            >
+              Save Changes
+            </button>
+          </div>
+        </div>
+        
+        <!-- Hidden inputs for tracking -->
+        <input type="hidden" id="editFieldLocationId" />
+        <input type="hidden" id="editFieldFieldType" />
+      </div>
+    </div>
+
+    <!-- Import Locations Modal -->
+    <div id="importModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Import Locations</h3>
+          <button 
+            onclick="hideImportModal()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select JSON File</label>
+            <input 
+              id="locationFileInput" 
+              type="file" 
+              accept=".json"
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          
+          <div class="bg-green-50 dark:bg-green-900/20 p-4 rounded-xl">
+            <p class="text-sm text-green-800 dark:text-green-200">
+              <strong>JSON Format:</strong> Your file should contain a "locations" array with objects having properties like id, address, propertyType, bedrooms, bathrooms, squareFootage.
+            </p>
+          </div>
+          
+          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
+            <p class="text-sm text-blue-800 dark:text-blue-200">
+              <strong>Sample:</strong> You can use the provided locations.json file as a template.
+            </p>
+          </div>
+          
+          <div class="flex gap-3">
+            <button 
+              type="button"
+              onclick="hideImportModal()" 
+              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="button"
+              onclick="importLocations()" 
+              class="flex-1 bg-green-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-green-700 transition-colors duration-200"
+            >
+              Import Locations
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Payment Details Modal -->
+    <div id="paymentDetailsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Payment Breakdown</h3>
+          <button 
+            onclick="hidePaymentDetailsModal()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-4">
+          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
+            <h4 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Customer: <span id="paymentDetailsCustomer"></span></h4>
+          </div>
+          
+          <div class="space-y-3">
+            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
+              <span class="text-slate-600 dark:text-slate-400">Sewage Service</span>
+              <span class="font-medium" id="paymentDetailsService">$150.00</span>
+            </div>
+            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
+              <span class="text-slate-600 dark:text-slate-400">Late Fee</span>
+              <span class="font-medium" id="paymentDetailsLateFee">$0.00</span>
+            </div>
+            <div class="flex justify-between items-center py-3 bg-slate-50 dark:bg-slate-700 rounded-lg px-4">
+              <span class="font-semibold text-slate-800 dark:text-slate-200">Total Due</span>
+              <span class="font-bold text-lg" id="paymentDetailsTotal">$170.00</span>
+            </div>
+          </div>
+          
+          <button 
+            type="button"
+            onclick="hidePaymentDetailsModal()" 
+            class="w-full bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Transfer Ownership Modal -->
+    <div id="transferOwnershipModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-2xl w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Transfer Property Ownership</h3>
+          <button 
+            onclick="hideTransferOwnershipModal()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-6">
+          <div class="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-xl">
+            <h4 class="font-semibold text-yellow-800 dark:text-yellow-200 mb-2">⚠️ Location Already Occupied</h4>
+            <p class="text-sm text-yellow-700 dark:text-yellow-300">
+              This location is currently being used by <strong id="transferWarningName"></strong> at <strong id="transferLocation"></strong>.
+            </p>
+          </div>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
+              <h5 class="font-semibold text-slate-800 dark:text-slate-200 mb-3">Current Resident</h5>
+              <div class="space-y-2">
+                <p><span class="text-slate-600 dark:text-slate-400">Name:</span> <span id="transferCurrentResident"></span></p>
+                <p><span class="text-slate-600 dark:text-slate-400">Status:</span> <span id="transferCurrentStatus"></span></p>
+                <p><span class="text-slate-600 dark:text-slate-400">Balance:</span> <span id="transferBalance"></span></p>
+              </div>
+            </div>
+            
+            <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
+              <h5 class="font-semibold text-blue-800 dark:text-blue-200 mb-3">New Client</h5>
+              <div class="space-y-2">
+                <p><span class="text-blue-600 dark:text-blue-400">Name:</span> <span id="transferNewClient"></span></p>
+                <p class="text-sm text-blue-600 dark:text-blue-400">Will be assigned to this location</p>
+              </div>
+            </div>
+          </div>
+          
+          <div id="transferStatusMessage" class="p-4 rounded-xl">
+            <!-- Status message will be populated by JavaScript -->
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+              New Location for <span id="transferNewLocationLabel"></span>
+            </label>
+            <input 
+              id="transferNewLocation" 
+              type="text" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Enter the new address where they're moving"
+              required
+            />
+          </div>
+          
+          <div class="flex gap-3">
+            <button 
+              type="button"
+              onclick="hideTransferOwnershipModal()" 
+              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="button"
+              onclick="processTransferOwnership()" 
+              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+            >
+              Transfer Ownership
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
