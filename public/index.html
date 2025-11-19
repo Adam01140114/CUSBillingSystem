@@ -411,10 +411,16 @@
 
       console.log('Stats calculated:', { totalCustomers, overdueCustomers, currentCustomers, totalRevenue });
 
-      document.getElementById('totalCustomers').textContent = totalCustomers;
-      document.getElementById('overdueCustomers').textContent = overdueCustomers;
-      document.getElementById('currentCustomers').textContent = currentCustomers;
-      document.getElementById('totalRevenue').textContent = `$${totalRevenue.toFixed(2)}`;
+      // Only update stats if the elements exist (they were removed from the UI)
+      const totalCustomersEl = document.getElementById('totalCustomers');
+      const overdueCustomersEl = document.getElementById('overdueCustomers');
+      const currentCustomersEl = document.getElementById('currentCustomers');
+      const totalRevenueEl = document.getElementById('totalRevenue');
+      
+      if (totalCustomersEl) totalCustomersEl.textContent = totalCustomers;
+      if (overdueCustomersEl) overdueCustomersEl.textContent = overdueCustomers;
+      if (currentCustomersEl) currentCustomersEl.textContent = currentCustomers;
+      if (totalRevenueEl) totalRevenueEl.textContent = `$${totalRevenue.toFixed(2)}`;
     }
 
     function updateCustomerTable() {
@@ -542,6 +548,13 @@
       document.getElementById('paymentModule').classList.remove('hidden');
     };
 
+    window.showBillModule = function() {
+      hideAllModules();
+      // Reset bill module to original form
+      resetBillForm();
+      document.getElementById('billModule').classList.remove('hidden');
+    };
+
     window.showAddClientModule = function() {
       hideAllModules();
       // Reset add client module to original form
@@ -574,6 +587,7 @@
 
     window.hideAllModules = function() {
       document.getElementById('paymentModule').classList.add('hidden');
+      document.getElementById('billModule').classList.add('hidden');
       document.getElementById('addClientModule').classList.add('hidden');
       document.getElementById('searchModule').classList.add('hidden');
       document.getElementById('settingsModule').classList.add('hidden');
@@ -687,6 +701,261 @@
     function hideCustomerPaymentInfo() {
       document.getElementById('customerPaymentInfo').classList.add('hidden');
     }
+
+    // Bill Module Functions
+    function populateBillCustomerSelect() {
+      const select = document.getElementById('billCustomerSelect');
+      select.innerHTML = '<option value="">Choose a customer...</option>';
+      
+      customers.forEach(customer => {
+        const option = document.createElement('option');
+        option.value = customer.id;
+        option.textContent = `${customer.name} (${customer.accountNumber})`;
+        select.appendChild(option);
+      });
+      
+      // Add event listener for customer selection
+      select.addEventListener('change', function() {
+        const customerId = this.value;
+        if (customerId) {
+          showCustomerBillInfo(customerId);
+        } else {
+          hideCustomerBillInfo();
+        }
+      });
+    }
+
+    function showCustomerBillInfo(customerId) {
+      const customer = customers.find(c => c.id === customerId);
+      if (customer) {
+        // Calculate prorated service cost based on when customer was added
+        const serviceCost = calculateProratedServiceCost(customer);
+        const lateFee = customer.pastDue > 0 ? 20 : 0;
+        const subtotal = serviceCost + lateFee;
+        
+        // Calculate code surcharges
+        let totalSurcharge = 0;
+        if (customer.codes && customer.codes.length > 0) {
+          customer.codes.forEach(code => {
+            totalSurcharge += subtotal * (code.percentage / 100);
+          });
+        }
+        
+        // Calculate factor adjustment (based on service cost only)
+        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+        const factorAdjustment = serviceCost * (factor - 1);
+        const totalAmount = serviceCost + lateFee + totalSurcharge + factorAdjustment;
+        
+        // Calculate due date as last day of current month
+        const now = new Date();
+        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        const dueDateStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getFullYear();
+        
+        // Set up status indicator
+        const statusClass = customer.paymentStatus === 'overdue' 
+          ? 'bg-red-100 text-red-800' 
+          : customer.paymentStatus === 'inactive'
+          ? 'bg-gray-100 text-gray-800'
+          : customer.paymentStatus === 'pending closing'
+          ? 'bg-yellow-100 text-yellow-800'
+          : 'bg-green-100 text-green-800';
+        
+        document.getElementById('billAmountDue').textContent = `$${totalAmount.toFixed(2)}`;
+        document.getElementById('billPastDue').textContent = `$${customer.pastDue.toFixed(2)}`;
+        document.getElementById('billDueDate').textContent = dueDateStr;
+        document.getElementById('billLateFee').textContent = `$${lateFee.toFixed(2)}`;
+        
+        // Update status indicator
+        const statusIndicator = document.getElementById('billStatusIndicator');
+        statusIndicator.className = `inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusClass}`;
+        statusIndicator.textContent = customer.paymentStatus.charAt(0).toUpperCase() + customer.paymentStatus.slice(1);
+        
+        // Update property location
+        document.getElementById('billPropertyLocation').textContent = customer.address;
+        
+        document.getElementById('customerBillInfo').classList.remove('hidden');
+      }
+    }
+
+    function hideCustomerBillInfo() {
+      document.getElementById('customerBillInfo').classList.add('hidden');
+    }
+
+    window.resetBillForm = function() {
+      const billModule = document.getElementById('billModule');
+      billModule.innerHTML = `
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Process Bill</h3>
+          <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-6">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Customer</label>
+            <select id="billCustomerSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+              <option value="">Choose a customer...</option>
+            </select>
+          </div>
+          
+          <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Current Amount Due</p>
+                <p id="billAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                <button id="viewBillDetailsBtn" onclick="showBillDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
+                  View Details
+                </button>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
+                <p id="billPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
+                <p id="billLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+              </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Property Location</p>
+                <p id="billPropertyLocation" class="text-sm font-medium text-slate-800 dark:text-slate-200">--</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Due Date</p>
+                <p id="billDueDate" class="text-lg font-semibold text-slate-800 dark:text-slate-200">--/--/----</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Account Status</p>
+                <span id="billStatusIndicator" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium">
+                  <!-- Status will be populated by JavaScript -->
+                </span>
+              </div>
+            </div>
+            
+            <br>
+            <button 
+              onclick="produceBill()" 
+              class="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+            >
+              Produce Bill
+            </button>
+          </div>
+        </div>
+      `;
+      
+      // Repopulate the customer dropdown
+      populateBillCustomerSelect();
+    };
+
+    window.produceBill = async function() {
+      const customerId = document.getElementById('billCustomerSelect').value;
+      if (!customerId) {
+        alert('Please select a customer');
+        return;
+      }
+
+      const customer = customers.find(c => c.id === customerId);
+      if (!customer) {
+        alert('Customer not found');
+        return;
+      }
+
+      try {
+        // Calculate all the amounts (same logic as showCustomerBillInfo)
+        const serviceCost = calculateProratedServiceCost(customer);
+        const lateFee = customer.pastDue > 0 ? 20 : 0;
+        const subtotal = serviceCost + lateFee;
+        
+        // Calculate code surcharges
+        let totalSurcharge = 0;
+        if (customer.codes && customer.codes.length > 0) {
+          customer.codes.forEach(code => {
+            totalSurcharge += subtotal * (code.percentage / 100);
+          });
+        }
+        
+        // Calculate factor adjustment (based on service cost only)
+        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+        const factorAdjustment = serviceCost * (factor - 1);
+        const totalAmount = serviceCost + lateFee + totalSurcharge + factorAdjustment;
+        
+        // Calculate dates
+        const now = new Date();
+        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        const statementDate = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                             lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                             lastDayOfMonth.getFullYear();
+        
+        // Calculate billing cycle (first day of month to last day of month)
+        const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const firstDayStr = (firstDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                           firstDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                           String(firstDayOfMonth.getFullYear()).slice(-2);
+        const lastDayStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                          String(lastDayOfMonth.getFullYear()).slice(-2);
+        const cyclePeriod = `${firstDayStr} to ${lastDayStr}`;
+        
+        // Due date is the last day of the billing cycle month (same as lastDayOfMonth)
+        const dueDateStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                          lastDayOfMonth.getFullYear();
+
+        // Create FormData with all the required fields
+        const formData = new FormData();
+        formData.append('account_no', customer.accountNumber || '');
+        formData.append('account_name', customer.name || '');
+        formData.append('account_address', customer.address || '');
+        formData.append('statement_date', statementDate);
+        formData.append('cycle_period', cyclePeriod);
+        formData.append('current_charges', `$${serviceCost.toFixed(2)}`);
+        formData.append('previous_charges', `$${customer.pastDue.toFixed(2)}`);
+        formData.append('taxes_charges', `$${totalSurcharge.toFixed(2)}`);
+        formData.append('total_amount', `$${totalAmount.toFixed(2)}`);
+        formData.append('due_date', dueDateStr);
+
+        // Send to server
+        const response = await fetch('/edit_pdf?pdf=bill', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to generate PDF');
+        }
+
+        // Download the PDF
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'bill.pdf';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        alert('Bill PDF generated successfully!');
+      } catch (error) {
+        console.error('Error generating bill:', error);
+        alert('Failed to generate bill PDF: ' + error.message);
+      }
+    };
+
+    window.showBillDetailsModal = function() {
+      // Placeholder function - can be implemented later if needed
+      const customerId = document.getElementById('billCustomerSelect').value;
+      if (customerId) {
+        showAmountDetails(customerId);
+      }
+    };
 
     window.processPaymentFromModule = async function() {
       const customerId = document.getElementById('paymentCustomerSelect').value;
@@ -896,6 +1165,7 @@
       const locationId = document.getElementById('newClientLocation').value;
       
       // Get new fields
+      const entityType = document.getElementById('newClientEntityType')?.value || '';
       const ssn = document.getElementById('newClientSSN')?.value.trim() || '';
       const idType = document.getElementById('newClientIDType')?.value || '';
       const idNumber = document.getElementById('newClientIDNumber')?.value.trim() || '';
@@ -952,6 +1222,7 @@
             name, 
             email, 
             phone,
+            entityType,
             ssn,
             idType,
             idNumber,
@@ -983,6 +1254,7 @@
         paymentHistory: [],
         needsPasswordChange: true,
         createdDate: new Date().toISOString(),
+        entityType: entityType,
         ssn: ssn,
         idType: idType,
         idNumber: idNumber,
@@ -1118,6 +1390,16 @@
             <select id="newClientLocation" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200" required>
               <option value="">Choose a location...</option>
               <option value="add-new">+ Add New Location</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Entity Type</label>
+            <select id="newClientEntityType" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+              <option value="">Select Entity Type</option>
+              <option value="Individual">Individual</option>
+              <option value="Business">Business</option>
+              <option value="Farmer">Farmer</option>
             </select>
           </div>
 
@@ -1270,21 +1552,6 @@
 
         <div class="mt-6">
           <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Tax Codes</h4>
-          <div class="flex gap-2 mb-4">
-            <select 
-              id="newClientCodeSelect" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-            >
-              <option value="">Select a code...</option>
-            </select>
-            <button 
-              type="button"
-              onclick="addClientCode()" 
-              class="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors"
-            >
-              Add Code
-            </button>
-          </div>
           <div id="newClientCodesList" class="space-y-2">
             <!-- Selected codes will be displayed here -->
           </div>
@@ -1321,7 +1588,68 @@
       // Clear selected codes
       window.selectedClientCodes = [];
       updateClientCodesList();
+      
+      // Add event listener to Entity Type dropdown for auto-adding codes
+      const entityTypeSelect = document.getElementById('newClientEntityType');
+      if (entityTypeSelect) {
+        // Remove existing listeners by cloning the element
+        const newEntityTypeSelect = entityTypeSelect.cloneNode(true);
+        entityTypeSelect.parentNode.replaceChild(newEntityTypeSelect, entityTypeSelect);
+        
+        newEntityTypeSelect.addEventListener('change', function() {
+          const selectedEntityType = this.value;
+          // Auto-add matching codes based on Entity Type
+          autoAddCodesForEntityType(selectedEntityType);
+        });
+      }
     };
+
+    // Check if a code matches the selected Entity Type
+    function codeMatchesEntityType(code, entityType) {
+      if (!entityType || !code.requirements) {
+        return false;
+      }
+      
+      // Handle new requirements structure with AND/OR logic
+      if (code.requirements && code.requirements.values && Array.isArray(code.requirements.values)) {
+        const entityTypeInValues = code.requirements.values.includes(entityType);
+        
+        if (code.requirements.type === 'OR') {
+          // OR logic: Entity Type must be in the values array
+          return entityTypeInValues;
+        } else if (code.requirements.type === 'AND') {
+          // AND logic: For now, we'll check if Entity Type is in values
+          // (Full AND logic would require Entity Type to match all values, which isn't possible with single selection)
+          return entityTypeInValues;
+        }
+      }
+      
+      // Handle old array format (backward compatibility)
+      if (Array.isArray(code.requirements)) {
+        return code.requirements.includes(entityType);
+      }
+      
+      return false;
+    }
+
+    // Automatically add codes based on Entity Type
+    function autoAddCodesForEntityType(entityType) {
+      if (!entityType) {
+        return;
+      }
+      
+      // Check each code to see if it matches the Entity Type
+      codes.forEach(code => {
+        if (codeMatchesEntityType(code, entityType)) {
+          // Check if code is already added
+          if (!window.selectedClientCodes.find(c => c.id === code.id)) {
+            window.selectedClientCodes.push(code);
+          }
+        }
+      });
+      
+      updateClientCodesList();
+    }
 
     // Populate codes dropdown for Add Client form
     function populateAddClientCodeSelect() {
@@ -1570,6 +1898,7 @@
       const phone = document.getElementById('newCustomerPhone').value.replace(/\D/g, ''); // Store as digits only
       
       // Get new fields
+      const entityType = document.getElementById('newCustomerEntityType')?.value || '';
       const ssn = document.getElementById('newCustomerSSN')?.value.trim() || '';
       const idType = document.getElementById('newCustomerIDType')?.value || '';
       const idNumber = document.getElementById('newCustomerIDNumber')?.value.trim() || '';
@@ -1642,6 +1971,7 @@
         })(),
         phone: phone,
         paymentHistory: [], // Track payment history
+        entityType: entityType,
         ssn: ssn,
         idType: idType,
         idNumber: idNumber,
@@ -1817,6 +2147,11 @@
         
         row.innerHTML = `
           <td class="px-6 py-4 whitespace-nowrap">
+            <div class="text-sm font-medium text-slate-900 dark:text-slate-100">
+              ${location.premiseId || 'N/A'}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap">
             <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
                  ondblclick="editField('${location.id}', 'address', '${location.address}')" 
                  title="Double-click to edit">
@@ -1976,7 +2311,7 @@
       if (codes.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="4" class="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
+            <td colspan="5" class="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
               You don't have any codes currently
             </td>
           </tr>
@@ -2008,6 +2343,16 @@
                  ondblclick="editCodeField('${code.id}', 'description', '${(code.description || '').replace(/'/g, "\\'").replace(/"/g, '&quot;')}')" 
                  title="Double-click to edit">
               ${code.description || 'N/A'}
+            </div>
+          </td>
+          <td class="px-6 py-4">
+            <div class="text-sm text-slate-900 dark:text-slate-100">
+              ${code.requirements && code.requirements.values && code.requirements.values.length > 0 
+                ? `<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">${code.requirements.values.join(` ${code.requirements.type} `)}</span>`
+                : code.requirements && Array.isArray(code.requirements) && code.requirements.length > 0
+                  ? code.requirements.map(req => `<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 mr-1">${req}</span>`).join('')
+                  : '<span class="text-slate-400 dark:text-slate-500">—</span>'
+              }
             </div>
           </td>
           <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -2042,6 +2387,11 @@
           : 'Available';
         
         row.innerHTML = `
+          <td class="px-6 py-4 whitespace-nowrap">
+            <div class="text-sm font-medium text-slate-900 dark:text-slate-100">
+              ${location.premiseId || 'N/A'}
+            </div>
+          </td>
           <td class="px-6 py-4 whitespace-nowrap">
             <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
                  ondblclick="editField('${location.id}', 'address', '${location.address}')" 
@@ -2260,6 +2610,7 @@
           paymentHistory: [],
           needsPasswordChange: true,
           createdDate: new Date().toISOString(),
+          entityType: newClientData.entityType || '',
           ssn: newClientData.ssn || '',
           idType: newClientData.idType || '',
           idNumber: newClientData.idNumber || '',
@@ -2302,6 +2653,9 @@
 
     // Show add location modal
     window.showAddLocationModal = function() {
+      // Generate a random 6-digit number for Premise ID
+      const premiseId = Math.floor(100000 + Math.random() * 900000).toString();
+      document.getElementById('newLocationPremiseId').value = premiseId;
       document.getElementById('addLocationModal').classList.remove('hidden');
     };
 
@@ -2313,6 +2667,9 @@
 
     // Show add code modal
     window.showAddCodeModal = function() {
+      // Reset requirements
+      window.selectedCodeRequirements = null;
+      updateCodeRequirementsList();
       document.getElementById('addCodeModal').classList.remove('hidden');
     };
 
@@ -2320,6 +2677,90 @@
     window.hideAddCodeModal = function() {
       document.getElementById('addCodeModal').classList.add('hidden');
       document.getElementById('addCodeForm').reset();
+      // Reset requirements
+      window.selectedCodeRequirements = null;
+      updateCodeRequirementsList();
+    };
+
+    // Global variable to store selected requirements for new code
+    // Structure: { type: "AND" | "OR", values: ["Business", "Individual"] }
+    window.selectedCodeRequirements = null;
+
+    // Update requirements list display
+    window.updateCodeRequirementsList = function() {
+      const listContainer = document.getElementById('newCodeRequirementsList');
+      if (!listContainer) return;
+      
+      listContainer.innerHTML = '';
+      
+      if (!window.selectedCodeRequirements || window.selectedCodeRequirements.values.length === 0) {
+        return;
+      }
+      
+      const requirementDiv = document.createElement('div');
+      requirementDiv.className = 'flex items-center justify-between bg-slate-100 dark:bg-slate-700 px-3 py-2 rounded-lg';
+      
+      const valuesText = window.selectedCodeRequirements.values.join(` ${window.selectedCodeRequirements.type} `);
+      requirementDiv.innerHTML = `
+        <span class="text-sm text-slate-800 dark:text-slate-200">${valuesText}</span>
+        <button 
+          type="button"
+          onclick="removeCodeRequirement()" 
+          class="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 ml-2"
+        >
+          ×
+        </button>
+      `;
+      listContainer.appendChild(requirementDiv);
+    };
+
+    // Show add requirement modal
+    window.showAddRequirementModal = function() {
+      document.getElementById('addRequirementModal').classList.remove('hidden');
+    };
+
+    // Hide add requirement modal
+    window.hideAddRequirementModal = function() {
+      document.getElementById('addRequirementModal').classList.add('hidden');
+      // Reset checkboxes and radio buttons
+      document.getElementById('requirementBusiness').checked = false;
+      document.getElementById('requirementIndividual').checked = false;
+      document.getElementById('requirementLogicAND').checked = true; // Default to AND
+      document.getElementById('requirementLogicOR').checked = false;
+    };
+
+    // Add requirement to list
+    window.addRequirement = function() {
+      const businessChecked = document.getElementById('requirementBusiness').checked;
+      const individualChecked = document.getElementById('requirementIndividual').checked;
+      const logicType = document.getElementById('requirementLogicAND').checked ? 'AND' : 'OR';
+      
+      if (!businessChecked && !individualChecked) {
+        alert('Please select at least one requirement');
+        return;
+      }
+      
+      const selectedValues = [];
+      if (businessChecked) {
+        selectedValues.push('Business');
+      }
+      if (individualChecked) {
+        selectedValues.push('Individual');
+      }
+      
+      window.selectedCodeRequirements = {
+        type: logicType,
+        values: selectedValues
+      };
+      
+      updateCodeRequirementsList();
+      hideAddRequirementModal();
+    };
+
+    // Remove requirement from list
+    window.removeCodeRequirement = function() {
+      window.selectedCodeRequirements = null;
+      updateCodeRequirementsList();
     };
 
     // Add new code
@@ -2337,13 +2778,18 @@
         id: `CODE-${String(Date.now()).slice(-6)}`,
         name: name,
         percentage: percentage,
-        description: description
+        description: description,
+        requirements: window.selectedCodeRequirements ? { ...window.selectedCodeRequirements } : null
       };
       
       codes.push(newCode);
       await saveCodesToFirestore();
       updateCodesTable();
       hideAddCodeModal();
+      
+      // Reset requirements
+      window.selectedCodeRequirements = null;
+      updateCodeRequirementsList();
       
       alert('Code added successfully!');
     };
@@ -2415,8 +2861,9 @@
       const city = document.getElementById('newLocationCity').value;
       const state = document.getElementById('newLocationState').value;
       const zip = document.getElementById('newLocationZip').value;
+      const premiseId = document.getElementById('newLocationPremiseId').value;
       
-      if (!street || !city || !state || !zip) {
+      if (!street || !city || !state || !zip || !premiseId) {
         alert('Please fill in all fields');
         return;
       }
@@ -2430,6 +2877,7 @@
         city: city,
         state: state,
         zip: zip,
+        premiseId: premiseId,
         ownerFirstName: '',
         ownerLastName: '',
         ownerFullName: '',
@@ -2619,6 +3067,14 @@
           customer.dueDate = newValue;
         } else if (fieldType === 'lastPayment') {
           customer.lastPayment = newValue;
+        } else if (fieldType === 'factor') {
+          // Validate factor is a valid number
+          const factorValue = parseFloat(newValue);
+          if (isNaN(factorValue) || factorValue < 0) {
+            alert('Please enter a valid factor (must be a positive number)');
+            return;
+          }
+          customer.factor = newValue;
         }
         
         // Update filtered customers
@@ -2629,6 +3085,27 @@
         
         // Refresh customer table
         updateCustomerTable();
+        updateSettingsCustomerTable();
+        
+        // Refresh Customer Information modal if it's open for this customer
+        const customerFullInfoModal = document.getElementById('customerFullInfoModal');
+        if (!customerFullInfoModal.classList.contains('hidden')) {
+          // Check if the modal is showing this customer
+          const content = document.getElementById('customerFullInfoContent');
+          if (content && content.innerHTML.includes(customer.id)) {
+            showCustomerFullInfo(locationId);
+          }
+        }
+        
+        // Refresh Amount Breakdown modal if it's open for this customer
+        const amountDetailsModal = document.getElementById('amountDetailsModal');
+        if (!amountDetailsModal.classList.contains('hidden')) {
+          // Check if the modal is showing this customer
+          const customerName = document.getElementById('amountDetailsCustomer');
+          if (customerName && customerName.textContent === customer.name) {
+            showAmountDetails(locationId);
+          }
+        }
         
         // Save to Firestore
         await saveCustomersToFirestore();
@@ -2695,7 +3172,7 @@
       const lateFee = customer.pastDue > 0 ? 20 : 0; // $20 late fee
       const subtotal = serviceCost + lateFee;
 
-      // Calculate code surcharges
+      // Calculate code surcharges (based on subtotal)
       let totalSurcharge = 0;
       const codesContainer = document.getElementById('amountDetailsCodesContainer');
       codesContainer.innerHTML = '';
@@ -2715,7 +3192,10 @@
         });
       }
 
-      const total = subtotal + totalSurcharge;
+      // Calculate factor adjustment (based on service cost only)
+      const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+      const factorAdjustment = serviceCost * (factor - 1);
+      const total = serviceCost + lateFee + totalSurcharge + factorAdjustment;
 
       // Calculate due date as last day of current month
       const now = new Date();
@@ -2724,11 +3204,40 @@
                         lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
                         lastDayOfMonth.getFullYear();
 
+      // Calculate billing cycle (month after due date)
+      const billingCycleStart = new Date(lastDayOfMonth.getFullYear(), lastDayOfMonth.getMonth() + 1, 1);
+      const billingCycleEnd = new Date(billingCycleStart.getFullYear(), billingCycleStart.getMonth() + 1, 0);
+      
+      const formatShortDate = (date) => {
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const day = date.getDate().toString().padStart(2, '0');
+        const year = date.getFullYear().toString().slice(-2);
+        return `${month}/${day}/${year}`;
+      };
+      
+      const billingCycleStr = `${formatShortDate(billingCycleStart)} to ${formatShortDate(billingCycleEnd)}`;
+
+      // Add factor adjustment to display if factor is not 1.0
+      const factorContainer = document.getElementById('amountDetailsFactorContainer');
+      if (factorContainer) {
+        factorContainer.innerHTML = '';
+        if (factor !== 1.0 && factorAdjustment > 0) {
+          const factorRow = document.createElement('div');
+          factorRow.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600';
+          factorRow.innerHTML = `
+            <span class="text-slate-600 dark:text-slate-400">Factor (${factor}x)</span>
+            <span class="font-medium">$${factorAdjustment.toFixed(2)}</span>
+          `;
+          factorContainer.appendChild(factorRow);
+        }
+      }
+
       document.getElementById('amountDetailsCustomer').textContent = customer.name;
       document.getElementById('amountDetailsService').textContent = `$${serviceCost.toFixed(2)}`;
       document.getElementById('amountDetailsLateFee').textContent = `$${lateFee.toFixed(2)}`;
       document.getElementById('amountDetailsTotal').textContent = `$${total.toFixed(2)}`;
       document.getElementById('amountDetailsDueDate').textContent = dueDateStr;
+      document.getElementById('amountDetailsBillingCycle').textContent = billingCycleStr;
       document.getElementById('amountDetailsLastPayment').textContent = formatDate(customer.lastPayment);
       
       document.getElementById('amountDetailsModal').classList.remove('hidden');
@@ -2774,6 +3283,13 @@
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Property Location</label>
             <div class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 text-slate-800 dark:text-slate-200">
               ${customer.address || 'N/A'}
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Entity Type</label>
+            <div class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+              ${customer.entityType || 'N/A'}
             </div>
           </div>
 
@@ -2856,7 +3372,11 @@
           <div class="space-y-4">
             <div>
               <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Factor</label>
-              <div class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+              <div 
+                class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 text-slate-800 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-600" 
+                ondblclick="editCustomerField('${customer.id}', 'factor', '${customer.factor || ''}')" 
+                title="Double-click to edit"
+              >
                 ${customer.factor || 'N/A'}
               </div>
             </div>
@@ -3026,85 +3546,12 @@
     <!-- Dashboard Screen -->
     <div id="dashboardScreen">
       <!-- Header -->
-      <header class="flex justify-between items-center mb-8">
+      <header class="mb-8">
         <div>
           <h1 class="text-3xl font-bold text-slate-800 dark:text-slate-200">CUS Admin Dashboard</h1>
           <p class="text-slate-600 dark:text-slate-400">Manage customer accounts and billing</p>
         </div>
-        <button 
-          onclick="logout()" 
-          class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
-        >
-          Go to Client
-        </button>
       </header>
-
-      <!-- Stats Cards -->
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        <div class="card rounded-2xl bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black/5 dark:ring-white/10 p-6 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200" onclick="showSettingsModule()">
-          <div class="flex items-center">
-            <div class="flex-shrink-0">
-              <div class="w-8 h-8 bg-blue-100 dark:bg-blue-900 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
-          </svg>
-              </div>
-            </div>
-            <div class="ml-4">
-              <p class="text-sm font-medium text-slate-600 dark:text-slate-400">Total Customers</p>
-              <p id="totalCustomers" class="text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
-            </div>
-          </div>
-        </div>
-        
-        <div class="card rounded-2xl bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black/5 dark:ring-white/10 p-6 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200" onclick="showSettingsModule()">
-          <div class="flex items-center">
-            <div class="flex-shrink-0">
-              <div class="w-8 h-8 bg-green-100 dark:bg-green-900 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-          </svg>
-              </div>
-            </div>
-            <div class="ml-4">
-              <p class="text-sm font-medium text-slate-600 dark:text-slate-400">Current</p>
-              <p id="currentCustomers" class="text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
-            </div>
-          </div>
-        </div>
-        
-        <div class="card rounded-2xl bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black/5 dark:ring-white/10 p-6 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200" onclick="showSettingsModule()">
-          <div class="flex items-center">
-            <div class="flex-shrink-0">
-              <div class="w-8 h-8 bg-red-100 dark:bg-red-900 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/>
-          </svg>
-              </div>
-            </div>
-            <div class="ml-4">
-              <p class="text-sm font-medium text-slate-600 dark:text-slate-400">Overdue</p>
-              <p id="overdueCustomers" class="text-2xl font-semibold text-slate-900 dark:text-slate-100">0</p>
-            </div>
-          </div>
-        </div>
-        
-        <div class="card rounded-2xl bg-white dark:bg-slate-800 shadow-lg ring-1 ring-black/5 dark:ring-white/10 p-6 cursor-pointer hover:shadow-xl hover:scale-105 transition-all duration-200" onclick="showSettingsModule()">
-          <div class="flex items-center">
-            <div class="flex-shrink-0">
-              <div class="w-8 h-8 bg-purple-100 dark:bg-purple-900 rounded-lg flex items-center justify-center">
-                <svg class="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
-                </svg>
-              </div>
-            </div>
-            <div class="ml-4">
-              <p class="text-sm font-medium text-slate-600 dark:text-slate-400">Total Revenue</p>
-              <p id="totalRevenue" class="text-2xl font-semibold text-slate-900 dark:text-slate-100">$0.00</p>
-            </div>
-          </div>
-        </div>
-      </div>
 
       <!-- Action Modules -->
       <div id="actionModules" class="mb-8">
@@ -3180,6 +3627,71 @@
                 class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
               >
                 Process Payment
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bill Module -->
+        <div id="billModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
+          <div class="flex justify-between items-center mb-6">
+            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Process Bill</h3>
+            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Customer</label>
+              <select id="billCustomerSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+                <option value="">Choose a customer...</option>
+              </select>
+            </div>
+            
+            <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Current Amount Due</p>
+                  <p id="billAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                  <button id="viewBillDetailsBtn" onclick="showBillDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
+                    View Details
+                  </button>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
+                  <p id="billPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
+                  <p id="billLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                </div>
+              </div>
+              
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Property Location</p>
+                  <p id="billPropertyLocation" class="text-sm font-medium text-slate-800 dark:text-slate-200">--</p>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Due Date</p>
+                  <p id="billDueDate" class="text-lg font-semibold text-slate-800 dark:text-slate-200">--/--/----</p>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Account Status</p>
+                  <span id="billStatusIndicator" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium">
+                    <!-- Status will be populated by JavaScript -->
+                  </span>
+                </div>
+              </div>
+              
+              <button 
+                onclick="produceBill()" 
+                class="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                Produce Bill
               </button>
             </div>
           </div>
@@ -3386,27 +3898,12 @@
             </div>
           </div>
 
-          <div class="mt-6">
-            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Tax Codes</h4>
-            <div class="flex gap-2 mb-4">
-              <select 
-                id="newClientCodeSelect" 
-                class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-              >
-                <option value="">Select a code...</option>
-              </select>
-              <button 
-                type="button"
-                onclick="addClientCode()" 
-                class="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors"
-              >
-                Add Code
-              </button>
+            <div class="mt-6">
+              <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Tax Codes</h4>
+              <div id="newClientCodesList" class="space-y-2">
+                <!-- Selected codes will be displayed here -->
+              </div>
             </div>
-            <div id="newClientCodesList" class="space-y-2">
-              <!-- Selected codes will be displayed here -->
-            </div>
-          </div>
 
           <div class="mt-6">
             <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Factor</h4>
@@ -3626,6 +4123,7 @@
               <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 <thead class="bg-slate-50 dark:bg-slate-700">
                   <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Premise ID</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Owner & Resident</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
@@ -3659,6 +4157,7 @@
                     <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Code Name</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Percentage</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Description</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Requirements</th>
                     <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
@@ -3672,20 +4171,11 @@
       </div>
 
       <!-- Main Action Buttons -->
-      <div class="flex flex-col items-center gap-4 mb-8">
-        <button 
-          onclick="showPaymentModule()" 
-          class="w-full max-w-2xl bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
-        >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
-          </svg>
-          <span class="text-base">Make Payment</span>
-        </button>
-        
+      <br><br>
+      <div class="flex flex-col items-center gap-4 mb-8 p-[50px] max-w-2xl mx-auto border-2 border-blue-300 dark:border-blue-600 rounded-2xl">
         <button 
           onclick="showAddClientModule()" 
-          class="w-full max-w-2xl bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
+          class="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
         >
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
@@ -3694,8 +4184,28 @@
         </button>
         
         <button 
+          onclick="showPaymentModule()" 
+          class="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
+          </svg>
+          <span class="text-base">Make Payment</span>
+        </button>
+        
+        <button 
+          onclick="showBillModule()" 
+          class="w-full bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+          <span class="text-base">Send Bill</span>
+        </button>
+        
+        <button 
           onclick="showSearchModule()" 
-          class="w-full max-w-2xl bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
+          class="w-full bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
         >
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
@@ -3705,7 +4215,7 @@
         
         <button 
           onclick="showSettingsModule()" 
-          class="w-full max-w-2xl bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
+          class="w-full bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
         >
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
@@ -3838,6 +4348,7 @@
           <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
             <thead class="bg-slate-50 dark:bg-slate-700">
               <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Premise ID</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Owner & Resident</th>
                 <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
@@ -3911,6 +4422,19 @@
             >
               <option value="">Select a property location</option>
               <!-- Options will be populated by JavaScript -->
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Entity Type</label>
+            <select 
+              id="newCustomerEntityType" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Select Entity Type</option>
+              <option value="Individual">Individual</option>
+              <option value="Business">Business</option>
+              <option value="Farmer">Farmer</option>
             </select>
           </div>
 
@@ -4147,6 +4671,16 @@
         
         <form id="addLocationForm" class="space-y-4">
           <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Premise ID</label>
+            <input 
+              id="newLocationPremiseId" 
+              type="text" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-600 text-slate-800 dark:text-slate-200"
+              readonly
+            />
+          </div>
+          
+          <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Street Address</label>
             <input 
               id="newLocationStreet" 
@@ -4336,6 +4870,10 @@
                 <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsDueDate">--/--/----</span>
               </div>
               <div class="flex justify-between items-center">
+                <span class="text-sm text-blue-600 dark:text-blue-300">Billing Cycle</span>
+                <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsBillingCycle">--/--/-- - --/--/--</span>
+              </div>
+              <div class="flex justify-between items-center">
                 <span class="text-sm text-blue-600 dark:text-blue-300">Last Payment</span>
                 <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsLastPayment">Never</span>
               </div>
@@ -4352,6 +4890,7 @@
               <span class="font-medium" id="amountDetailsLateFee">$0.00</span>
             </div>
             <div id="amountDetailsCodesContainer"></div>
+            <div id="amountDetailsFactorContainer"></div>
             <div class="flex justify-between items-center py-3 bg-slate-50 dark:bg-slate-700 rounded-lg px-4">
               <span class="font-semibold text-slate-800 dark:text-slate-200">Total Due</span>
               <span class="font-bold text-lg" id="amountDetailsTotal">$170.00</span>
@@ -4661,6 +5200,20 @@
               placeholder="Enter description"
             ></textarea>
           </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Requirements</label>
+            <div id="newCodeRequirementsList" class="mb-2 space-y-2">
+              <!-- Selected requirements will be displayed here -->
+            </div>
+            <button 
+              type="button"
+              onclick="showAddRequirementModal()" 
+              class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm"
+            >
+              Add requirement
+            </button>
+          </div>
           
           <div class="flex gap-3">
             <button 
@@ -4679,6 +5232,99 @@
             </button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Add Requirement Modal -->
+    <div id="addRequirementModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden" onclick="if(event.target === this) hideAddRequirementModal()">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4" onclick="event.stopPropagation()">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add Requirement</h3>
+          <button 
+            onclick="hideAddRequirementModal()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-4">Select Requirements</label>
+            <div class="space-y-3">
+              <div class="flex items-center">
+                <input 
+                  type="checkbox" 
+                  id="requirementBusiness" 
+                  class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
+                />
+                <label for="requirementBusiness" class="ml-3 text-sm text-slate-700 dark:text-slate-300">
+                  Business
+                </label>
+              </div>
+              <div class="flex items-center">
+                <input 
+                  type="checkbox" 
+                  id="requirementIndividual" 
+                  class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
+                />
+                <label for="requirementIndividual" class="ml-3 text-sm text-slate-700 dark:text-slate-300">
+                  Individual
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="border-t border-slate-200 dark:border-slate-600 pt-4">
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Logic Type</label>
+            <div class="space-y-2">
+              <div class="flex items-center">
+                <input 
+                  type="radio" 
+                  id="requirementLogicAND" 
+                  name="requirementLogic"
+                  value="AND"
+                  checked
+                  class="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
+                />
+                <label for="requirementLogicAND" class="ml-3 text-sm text-slate-700 dark:text-slate-300">
+                  AND (both must be selected)
+                </label>
+              </div>
+              <div class="flex items-center">
+                <input 
+                  type="radio" 
+                  id="requirementLogicOR" 
+                  name="requirementLogic"
+                  value="OR"
+                  class="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
+                />
+                <label for="requirementLogicOR" class="ml-3 text-sm text-slate-700 dark:text-slate-300">
+                  OR (at least one must be selected)
+                </label>
+              </div>
+            </div>
+          </div>
+          
+          <div class="flex gap-3">
+            <button 
+              type="button"
+              onclick="hideAddRequirementModal()" 
+              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="button"
+              onclick="addRequirement()" 
+              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+            >
+              Add
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 

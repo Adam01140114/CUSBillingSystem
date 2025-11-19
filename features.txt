@@ -1,0 +1,977 @@
+================================================================================
+BILL PDF GENERATION FEATURE - DETAILED IMPLEMENTATION GUIDE
+================================================================================
+
+This document explains in extreme detail how the "Produce Bill" feature was
+implemented, from collecting customer data to generating and downloading the
+PDF. This guide will help you understand the complete flow and easily add
+additional fields in the future.
+
+================================================================================
+OVERVIEW: THE COMPLETE FLOW
+================================================================================
+
+1. USER CLICKS "PRODUCE BILL" BUTTON
+   └─> Triggers the produceBill() function in the frontend
+
+2. FRONTEND COLLECTS CUSTOMER DATA
+   └─> Gets selected customer from dropdown
+   └─> Calculates all billing amounts (service cost, surcharges, factor, etc.)
+   └─> Calculates dates (statement date, billing cycle, due date)
+
+3. FRONTEND CREATES FORMDATA OBJECT
+   └─> Adds all required fields with their calculated values
+   └─> Formats values appropriately (currency with $, dates in MM/DD/YYYY)
+
+4. FRONTEND SENDS DATA TO SERVER
+   └─> POST request to /edit_pdf?pdf=bill endpoint
+   └─> Sends FormData as request body
+
+5. SERVER RECEIVES AND PROCESSES DATA
+   └─> Loads bill.pdf template from public folder
+   └─> Matches FormData field names to PDF form field names
+   └─> Fills each PDF field with corresponding value
+
+6. SERVER RETURNS FILLED PDF
+   └─> Sends PDF as binary data with proper headers
+
+7. FRONTEND DOWNLOADS PDF
+   └─> Creates blob from response
+   └─> Creates temporary download link
+   └─> Triggers download
+   └─> Cleans up temporary resources
+
+================================================================================
+PART 1: FRONTEND IMPLEMENTATION - DATA COLLECTION
+================================================================================
+
+LOCATION: public/index.html
+FUNCTION: window.produceBill()
+
+STEP 1: GET SELECTED CUSTOMER
+------------------------------
+
+The function first retrieves the selected customer ID from the dropdown:
+
+```javascript
+const customerId = document.getElementById('billCustomerSelect').value;
+```
+
+This dropdown is populated when the user selects a customer in the "Process Bill"
+modal. The value is the customer's unique ID (e.g., "CUS-525678").
+
+STEP 2: FIND CUSTOMER OBJECT
+-----------------------------
+
+Once we have the customer ID, we find the full customer object from the
+customers array:
+
+```javascript
+const customer = customers.find(c => c.id === customerId);
+```
+
+The customer object contains all customer information:
+- customer.id: Unique identifier
+- customer.accountNumber: Account number (e.g., "CUS-525678")
+- customer.name: Customer name (e.g., "Tom")
+- customer.address: Full address (e.g., "921 Sloat Drive, Salinas, CA 93907")
+- customer.pastDue: Past due amount (number, e.g., 0)
+- customer.codes: Array of tax codes applied to this customer
+- customer.factor: Factor multiplier (number, e.g., 1.2)
+- customer.paymentStatus: Payment status string
+
+STEP 3: CALCULATE SERVICE COST
+--------------------------------
+
+The base service cost is calculated using a prorated formula:
+
+```javascript
+const serviceCost = calculateProratedServiceCost(customer);
+```
+
+This function (defined elsewhere in the code) calculates the service cost based
+on when the customer was added. If they were added in the current month, it
+prorates the $170 base cost. If they were added in a previous month, it charges
+the full $170.
+
+Example: If customer was added on December 15th and there are 31 days in December,
+the prorated cost would be: (170 * 17 days remaining) / 31 = $93.23
+
+STEP 4: CALCULATE LATE FEE
+---------------------------
+
+Late fees are applied if the customer has a past due amount:
+
+```javascript
+const lateFee = customer.pastDue > 0 ? 20 : 0;
+```
+
+If pastDue is greater than 0, a $20 late fee is added. Otherwise, it's $0.
+
+STEP 5: CALCULATE SUBTOTAL
+---------------------------
+
+The subtotal is the sum of service cost and late fee:
+
+```javascript
+const subtotal = serviceCost + lateFee;
+```
+
+This is used as the base for calculating tax code surcharges.
+
+STEP 6: CALCULATE CODE SURCHARGES
+----------------------------------
+
+Tax codes are applied as percentages on the subtotal:
+
+```javascript
+let totalSurcharge = 0;
+if (customer.codes && customer.codes.length > 0) {
+  customer.codes.forEach(code => {
+    totalSurcharge += subtotal * (code.percentage / 100);
+  });
+}
+```
+
+Each code in the customer.codes array has:
+- code.name: Name of the code (e.g., "Individual")
+- code.percentage: Percentage to apply (e.g., 12)
+
+Example: If subtotal is $102 and there's a code with 12%:
+  totalSurcharge = 102 * (12 / 100) = $12.24
+
+If multiple codes exist, they're all added together.
+
+STEP 7: CALCULATE FACTOR ADJUSTMENT
+------------------------------------
+
+The factor is applied only to the service cost (not the total):
+
+```javascript
+const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+const factorAdjustment = serviceCost * (factor - 1);
+```
+
+Example: If serviceCost is $102 and factor is 1.2:
+  factorAdjustment = 102 * (1.2 - 1) = 102 * 0.2 = $20.40
+
+This represents the additional amount added due to the factor multiplier.
+
+STEP 8: CALCULATE TOTAL AMOUNT
+-------------------------------
+
+The total amount due is the sum of all components:
+
+```javascript
+const totalAmount = serviceCost + lateFee + totalSurcharge + factorAdjustment;
+```
+
+Example breakdown:
+- Service Cost: $102.00
+- Late Fee: $0.00
+- Code Surcharges: $12.24
+- Factor Adjustment: $20.40
+- Total: $134.64
+
+STEP 9: CALCULATE DATES
+------------------------
+
+Three dates need to be calculated:
+
+A. STATEMENT DATE (Last day of current month):
+```javascript
+const now = new Date();
+const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+const statementDate = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                     lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                     lastDayOfMonth.getFullYear();
+```
+
+This creates a date object for the last day of the current month, then formats
+it as MM/DD/YYYY. Example: "11/30/2025"
+
+B. BILLING CYCLE (First to last day of current month):
+```javascript
+const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+const firstDayStr = (firstDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                   firstDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                   String(firstDayOfMonth.getFullYear()).slice(-2);
+const lastDayStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                  lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                  String(lastDayOfMonth.getFullYear()).slice(-2);
+const cyclePeriod = `${firstDayStr} to ${lastDayStr}`;
+```
+
+This creates a range from the first day to the last day of the month, formatted
+as "MM/DD/YY to MM/DD/YY". Example: "12/01/25 to 12/31/25"
+
+C. DUE DATE (Last day of billing cycle month):
+```javascript
+const dueDateStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                  lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                  lastDayOfMonth.getFullYear();
+```
+
+This is the same as the statement date, formatted as MM/DD/YYYY.
+Example: "12/31/2025"
+
+================================================================================
+PART 2: FRONTEND IMPLEMENTATION - CREATING FORMDATA
+================================================================================
+
+STEP 1: CREATE FORMDATA OBJECT
+-------------------------------
+
+FormData is a built-in JavaScript API that creates a multipart/form-data
+encoded object, which is what the server expects:
+
+```javascript
+const formData = new FormData();
+```
+
+STEP 2: ADD EACH FIELD
+-----------------------
+
+Each field is added using the append() method. The first parameter is the
+field name (which must match the PDF form field name exactly), and the second
+is the value:
+
+```javascript
+formData.append('account_no', customer.accountNumber || '');
+formData.append('account_name', customer.name || '');
+formData.append('account_address', customer.address || '');
+formData.append('statement_date', statementDate);
+formData.append('cycle_period', cyclePeriod);
+formData.append('current_charges', `$${serviceCost.toFixed(2)}`);
+formData.append('previous_charges', `$${customer.pastDue.toFixed(2)}`);
+formData.append('taxes_charges', `$${totalSurcharge.toFixed(2)}`);
+formData.append('total_amount', `$${totalAmount.toFixed(2)}`);
+formData.append('due_date', dueDateStr);
+```
+
+IMPORTANT NOTES:
+- Field names are case-sensitive and must match PDF field names exactly
+- Values are converted to strings
+- Currency values include the $ symbol and are formatted to 2 decimal places
+- The || '' ensures empty string if value is null/undefined
+
+FIELD BREAKDOWN:
+----------------
+
+1. account_no: Customer's account number (e.g., "CUS-525678")
+   - Source: customer.accountNumber
+   - Format: String, no formatting needed
+
+2. account_name: Customer's full name (e.g., "Tom")
+   - Source: customer.name
+   - Format: String, no formatting needed
+
+3. account_address: Customer's property address (e.g., "921 Sloat Drive, Salinas, CA 93907")
+   - Source: customer.address
+   - Format: String, no formatting needed
+
+4. statement_date: Date the statement was generated (e.g., "11/30/2025")
+   - Source: Calculated lastDayOfMonth
+   - Format: MM/DD/YYYY
+
+5. cycle_period: Billing cycle date range (e.g., "12/01/25 to 12/31/25")
+   - Source: Calculated firstDayOfMonth to lastDayOfMonth
+   - Format: "MM/DD/YY to MM/DD/YY"
+
+6. current_charges: Base service cost (e.g., "$102.00")
+   - Source: serviceCost (calculated)
+   - Format: Currency with $ symbol, 2 decimal places
+
+7. previous_charges: Past due amount (e.g., "$0.00")
+   - Source: customer.pastDue
+   - Format: Currency with $ symbol, 2 decimal places
+
+8. taxes_charges: Total tax code surcharges (e.g., "$12.24")
+   - Source: totalSurcharge (calculated)
+   - Format: Currency with $ symbol, 2 decimal places
+
+9. total_amount: Total amount due (e.g., "$134.64")
+   - Source: totalAmount (calculated)
+   - Format: Currency with $ symbol, 2 decimal places
+
+10. due_date: Payment due date (e.g., "12/31/2025")
+    - Source: Calculated lastDayOfMonth
+    - Format: MM/DD/YYYY
+
+================================================================================
+PART 3: FRONTEND IMPLEMENTATION - SENDING TO SERVER
+================================================================================
+
+STEP 1: MAKE FETCH REQUEST
+---------------------------
+
+The fetch() API is used to send the FormData to the server:
+
+```javascript
+const response = await fetch('/edit_pdf?pdf=bill', {
+  method: 'POST',
+  body: formData
+});
+```
+
+BREAKDOWN:
+- URL: '/edit_pdf?pdf=bill'
+  - /edit_pdf is the server endpoint
+  - ?pdf=bill tells the server which PDF template to use (bill.pdf)
+- method: 'POST' - Required for sending data
+- body: formData - The FormData object we created
+- await: Waits for the server response before continuing
+
+STEP 2: CHECK RESPONSE
+-----------------------
+
+We need to verify the server successfully processed the request:
+
+```javascript
+if (!response.ok) {
+  throw new Error('Failed to generate PDF');
+}
+```
+
+If response.ok is false (status code 400-599), we throw an error.
+
+STEP 3: CONVERT RESPONSE TO BLOB
+---------------------------------
+
+The server returns the PDF as binary data. We convert it to a Blob:
+
+```javascript
+const blob = await response.blob();
+```
+
+A Blob is a file-like object that can be used to create download links.
+
+================================================================================
+PART 4: FRONTEND IMPLEMENTATION - DOWNLOADING PDF
+================================================================================
+
+STEP 1: CREATE OBJECT URL
+--------------------------
+
+We create a temporary URL that points to the blob:
+
+```javascript
+const url = URL.createObjectURL(blob);
+```
+
+This creates a URL like "blob:http://localhost:8000/abc123-def456-..."
+
+STEP 2: CREATE DOWNLOAD LINK
+-----------------------------
+
+We create an anchor (<a>) element programmatically:
+
+```javascript
+const a = document.createElement('a');
+a.href = url;
+a.download = 'bill.pdf';
+```
+
+- href: Points to the blob URL
+- download: Sets the filename for the download
+
+STEP 3: TRIGGER DOWNLOAD
+-------------------------
+
+We add the link to the page, click it, then remove it:
+
+```javascript
+document.body.appendChild(a);
+a.click();
+document.body.removeChild(a);
+```
+
+This simulates a user clicking a download link.
+
+STEP 4: CLEAN UP
+----------------
+
+We revoke the object URL to free up memory:
+
+```javascript
+URL.revokeObjectURL(url);
+```
+
+This is important to prevent memory leaks.
+
+================================================================================
+PART 5: SERVER IMPLEMENTATION - RECEIVING DATA
+================================================================================
+
+LOCATION: server.js
+ENDPOINT: POST /edit_pdf
+
+STEP 1: GET PDF TEMPLATE NAME
+------------------------------
+
+The server reads the PDF name from the query string:
+
+```javascript
+const pdfName = req.query.pdf;  // e.g., "bill"
+```
+
+STEP 2: LOAD PDF TEMPLATE
+--------------------------
+
+The server loads the PDF file from the public folder:
+
+```javascript
+const sanitized = path.basename(pdfName) + '.pdf';
+const pdfPath = path.join(__dirname, 'public', sanitized);
+const pdfBytes = await fs.promises.readFile(pdfPath);
+```
+
+- path.basename() prevents directory traversal attacks
+- path.join() creates the full file path
+- fs.promises.readFile() reads the file as binary data
+
+Example: If pdfName is "bill", it loads "public/bill.pdf"
+
+STEP 3: LOAD PDF DOCUMENT
+-------------------------
+
+The pdf-lib library loads the PDF:
+
+```javascript
+const pdfDoc = await PDFDocument.load(pdfBytes);
+const form = pdfDoc.getForm();
+```
+
+- PDFDocument.load() parses the PDF
+- getForm() gets access to the form fields
+
+STEP 4: GET FORM DATA
+----------------------
+
+The server reads all form data from the request:
+
+```javascript
+// req.body contains all the fields we sent via FormData
+// Example: {
+//   account_no: "CUS-525678",
+//   account_name: "Tom",
+//   account_address: "921 Sloat Drive, Salinas, CA 93907",
+//   statement_date: "11/30/2025",
+//   cycle_period: "12/01/25 to 12/31/25",
+//   current_charges: "$102.00",
+//   previous_charges: "$0.00",
+//   taxes_charges: "$12.24",
+//   total_amount: "$134.64",
+//   due_date: "12/31/2025"
+// }
+```
+
+================================================================================
+PART 6: SERVER IMPLEMENTATION - FILLING PDF FIELDS
+================================================================================
+
+STEP 1: ITERATE THROUGH PDF FIELDS
+-----------------------------------
+
+The server loops through all form fields in the PDF:
+
+```javascript
+form.getFields().forEach(field => {
+  const fieldName = field.getName();  // e.g., "account_no"
+  const value = req.body[fieldName];  // e.g., "CUS-525678"
+  
+  if (value === undefined) {
+    return;  // Skip if no data provided
+  }
+  // ... fill the field
+});
+```
+
+STEP 2: MATCH FIELD NAMES
+--------------------------
+
+The field name from the PDF must match the field name in req.body:
+
+PDF Field Name          →    req.body Key
+-----------------              -------------
+account_no              →    req.body['account_no']
+account_name            →    req.body['account_name']
+account_address         →    req.body['account_address']
+statement_date          →    req.body['statement_date']
+cycle_period            →    req.body['cycle_period']
+current_charges         →    req.body['current_charges']
+previous_charges        →    req.body['previous_charges']
+taxes_charges           →    req.body['taxes_charges']
+total_amount           →    req.body['total_amount']
+due_date               →    req.body['due_date']
+
+IMPORTANT: Field names are case-sensitive and must match exactly!
+
+STEP 3: FILL FIELD BASED ON TYPE
+---------------------------------
+
+The server determines the field type and fills it appropriately:
+
+```javascript
+switch (field.constructor.name) {
+  case 'PDFTextField':
+    // Text input fields
+    field.setText(String(value));
+    field.updateAppearances(helvetica);
+    break;
+    
+  case 'PDFCheckBox':
+    // Checkbox fields
+    const shouldBeChecked = shouldCheck(value);
+    shouldBeChecked ? field.check() : field.uncheck();
+    break;
+    
+  case 'PDFRadioGroup':
+    // Radio button groups
+    field.select(String(value));
+    break;
+    
+  case 'PDFDropdown':
+    // Dropdown/select fields
+    field.select(String(value));
+    break;
+}
+```
+
+For our bill PDF, all fields are PDFTextField, so they use:
+- setText(): Sets the text value
+- updateAppearances(): Updates the visual appearance with the font
+
+STEP 4: SAVE PDF
+----------------
+
+After filling all fields, the PDF is saved:
+
+```javascript
+const edited = await pdfDoc.save();
+```
+
+This returns the PDF as a byte array.
+
+STEP 5: SEND PDF TO CLIENT
+---------------------------
+
+The server sends the PDF back with proper headers:
+
+```javascript
+res.set({
+  'Content-Type': 'application/pdf',
+  'Content-Disposition': 'attachment; filename="bill.pdf"'
+});
+res.send(Buffer.from(edited));
+```
+
+- Content-Type: Tells the browser it's a PDF
+- Content-Disposition: Tells the browser to download it as "bill.pdf"
+- Buffer.from(): Converts the byte array to a Node.js Buffer
+
+================================================================================
+PART 7: HOW TO ADD NEW FIELDS
+================================================================================
+
+To add a new field to the bill PDF, follow these steps:
+
+STEP 1: CALCULATE THE VALUE IN FRONTEND
+----------------------------------------
+
+In the produceBill() function, calculate or retrieve the value you want to add:
+
+```javascript
+// Example: Add a "service_fee" field
+const serviceFee = 5.00;  // Or calculate it based on customer data
+```
+
+STEP 2: ADD TO FORMDATA
+-----------------------
+
+Add the field to the FormData object:
+
+```javascript
+formData.append('service_fee', `$${serviceFee.toFixed(2)}`);
+```
+
+IMPORTANT: The field name (first parameter) must match the PDF field name exactly!
+
+STEP 3: ADD FIELD TO PDF TEMPLATE
+----------------------------------
+
+Open bill.pdf in Adobe Acrobat (or similar PDF editor):
+1. Go to Tools → Prepare Form
+2. Add a new text field where you want it
+3. Name the field exactly as you used in FormData (e.g., "service_fee")
+4. Save the PDF
+
+STEP 4: TEST
+------------
+
+1. Select a customer in the Process Bill modal
+2. Click "Produce Bill"
+3. Check that the new field appears in the downloaded PDF with the correct value
+
+================================================================================
+PART 8: FIELD NAME CONVENTIONS
+================================================================================
+
+FIELD NAMING RULES:
+-------------------
+
+1. Use lowercase with underscores: account_no, account_name, etc.
+2. Be descriptive: "previous_charges" not "prev"
+3. Keep it consistent: All fields follow the same pattern
+4. Match exactly: PDF field name = FormData field name = req.body key
+
+COMMON FIELD TYPES:
+-------------------
+
+TEXT FIELDS (PDFTextField):
+- Used for: Names, addresses, dates, amounts, any text
+- Example: account_name, account_address, statement_date
+- Format: String value
+
+CHECKBOXES (PDFCheckBox):
+- Used for: Yes/No options, flags
+- Example: past_due_flag, email_notification
+- Format: "yes", "on", "true", "1" = checked; anything else = unchecked
+
+DROPDOWNS (PDFDropdown):
+- Used for: Predefined options
+- Example: payment_method, account_type
+- Format: String matching one of the dropdown options
+
+RADIO GROUPS (PDFRadioGroup):
+- Used for: Single choice from multiple options
+- Example: billing_frequency, service_tier
+- Format: String matching one of the radio button values
+
+================================================================================
+PART 9: ERROR HANDLING
+================================================================================
+
+FRONTEND ERROR HANDLING:
+------------------------
+
+The produceBill() function is wrapped in a try-catch block:
+
+```javascript
+try {
+  // ... all the code ...
+  alert('Bill PDF generated successfully!');
+} catch (error) {
+  console.error('Error generating bill:', error);
+  alert('Failed to generate bill PDF: ' + error.message);
+}
+```
+
+This catches:
+- Network errors (server not reachable)
+- Server errors (500 status codes)
+- PDF generation errors
+- Download errors
+
+SERVER ERROR HANDLING:
+----------------------
+
+The server endpoint has error handling:
+
+```javascript
+app.post('/edit_pdf', async (req, res) => {
+  try {
+    // ... PDF processing ...
+  } catch (error) {
+    console.error('PDF generation error:', error);
+    res.status(500).send('Error generating PDF');
+  }
+});
+```
+
+Common errors:
+- PDF file not found → 400 status
+- Invalid PDF format → 500 status
+- Field name mismatch → Field simply won't fill (no error)
+- Missing field in PDF → Field simply won't fill (no error)
+
+================================================================================
+PART 10: DEBUGGING TIPS
+================================================================================
+
+DEBUG FRONTEND DATA:
+--------------------
+
+Add console.log statements to see what data is being sent:
+
+```javascript
+// Before sending to server
+console.log('FormData contents:');
+formData.forEach((value, key) => {
+  console.log(`${key}: ${value}`);
+});
+```
+
+DEBUG SERVER RECEPTION:
+-----------------------
+
+The server already logs received data:
+
+```javascript
+console.log('Form data received:');
+Object.keys(req.body).forEach(key => {
+  console.log(`- ${key}: ${req.body[key]}`);
+});
+```
+
+DEBUG PDF FIELDS:
+-----------------
+
+The server logs all available PDF fields:
+
+```javascript
+console.log('Available PDF fields:');
+form.getFields().forEach(field => {
+  console.log(`- ${field.getName()} (${field.constructor.name})`);
+});
+```
+
+This helps identify:
+- Field names in the PDF
+- Field types
+- Which fields are missing or mismatched
+
+DEBUG FIELD FILLING:
+--------------------
+
+The server logs each field as it's filled:
+
+```javascript
+console.log(`Processing field: ${key} = ${value} (${field.constructor.name})`);
+```
+
+If a field isn't filling, check:
+1. Is the field name in req.body?
+2. Does it match the PDF field name exactly?
+3. Is the field type correct?
+4. Are there any error messages in the console?
+
+================================================================================
+PART 11: COMPLETE CODE REFERENCE
+================================================================================
+
+FRONTEND FUNCTION (produceBill):
+---------------------------------
+
+Location: public/index.html, around line 857
+
+```javascript
+window.produceBill = async function() {
+  // 1. Get selected customer
+  const customerId = document.getElementById('billCustomerSelect').value;
+  if (!customerId) {
+    alert('Please select a customer');
+    return;
+  }
+
+  const customer = customers.find(c => c.id === customerId);
+  if (!customer) {
+    alert('Customer not found');
+    return;
+  }
+
+  try {
+    // 2. Calculate amounts
+    const serviceCost = calculateProratedServiceCost(customer);
+    const lateFee = customer.pastDue > 0 ? 20 : 0;
+    const subtotal = serviceCost + lateFee;
+    
+    let totalSurcharge = 0;
+    if (customer.codes && customer.codes.length > 0) {
+      customer.codes.forEach(code => {
+        totalSurcharge += subtotal * (code.percentage / 100);
+      });
+    }
+    
+    const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+    const factorAdjustment = serviceCost * (factor - 1);
+    const totalAmount = serviceCost + lateFee + totalSurcharge + factorAdjustment;
+    
+    // 3. Calculate dates
+    const now = new Date();
+    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const statementDate = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                         lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                         lastDayOfMonth.getFullYear();
+    
+    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const firstDayStr = (firstDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                       firstDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                       String(firstDayOfMonth.getFullYear()).slice(-2);
+    const lastDayStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                      lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                      String(lastDayOfMonth.getFullYear()).slice(-2);
+    const cyclePeriod = `${firstDayStr} to ${lastDayStr}`;
+    
+    const dueDateStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                      lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
+                      lastDayOfMonth.getFullYear();
+
+    // 4. Create FormData
+    const formData = new FormData();
+    formData.append('account_no', customer.accountNumber || '');
+    formData.append('account_name', customer.name || '');
+    formData.append('account_address', customer.address || '');
+    formData.append('statement_date', statementDate);
+    formData.append('cycle_period', cyclePeriod);
+    formData.append('current_charges', `$${serviceCost.toFixed(2)}`);
+    formData.append('previous_charges', `$${customer.pastDue.toFixed(2)}`);
+    formData.append('taxes_charges', `$${totalSurcharge.toFixed(2)}`);
+    formData.append('total_amount', `$${totalAmount.toFixed(2)}`);
+    formData.append('due_date', dueDateStr);
+
+    // 5. Send to server
+    const response = await fetch('/edit_pdf?pdf=bill', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to generate PDF');
+    }
+
+    // 6. Download PDF
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'bill.pdf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    alert('Bill PDF generated successfully!');
+  } catch (error) {
+    console.error('Error generating bill:', error);
+    alert('Failed to generate bill PDF: ' + error.message);
+  }
+};
+```
+
+SERVER ENDPOINT:
+----------------
+
+Location: server.js, around line 586
+
+```javascript
+app.post('/edit_pdf', async (req, res) => {
+  let pdfBytes;
+  let outputName = 'Edited_document.pdf';
+
+  // Get PDF template name from query string
+  const pdfName = req.query.pdf;
+  if (!pdfName) {
+    return res.status(400).send('No PDF provided (upload a file or pass ?pdf=filename).');
+  }
+  
+  // Load PDF from public folder
+  const sanitized = path.basename(pdfName) + '.pdf';
+  const pdfPath = path.join(__dirname, 'public', sanitized);
+  if (!fs.existsSync(pdfPath)) {
+    return res.status(400).send('Requested PDF does not exist on the server.');
+  }
+  pdfBytes = await fs.promises.readFile(pdfPath);
+  outputName = `Edited_${sanitized}`;
+
+  // Load PDF document
+  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const form = pdfDoc.getForm();
+  const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+  // Fill form fields
+  form.getFields().forEach(field => {
+    const key = field.getName();
+    const value = req.body[key];
+
+    if (value === undefined) {
+      return;  // Skip if no data provided
+    }
+
+    try {
+      switch (field.constructor.name) {
+        case 'PDFTextField':
+          field.setText(String(value));
+          field.updateAppearances(helv);
+          break;
+        // ... other field types ...
+      }
+    } catch (error) {
+      console.error(`Error processing field ${key}:`, error.message);
+    }
+  });
+
+  // Save and send PDF
+  const edited = await pdfDoc.save();
+  res.set({
+    'Content-Type': 'application/pdf',
+    'Content-Disposition': `attachment; filename="${outputName}"`,
+  });
+  res.send(Buffer.from(edited));
+});
+```
+
+================================================================================
+PART 12: EXAMPLE: ADDING A NEW FIELD
+================================================================================
+
+Let's say you want to add a "late_fee" field to show the late fee amount.
+
+STEP 1: Add to FormData in produceBill()
+-----------------------------------------
+
+```javascript
+// In the FormData section, add:
+formData.append('late_fee', `$${lateFee.toFixed(2)}`);
+```
+
+STEP 2: Add field to bill.pdf template
+---------------------------------------
+
+1. Open public/bill.pdf in Adobe Acrobat
+2. Go to Tools → Prepare Form
+3. Add a text field where you want "Late Fee" to appear
+4. Name the field exactly: "late_fee"
+5. Save the PDF
+
+STEP 3: Test
+------------
+
+1. Select a customer with pastDue > 0 (to see a late fee)
+2. Click "Produce Bill"
+3. Check the downloaded PDF - the late_fee field should show "$20.00"
+
+That's it! The field will automatically be filled because:
+- FormData has 'late_fee' key
+- PDF has 'late_fee' field name
+- Server matches them automatically
+
+================================================================================
+SUMMARY: KEY POINTS
+================================================================================
+
+1. Frontend calculates all values from customer data
+2. FormData is created with field names matching PDF field names exactly
+3. Data is sent via POST to /edit_pdf?pdf=bill
+4. Server loads bill.pdf template from public folder
+5. Server matches FormData keys to PDF field names
+6. Server fills each field based on its type
+7. Server returns filled PDF as binary data
+8. Frontend creates blob and triggers download
+9. Field names must match exactly (case-sensitive)
+10. To add fields: Add to FormData + Add to PDF template with same name
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
