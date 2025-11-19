@@ -35,12 +35,24 @@
 
     // Customer data (starts empty, customers added through admin interface)
     let customers = [];
-
+    
     // Locations data (starts empty, locations added through import or admin interface)
     let locations = [];
-
+    
+    // Users data (managed from the Settings module)
+    let users = [];
+    
     // Tax codes data (starts empty, codes added through admin interface)
     let codes = [];
+
+    // Payment batch tracking
+    window.paymentBatches = [];
+    window.currentPaymentBatch = null;
+
+    function logBatch(message, data) {
+      const payload = data !== undefined ? data : '';
+      console.log(`[Payment Batches] ${message}`, payload);
+    }
 
     // Format phone number as (xxx)-xxx-xxxx
     function formatPhoneNumber(phone) {
@@ -217,10 +229,72 @@
         console.error('Error loading codes:', error);
       }
     }
+    
+    async function saveUsersToFirestore() {
+      try {
+        const usersRef = collection(db, 'users');
+        const existingUsers = await getDocs(usersRef);
+        existingUsers.forEach(userDoc => {
+          deleteDoc(userDoc.ref);
+        });
+        
+        for (const user of users) {
+          const userRef = doc(usersRef, user.id);
+          await setDoc(userRef, user);
+        }
+        console.log('Users saved to Firestore');
+      } catch (error) {
+        console.error('Error saving users:', error);
+      }
+    }
+    
+    async function loadUsersFromFirestore() {
+      try {
+        const usersRef = collection(db, 'users');
+        const snapshot = await getDocs(usersRef);
+        users = [];
+        snapshot.forEach(docSnap => {
+          users.push({ id: docSnap.id, ...docSnap.data() });
+        });
+        filteredUsers = [...users];
+        updateSettingsUsersTable();
+        populateBatchStartUserSelect();
+        console.log('Users loaded from Firestore');
+      } catch (error) {
+        console.error('Error loading users:', error);
+      }
+    }
 
+    async function saveBatchToFirestore(batch) {
+      try {
+        const batchesRef = collection(db, 'paymentBatches');
+        const batchRef = doc(batchesRef, batch.id);
+        await setDoc(batchRef, batch);
+        console.log('[Batch][Firestore] Batch saved:', batch.id);
+      } catch (error) {
+        console.error('[Batch][Firestore] Error saving batch:', error);
+      }
+    }
+    
+    async function loadPaymentBatchesFromFirestore() {
+      try {
+        const batchesRef = collection(db, 'paymentBatches');
+        const snapshot = await getDocs(batchesRef);
+        window.paymentBatches = [];
+        snapshot.forEach(batchDoc => {
+          window.paymentBatches.push({ id: batchDoc.id, ...batchDoc.data() });
+        });
+        console.log('[Batch][Firestore] Batches loaded:', window.paymentBatches.length);
+        renderBatchesList();
+      } catch (error) {
+        console.error('[Batch][Firestore] Error loading batches:', error);
+      }
+    }
+    
     let currentUser = null;
     let filteredCustomers = [...customers];
     let filteredLocations = [...locations];
+    let filteredUsers = [...users];
     let currentView = 'accounts'; // 'accounts' or 'locations'
 
     // Show dashboard immediately (no authentication required)
@@ -248,13 +322,60 @@
       }
     }
 
+    // MutationObserver to track payment module changes
+    let paymentModuleObserver = null;
+    function setupPaymentModuleObserver() {
+      const paymentModule = document.getElementById('paymentModule');
+      if (!paymentModule || paymentModuleObserver) return;
+      
+      paymentModuleObserver = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+          if (mutation.type === 'childList' || mutation.type === 'characterData') {
+            console.log('[OBSERVER] Payment module content changed!', {
+              type: mutation.type,
+              target: mutation.target.id || mutation.target.tagName,
+              innerHTMLLength: paymentModule.innerHTML.length,
+              hasPreviewSection: !!paymentModule.querySelector('#batchPreviewSection'),
+              hasCurrentBatch: !!window.currentPaymentBatch,
+              stackTrace: new Error().stack
+            });
+          }
+          if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+            console.log('[OBSERVER] Payment module class changed!', {
+              target: mutation.target.id || mutation.target.tagName,
+              oldValue: mutation.oldValue,
+              newValue: mutation.target.className,
+              isHidden: mutation.target.classList.contains('hidden')
+            });
+          }
+        });
+      });
+      
+      paymentModuleObserver.observe(paymentModule, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: ['class']
+      });
+      
+      console.log('[OBSERVER] Payment module observer set up');
+    }
+
     // Initialize dashboard on page load
     document.addEventListener('DOMContentLoaded', async function() {
+      // Ensure the payment module markup (with batch controls) is in place before data loads
+      resetPaymentForm();
       showDashboard();
+      // Set up mutation observer after payment module is created
+      setTimeout(setupPaymentModuleObserver, 100);
       // Load data from Firestore
       await loadLocationsFromFirestore();
       await loadCustomersFromFirestore();
       await loadCodesFromFirestore();
+      await loadUsersFromFirestore();
+      await loadPaymentBatchesFromFirestore();
       // Update customer payment statuses based on past due amounts
       updateAllCustomerPaymentStatuses();
       // Reset bills if it's the first of the month
@@ -296,20 +417,22 @@
       const accountsTab = document.getElementById('settingsAccountsTab');
       const locationsTab = document.getElementById('settingsLocationsTab');
       const codesTab = document.getElementById('settingsCodesTab');
+      const usersTab = document.getElementById('settingsUsersTab');
       const accountsContent = document.getElementById('settingsAccountsContent');
       const locationsContent = document.getElementById('settingsLocationsContent');
       const codesContent = document.getElementById('settingsCodesContent');
+      const usersContent = document.getElementById('settingsUsersContent');
       
       // Reset all tabs and content
-      accountsTab.classList.remove('bg-blue-600', 'text-white');
-      accountsTab.classList.add('bg-slate-200', 'text-slate-700');
-      locationsTab.classList.remove('bg-blue-600', 'text-white');
-      locationsTab.classList.add('bg-slate-200', 'text-slate-700');
-      codesTab.classList.remove('bg-blue-600', 'text-white');
-      codesTab.classList.add('bg-slate-200', 'text-slate-700');
+      [accountsTab, locationsTab, codesTab, usersTab].forEach(tab => {
+        if (!tab) return;
+        tab.classList.remove('bg-blue-600', 'text-white');
+        tab.classList.add('bg-slate-200', 'text-slate-700');
+      });
       accountsContent.classList.add('hidden');
       locationsContent.classList.add('hidden');
       codesContent.classList.add('hidden');
+      usersContent.classList.add('hidden');
       
       if (view === 'accounts') {
         accountsTab.classList.add('bg-blue-600', 'text-white');
@@ -326,10 +449,26 @@
         codesTab.classList.remove('bg-slate-200', 'text-slate-700');
         codesContent.classList.remove('hidden');
         updateCodesTable();
+      } else if (view === 'users') {
+        usersTab.classList.add('bg-blue-600', 'text-white');
+        usersTab.classList.remove('bg-slate-200', 'text-slate-700');
+        usersContent.classList.remove('hidden');
+        updateSettingsUsersTable();
       }
     };
 
     function updateDashboard() {
+      console.log('[FLOW][updateDashboard][STEP 1] Function START');
+      console.log('[FLOW][updateDashboard][STEP 1.1] Checking payment module state BEFORE updateDashboard...');
+      const paymentModuleBefore = document.getElementById('paymentModule');
+      console.log('[FLOW][updateDashboard][STEP 1.2] Payment module before:', {
+        exists: !!paymentModuleBefore,
+        hidden: paymentModuleBefore?.classList.contains('hidden'),
+        innerHTMLLength: paymentModuleBefore?.innerHTML?.length || 0,
+        hasPreviewSection: !!paymentModuleBefore?.querySelector('#batchPreviewSection'),
+        hasCurrentBatch: !!window.currentPaymentBatch
+      });
+      
       console.log('updateDashboard called, customers array length:', customers.length);
       updateStats();
       updateLocationStatuses(); // Update location statuses based on customers
@@ -338,6 +477,25 @@
       } else {
         updateLocationsTable();
       }
+      
+      console.log('[FLOW][updateDashboard][STEP 2] Checking payment module state AFTER updateDashboard...');
+      const paymentModuleAfter = document.getElementById('paymentModule');
+      console.log('[FLOW][updateDashboard][STEP 2.1] Payment module after:', {
+        exists: !!paymentModuleAfter,
+        hidden: paymentModuleAfter?.classList.contains('hidden'),
+        innerHTMLLength: paymentModuleAfter?.innerHTML?.length || 0,
+        hasPreviewSection: !!paymentModuleAfter?.querySelector('#batchPreviewSection'),
+        hasCurrentBatch: !!window.currentPaymentBatch,
+        innerHTMLChanged: (paymentModuleBefore?.innerHTML?.length || 0) !== (paymentModuleAfter?.innerHTML?.length || 0)
+      });
+      
+      if ((paymentModuleBefore?.innerHTML?.length || 0) !== (paymentModuleAfter?.innerHTML?.length || 0)) {
+        console.error('[FLOW][updateDashboard][STEP 2.2] WARNING: Payment module innerHTML changed during updateDashboard!');
+        console.error('[FLOW][updateDashboard][STEP 2.3] Before length:', paymentModuleBefore?.innerHTML?.length || 0);
+        console.error('[FLOW][updateDashboard][STEP 2.4] After length:', paymentModuleAfter?.innerHTML?.length || 0);
+      }
+      
+      console.log('[FLOW][updateDashboard][STEP 3] Function END');
     }
 
     // Update customer payment status based on past due amount
@@ -583,6 +741,7 @@
       // Populate the settings tables
       updateSettingsCustomerTable();
       updateSettingsLocationsTable();
+      updateSettingsUsersTable();
     };
 
     window.hideAllModules = function() {
@@ -596,6 +755,10 @@
     // Payment Module Functions
     function populatePaymentCustomerSelect() {
       const select = document.getElementById('paymentCustomerSelect');
+      if (!select) {
+        console.error('[Batch] populatePaymentCustomerSelect: select element missing.');
+        return;
+      }
       select.innerHTML = '<option value="">Choose a customer...</option>';
       
       customers.forEach(customer => {
@@ -605,17 +768,38 @@
         select.appendChild(option);
       });
       
-      // Add event listener for customer selection
-      select.addEventListener('change', function() {
+      select.onchange = function() {
         const customerId = this.value;
+        console.log('[Batch] Customer selection changed:', customerId);
         if (customerId) {
           showCustomerPaymentInfo(customerId);
         } else {
           hideCustomerPaymentInfo();
         }
-      });
+      };
+      
+      console.log('[Batch] populatePaymentCustomerSelect: options loaded =', customers.length);
     }
-
+    
+    function populateBatchStartUserSelect() {
+      const select = document.getElementById('batchStartUserSelect');
+      if (!select) {
+        console.warn('[Batch] populateBatchStartUserSelect: select element missing.');
+        return;
+      }
+      
+      select.innerHTML = '<option value="">Select a user...</option>';
+      users.forEach(user => {
+        const option = document.createElement('option');
+        const fullName = user.fullName || user.id || 'Unnamed User';
+        option.value = fullName;
+        option.textContent = fullName;
+        select.appendChild(option);
+      });
+      
+      console.log('[Batch] populateBatchStartUserSelect: users loaded =', users.length);
+    }
+    
     function showCustomerPaymentInfo(customerId) {
       const customer = customers.find(c => c.id === customerId);
       if (customer) {
@@ -854,6 +1038,7 @@
             </div>
           </div>
         </div>
+
       `;
       
       // Repopulate the customer dropdown
@@ -1025,26 +1210,50 @@
     };
 
     window.processPaymentFromModule = async function() {
-      const customerId = document.getElementById('paymentCustomerSelect').value;
-      const paymentAmount = parseFloat(document.getElementById('paymentAmount').value);
+      console.log('[FLOW][STEP 1] processPaymentFromModule START');
+      console.log('[FLOW][STEP 1.1] Checking payment module state...');
+      const paymentModule = document.getElementById('paymentModule');
+      console.log('[FLOW][STEP 1.1.1] Payment module exists:', !!paymentModule);
+      console.log('[FLOW][STEP 1.1.2] Payment module hidden:', paymentModule?.classList.contains('hidden'));
+      console.log('[FLOW][STEP 1.1.3] Payment module innerHTML length:', paymentModule?.innerHTML?.length || 0);
+      console.log('[FLOW][STEP 1.1.4] Current batch exists:', !!window.currentPaymentBatch);
+      if (window.currentPaymentBatch) {
+        console.log('[FLOW][STEP 1.1.5] Current batch entries:', window.currentPaymentBatch.entries.length);
+      }
+      
+      const customerId = document.getElementById('paymentCustomerSelect')?.value;
+      const paymentAmount = parseFloat(document.getElementById('paymentAmount')?.value);
+      const paymentType = document.getElementById('paymentType')?.value || '';
+      console.log('[FLOW][STEP 1.2] Form values:', { customerId, paymentAmount, paymentType, currentBatch: !!window.currentPaymentBatch });
       
       if (!customerId) {
+        console.log('[FLOW][STEP 1.3] ERROR: No customer selected');
         alert('Please select a customer');
         return;
       }
       
       if (!paymentAmount || paymentAmount <= 0) {
+        console.log('[FLOW][STEP 1.4] ERROR: Invalid payment amount');
         alert('Please enter a valid payment amount');
         return;
       }
       
+      if (!paymentType) {
+        console.log('[FLOW][STEP 1.5] ERROR: No payment type selected');
+        alert('Please select a payment type');
+        return;
+      }
+      
+      console.log('[FLOW][STEP 2] Looking up customer...');
       const customer = customers.find(c => c.id === customerId);
       if (customer) {
+        console.log('[FLOW][STEP 2.1] Customer found:', customer.name);
         // Process payment (same logic as existing processPayment function)
         const today = new Date();
         const formattedDate = (today.getMonth() + 1).toString().padStart(2, '0') + '/' + 
                             today.getDate().toString().padStart(2, '0') + '/' + 
                             today.getFullYear();
+        console.log('[FLOW][STEP 2.2] Formatted date:', formattedDate);
         
         // Add to payment history
         if (!customer.paymentHistory) {
@@ -1055,9 +1264,11 @@
           amountPaid: paymentAmount,
           amountDue: customer.pastDue + (customer.currentBill || 0)
         });
+        console.log('[FLOW][STEP 2.3] Payment history updated');
         
         // Update customer balance
         customer.pastDue = Math.max(0, customer.pastDue - paymentAmount);
+        console.log('[FLOW][STEP 2.4] Customer balance updated, pastDue:', customer.pastDue);
         
         // If customer was pending closing and now has no balance, mark as inactive
         if (customer.paymentStatus === 'pending closing' && customer.pastDue === 0 && customer.currentBill === 0) {
@@ -1070,12 +1281,61 @@
         // Update last payment
         customer.lastPayment = formattedDate;
         
+        console.log('[FLOW][STEP 3] Saving to Firestore...');
         // Save to Firestore
         await saveCustomersToFirestore();
-        updateDashboard();
+        console.log('[FLOW][STEP 3.1] Firestore save complete');
         
-        // Show success screen instead of hiding module
-        showPaymentSuccessScreen(customer.name, paymentAmount);
+        console.log('[FLOW][STEP 4] Calling updateDashboard...');
+        console.log('[FLOW][STEP 4.1] Payment module before updateDashboard:', {
+          exists: !!paymentModule,
+          hidden: paymentModule?.classList.contains('hidden'),
+          innerHTMLLength: paymentModule?.innerHTML?.length || 0,
+          hasPreviewSection: !!paymentModule?.querySelector('#batchPreviewSection')
+        });
+        updateDashboard();
+        console.log('[FLOW][STEP 4.2] updateDashboard complete');
+        console.log('[FLOW][STEP 4.3] Payment module after updateDashboard:', {
+          exists: !!paymentModule,
+          hidden: paymentModule?.classList.contains('hidden'),
+          innerHTMLLength: paymentModule?.innerHTML?.length || 0,
+          hasPreviewSection: !!paymentModule?.querySelector('#batchPreviewSection')
+        });
+        
+        if (window.currentPaymentBatch) {
+          console.log('[FLOW][STEP 5] Processing inside batch...');
+          console.log('[FLOW][STEP 5.1] Batch details:', { 
+            customer: customer.name, 
+            paymentAmount, 
+            paymentType,
+            batchId: window.currentPaymentBatch.id,
+            currentEntries: window.currentPaymentBatch.entries.length
+          });
+          console.log('[FLOW][STEP 5.2] Payment module state before addEntryToCurrentBatch:', {
+            exists: !!paymentModule,
+            hidden: paymentModule?.classList.contains('hidden'),
+            innerHTMLLength: paymentModule?.innerHTML?.length || 0,
+            hasPreviewSection: !!paymentModule?.querySelector('#batchPreviewSection'),
+            hasEntrySection: !!paymentModule?.querySelector('#batchEntrySection')
+          });
+          addEntryToCurrentBatch(customer, paymentAmount, paymentType, formattedDate);
+          console.log('[FLOW][STEP 5.3] addEntryToCurrentBatch complete');
+          console.log('[FLOW][STEP 5.4] Payment module state after addEntryToCurrentBatch:', {
+            exists: !!paymentModule,
+            hidden: paymentModule?.classList.contains('hidden'),
+            innerHTMLLength: paymentModule?.innerHTML?.length || 0,
+            hasPreviewSection: !!paymentModule?.querySelector('#batchPreviewSection'),
+            previewSectionHidden: paymentModule?.querySelector('#batchPreviewSection')?.classList.contains('hidden'),
+            hasEntrySection: !!paymentModule?.querySelector('#batchEntrySection'),
+            entrySectionHidden: paymentModule?.querySelector('#batchEntrySection')?.classList.contains('hidden')
+          });
+        } else {
+          console.log('[FLOW][STEP 5] Processing outside batch, showing legacy success screen.');
+          showPaymentSuccessScreen(customer.name, paymentAmount);
+        }
+        console.log('[FLOW][STEP 6] processPaymentFromModule END');
+      } else {
+        console.log('[FLOW][STEP 2] ERROR: Customer not found');
       }
     };
 
@@ -1118,15 +1378,39 @@
             </button>
           </div>
         </div>
+
       `;
     };
 
     // Reset payment form
     window.resetPaymentForm = function() {
+      console.log('[FLOW][resetPaymentForm][STEP 1] Function START - THIS WILL WIPE THE PAYMENT MODULE!');
+      console.trace('[FLOW][resetPaymentForm][STEP 1.1] Stack trace to see who called this:');
       const paymentModule = document.getElementById('paymentModule');
+      console.log('[FLOW][resetPaymentForm][STEP 1.2] Payment module before reset:', {
+        exists: !!paymentModule,
+        hidden: paymentModule?.classList.contains('hidden'),
+        innerHTMLLength: paymentModule?.innerHTML?.length || 0,
+        hasCurrentBatch: !!window.currentPaymentBatch,
+        batchId: window.currentPaymentBatch?.id,
+        batchEntries: window.currentPaymentBatch?.entries?.length || 0
+      });
+      
+      if (window.currentPaymentBatch) {
+        console.warn('[FLOW][resetPaymentForm][STEP 1.3] WARNING: Resetting form while batch is active! This will lose batch data!');
+        console.warn('[FLOW][resetPaymentForm][STEP 1.4] Batch details:', {
+          id: window.currentPaymentBatch.id,
+          username: window.currentPaymentBatch.username,
+          entries: window.currentPaymentBatch.entries.length
+        });
+      }
+      
+      window.currentPaymentBatch = null;
+      console.log('[FLOW][resetPaymentForm][STEP 2] Current batch cleared');
+      console.log('[FLOW][resetPaymentForm][STEP 3] Setting payment module innerHTML (this wipes everything)...');
       paymentModule.innerHTML = `
         <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Process Payment</h3>
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Payment Batches</h3>
           <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -1134,8 +1418,47 @@
           </button>
         </div>
         
-        <div class="space-y-6">
-          <div>
+        <div id="batchStartSection" class="space-y-6 py-8 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-center">
+          <p class="text-slate-700 dark:text-slate-100 text-base font-semibold">Group multiple payments into a batch, tag it with your username, and submit everything at once.</p>
+          <p class="text-sm text-slate-500 dark:text-slate-300">Select your username and click "Start Batch" to begin capturing payments.</p>
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 text-center md:text-left">Select User</label>
+              <select 
+                id="batchStartUserSelect" 
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="">Select a user...</option>
+              </select>
+            </div>
+            <div class="flex flex-col md:flex-row gap-4 justify-center">
+              <button 
+                onclick="startPaymentBatch()" 
+                class="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-xl shadow">
+                Start Batch
+              </button>
+              <button 
+                onclick="viewPaymentBatches()" 
+                class="w-full md:w-auto bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold py-3 px-6 rounded-xl shadow">
+                View Batches
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <div id="batchEntrySection" class="hidden space-y-6 mt-8">
+          <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <p class="text-sm text-slate-500">Active Batch</p>
+              <p class="text-lg font-semibold text-slate-800 dark:text-slate-200" id="activeBatchUser">--</p>
+            </div>
+            <div class="flex gap-3">
+              <button onclick="cancelCurrentBatch()" class="text-sm text-slate-500 hover:text-slate-700">End Batch</button>
+            </div>
+          </div>
+          
+          <div class="space-y-6">
+            <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Customer</label>
             <select id="paymentCustomerSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
               <option value="">Choose a customer...</option>
@@ -1179,6 +1502,18 @@
             </div>
             
             <div class="mb-4">
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Type</label>
+              <select 
+                id="paymentType" 
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+              >
+                <option value="">Select Payment Type</option>
+                <option value="Check">Check</option>
+                <option value="Cash">Cash</option>
+              </select>
+            </div>
+            
+            <div class="mb-4">
               <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Amount</label>
               <input 
                 type="number" 
@@ -1198,11 +1533,764 @@
             </button>
           </div>
         </div>
+
+        <div id="batchPreviewSection" data-batch-section="preview" class="hidden mt-8">
+          <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Batch Preview</h4>
+            <div class="flex flex-col md:flex-row gap-3">
+              <button onclick="addAnotherBatchEntry()" class="bg-white border border-slate-300 text-slate-700 px-5 py-2 rounded-xl hover:bg-slate-50">Add Entry</button>
+              <button onclick="submitCurrentBatch()" class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-xl">Submit Batch</button>
+            </div>
+          </div>
+          <div class="overflow-x-auto bg-white rounded-2xl border border-slate-200 shadow-inner">
+            <table id="batchPreviewTableMain" class="batch-preview-table">
+              <thead class="bg-slate-100">
+                <tr>
+                  <th class="batch-col-date">Date</th>
+                  <th class="batch-col-customer">Customer</th>
+                  <th class="batch-col-account">Account #</th>
+                  <th class="batch-col-property">Property</th>
+                  <th class="batch-col-type">Type</th>
+                  <th class="batch-col-amount">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="batchPreviewTable" class="bg-white">
+                <tr>
+                  <td colspan="6" class="batch-empty-message">No payments added yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="batchesListSection" data-batch-section="list" class="hidden mt-8">
+          <div class="flex justify-between items-center mb-4">
+            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Submitted Batches</h4>
+            <button onclick="closeBatchList()" class="text-sm text-slate-500 hover:text-slate-700">Close</button>
+          </div>
+          <div class="overflow-x-auto bg-white rounded-2xl border border-slate-200 shadow-inner">
+            <table class="min-w-full divide-y divide-slate-200">
+              <thead class="bg-slate-100">
+                <tr>
+                  <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Batch ID</th>
+                  <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">User</th>
+                  <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Entries</th>
+                  <th class="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Amount</th>
+                  <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Submitted</th>
+                </tr>
+              </thead>
+              <tbody id="batchesListTable" class="bg-white divide-y divide-slate-200">
+                <tr>
+                  <td colspan="5" class="px-4 py-3 text-center text-sm text-slate-500">No batches submitted yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       `;
       
-      // Repopulate the customer dropdown
+      console.log('[FLOW][resetPaymentForm][STEP 4] Payment module innerHTML set, new length:', paymentModule.innerHTML.length);
+      console.log('[FLOW][resetPaymentForm][STEP 5] Payment module after reset:', {
+        exists: !!paymentModule,
+        hidden: paymentModule?.classList.contains('hidden'),
+        innerHTMLLength: paymentModule?.innerHTML?.length || 0,
+        hasPreviewSection: !!paymentModule?.querySelector('#batchPreviewSection'),
+        hasCurrentBatch: !!window.currentPaymentBatch
+      });
+      
+      // Repopulate dropdowns and ensure sections/logs are in sync
+      console.log('[FLOW][resetPaymentForm][STEP 6] Repopulating dropdowns...');
       populatePaymentCustomerSelect();
+      populateBatchStartUserSelect();
+      console.log('[FLOW][resetPaymentForm][STEP 7] Setting view state to start...');
+      setBatchViewState('start');
+      console.log('[FLOW][resetPaymentForm][STEP 8] Rendering preview...');
+      renderBatchPreview();
+      console.log('[FLOW][resetPaymentForm][STEP 9] Rendering batches list...');
+      renderBatchesList();
+      console.log('[Batch] Payment module reset. Awaiting batch start.');
+      debugBatchDom('after-reset');
+      console.log('[FLOW][resetPaymentForm][STEP 10] Function END');
     };
+
+    function debugBatchDom(label) {
+      const paymentModule = document.getElementById('paymentModule');
+      if (!paymentModule) {
+        console.error('[Batch][DOM]', label, 'paymentModule missing');
+        return;
+      }
+      const snapshot = {
+        hasStart: !!paymentModule.querySelector('#batchStartSection'),
+        hasEntry: !!paymentModule.querySelector('#batchEntrySection'),
+        hasPreview: !!paymentModule.querySelector('#batchPreviewSection'),
+        hasPreviewTable: !!paymentModule.querySelector('#batchPreviewTable'),
+        hasList: !!paymentModule.querySelector('#batchesListSection'),
+        hasListTable: !!paymentModule.querySelector('#batchesListTable')
+      };
+      console.log('[Batch][DOM]', label, snapshot);
+    }
+
+    function setBatchViewState(view) {
+      console.log('[FLOW][setBatchViewState][STEP 1] Function START');
+      console.log('[FLOW][setBatchViewState][STEP 1.1] Target view:', view);
+      
+      // Ensure payment module is visible
+      console.log('[FLOW][setBatchViewState][STEP 2] Checking payment module...');
+      const paymentModule = document.getElementById('paymentModule');
+      console.log('[FLOW][setBatchViewState][STEP 2.1] Payment module:', {
+        exists: !!paymentModule,
+        hidden: paymentModule?.classList.contains('hidden'),
+        innerHTMLLength: paymentModule?.innerHTML?.length || 0
+      });
+      if (paymentModule) {
+        const wasHidden = paymentModule.classList.contains('hidden');
+        paymentModule.classList.remove('hidden');
+        console.log('[FLOW][setBatchViewState][STEP 2.2] Payment module visibility:', {
+          wasHidden,
+          nowHidden: paymentModule.classList.contains('hidden')
+        });
+      } else {
+        console.error('[FLOW][setBatchViewState][STEP 2.3] CRITICAL ERROR: Payment module not found!');
+      }
+      
+      console.log('[FLOW][setBatchViewState][STEP 3] Finding all sections...');
+      const sections = {
+        start: document.getElementById('batchStartSection'),
+        entry: document.getElementById('batchEntrySection'),
+        preview: document.getElementById('batchPreviewSection'),
+        list: document.getElementById('batchesListSection')
+      };
+      
+      console.log('[FLOW][setBatchViewState][STEP 3.1] Section existence check:', {
+        start: !!sections.start,
+        entry: !!sections.entry,
+        preview: !!sections.preview,
+        list: !!sections.list
+      });
+      
+      console.log('[FLOW][setBatchViewState][STEP 3.2] Section visibility BEFORE update:', {
+        startHidden: sections.start?.classList.contains('hidden'),
+        entryHidden: sections.entry?.classList.contains('hidden'),
+        previewHidden: sections.preview?.classList.contains('hidden'),
+        listHidden: sections.list?.classList.contains('hidden')
+      });
+      
+      console.log('[FLOW][setBatchViewState][STEP 4] Updating section visibility...');
+      Object.entries(sections).forEach(([name, el]) => {
+        if (!el) {
+          if (view === name) {
+            console.error('[FLOW][setBatchViewState][STEP 4.' + name + '] CRITICAL ERROR: Target section not found:', name);
+            console.error('[Batch] Target section not found:', name);
+          } else {
+            console.log('[FLOW][setBatchViewState][STEP 4.' + name + '] Section not found (not target):', name);
+          }
+          return;
+        }
+        const wasHidden = el.classList.contains('hidden');
+        if (view === name) {
+          el.classList.remove('hidden');
+          console.log('[FLOW][setBatchViewState][STEP 4.' + name + '] Showing section:', {
+            name,
+            wasHidden,
+            nowHidden: el.classList.contains('hidden')
+          });
+        } else {
+          el.classList.add('hidden');
+          console.log('[FLOW][setBatchViewState][STEP 4.' + name + '] Hiding section:', {
+            name,
+            wasHidden,
+            nowHidden: el.classList.contains('hidden')
+          });
+        }
+      });
+      
+      console.log('[FLOW][setBatchViewState][STEP 4.5] Section visibility AFTER update:', {
+        startHidden: sections.start?.classList.contains('hidden'),
+        entryHidden: sections.entry?.classList.contains('hidden'),
+        previewHidden: sections.preview?.classList.contains('hidden'),
+        listHidden: sections.list?.classList.contains('hidden')
+      });
+      
+      console.log('[Batch] View switched to:', view);
+      debugBatchDom('view-' + view);
+      
+      console.log('[FLOW][setBatchViewState][STEP 5] Checking target section for scrolling...');
+      const target = sections[view];
+      if (target) {
+        console.log('[FLOW][setBatchViewState][STEP 5.1] Target section found, scheduling scroll');
+        requestAnimationFrame(() => {
+          console.log('[FLOW][setBatchViewState][STEP 5.2] Executing scroll');
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      } else {
+        console.error('[FLOW][setBatchViewState][STEP 5.3] CRITICAL ERROR: Target section not found!');
+        console.error('[FLOW][setBatchViewState][STEP 5.4] Payment module innerHTML length:', paymentModule?.innerHTML?.length || 0);
+        console.error('[FLOW][setBatchViewState][STEP 5.5] Payment module contains target section:', paymentModule?.innerHTML?.includes(view) || false);
+        console.error('[Batch] Target section for view "' + view + '" was not found in DOM.');
+      }
+      
+      console.log('[FLOW][setBatchViewState][STEP 6] Final payment module state:', {
+        exists: !!paymentModule,
+        hidden: paymentModule?.classList.contains('hidden'),
+        innerHTMLLength: paymentModule?.innerHTML?.length || 0,
+        targetSectionExists: !!target,
+        targetSectionHidden: target?.classList.contains('hidden')
+      });
+      
+      console.log('[FLOW][setBatchViewState][STEP 7] Function END');
+    }
+
+    window.startPaymentBatch = function() {
+      const userSelect = document.getElementById('batchStartUserSelect');
+      const username = userSelect ? userSelect.value.trim() : '';
+      
+      if (!username) {
+        alert('Please select a user before starting a batch.');
+        return;
+      }
+      
+      // Calculate day of year (1-365/366)
+      const now = new Date();
+      const start = new Date(now.getFullYear(), 0, 0);
+      const diff = now - start;
+      const oneDay = 1000 * 60 * 60 * 24;
+      const dayOfYear = Math.floor(diff / oneDay);
+      
+      // Generate batch ID: [username][dayOfYear]
+      // Remove spaces from username for the ID
+      const usernameForId = username.replace(/\s+/g, '');
+      const batchId = `${usernameForId}${dayOfYear}`;
+      
+      console.log('[Batch] startPaymentBatch() user:', username, 'batchId:', batchId);
+      
+      window.currentPaymentBatch = {
+        id: batchId,
+        username: username,
+        startedAt: new Date().toISOString(),
+        entries: []
+      };
+      renderBatchPreview();
+      
+      const activeUserLabel = document.getElementById('activeBatchUser');
+      if (activeUserLabel) activeUserLabel.textContent = username;
+      
+      setBatchViewState('entry');
+      addAnotherBatchEntry();
+      debugBatchDom('after-start');
+    };
+
+    window.cancelCurrentBatch = function() {
+      if (!window.currentPaymentBatch) {
+        setBatchViewState('start');
+        return;
+      }
+      
+      if (!confirm('End the current batch? Unsubmitted entries will be lost.')) {
+        return;
+      }
+      
+      window.currentPaymentBatch = null;
+      renderBatchPreview();
+      setBatchViewState('start');
+      console.log('[Batch] Current batch cancelled.');
+    };
+
+    window.addAnotherBatchEntry = function() {
+      if (!window.currentPaymentBatch) {
+        alert('Start a batch before adding entries.');
+        return;
+      }
+      
+      setBatchViewState('entry');
+      debugBatchDom('add-entry');
+      const select = document.getElementById('paymentCustomerSelect');
+      if (select) select.value = '';
+      hideCustomerPaymentInfo();
+      const paymentTypeField = document.getElementById('paymentType');
+      if (paymentTypeField) paymentTypeField.value = '';
+      const paymentAmountField = document.getElementById('paymentAmount');
+      if (paymentAmountField) paymentAmountField.value = '';
+      console.log('[Batch] Ready to capture another payment entry.');
+    };
+
+    window.viewPaymentBatches = function() {
+      renderBatchesList();
+      setBatchViewState('list');
+      console.log('[Batch] Viewing submitted batches. Count:', window.paymentBatches.length, 'Batches:', window.paymentBatches);
+    };
+
+    window.closeBatchList = function() {
+      if (window.currentPaymentBatch) {
+        setBatchViewState(window.currentPaymentBatch.entries.length ? 'preview' : 'entry');
+      } else {
+        setBatchViewState('start');
+      }
+      console.log('[Batch] Closed batch list view.');
+    };
+
+    window.submitCurrentBatch = async function() {
+      if (!window.currentPaymentBatch) {
+        alert('Start a batch before submitting.');
+        return;
+      }
+      
+      if (window.currentPaymentBatch.entries.length === 0) {
+        alert('Add at least one payment to the batch.');
+        return;
+      }
+      
+      const totalAmount = window.currentPaymentBatch.entries.reduce((sum, entry) => sum + entry.amount, 0);
+      const submittedBatch = {
+        ...window.currentPaymentBatch,
+        submittedAt: new Date().toISOString(),
+        totalAmount
+      };
+      
+      window.paymentBatches.push(submittedBatch);
+      await saveBatchToFirestore(submittedBatch);
+      alert('Batch submitted successfully!');
+      
+      window.currentPaymentBatch = null;
+      renderBatchPreview();
+      renderBatchesList();
+      setBatchViewState('list');
+      console.log('[Batch] Batch submitted:', submittedBatch, 'Total submitted:', window.paymentBatches.length);
+      viewPaymentBatches();
+    };
+
+    function addEntryToCurrentBatch(customer, paymentAmount, paymentType, paymentDate) {
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 1] Function START');
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 1.1] Checking current batch...');
+      if (!window.currentPaymentBatch) {
+        console.error('[FLOW][addEntryToCurrentBatch][STEP 1.1] ERROR: No current batch active!');
+        console.warn('[Batch] Attempted to add entry, but no current batch is active.');
+        return;
+      }
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 1.2] Current batch exists:', {
+        id: window.currentPaymentBatch.id,
+        username: window.currentPaymentBatch.username,
+        currentEntries: window.currentPaymentBatch.entries.length
+      });
+      
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 2] Checking payment module state...');
+      const paymentModule = document.getElementById('paymentModule');
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 2.1] Payment module:', {
+        exists: !!paymentModule,
+        hidden: paymentModule?.classList.contains('hidden'),
+        innerHTMLLength: paymentModule?.innerHTML?.length || 0
+      });
+      
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 3] Creating entry object...');
+      const entry = {
+        id: `ENTRY-${Date.now()}`,
+        customerName: customer.name,
+        accountNumber: customer.accountNumber || customer.id,
+        property: customer.address || 'N/A',
+        paymentType,
+        amount: paymentAmount,
+        date: paymentDate
+      };
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 3.1] Entry object:', entry);
+      
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 4] Adding entry to batch...');
+      window.currentPaymentBatch.entries.push(entry);
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 4.1] Entry added. Total entries:', window.currentPaymentBatch.entries.length);
+      
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 5] Checking DOM elements before render...');
+      const previewSectionBefore = document.getElementById('batchPreviewSection');
+      const previewTableBefore = document.getElementById('batchPreviewTable');
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 5.1] Preview section exists:', !!previewSectionBefore);
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 5.2] Preview table exists:', !!previewTableBefore);
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 5.3] Preview section hidden:', previewSectionBefore?.classList.contains('hidden'));
+      
+      // Render the preview table first
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 6] Calling renderBatchPreview...');
+      renderBatchPreview();
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 6.1] renderBatchPreview complete');
+      
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 7] Checking DOM elements after render...');
+      const previewSectionAfter = document.getElementById('batchPreviewSection');
+      const previewTableAfter = document.getElementById('batchPreviewTable');
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 7.1] Preview section exists:', !!previewSectionAfter);
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 7.2] Preview table exists:', !!previewTableAfter);
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 7.3] Preview section hidden:', previewSectionAfter?.classList.contains('hidden'));
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 7.4] Preview table innerHTML length:', previewTableAfter?.innerHTML?.length || 0);
+      
+      // Then switch to preview view - ensure preview section exists and is visible
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 8] Verifying preview section exists...');
+      const previewSection = document.getElementById('batchPreviewSection');
+      if (!previewSection) {
+        console.error('[FLOW][addEntryToCurrentBatch][STEP 8.1] CRITICAL ERROR: Preview section not found!');
+        console.error('[FLOW][addEntryToCurrentBatch][STEP 8.2] Payment module innerHTML length:', paymentModule?.innerHTML?.length || 0);
+        console.error('[FLOW][addEntryToCurrentBatch][STEP 8.3] Payment module contains batchPreviewSection:', paymentModule?.innerHTML?.includes('batchPreviewSection') || false);
+        console.error('[Batch] Preview section not found! Cannot show preview.');
+        return;
+      }
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 8.4] Preview section found');
+      
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 9] Calling setBatchViewState("preview")...');
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 9.1] State before setBatchViewState:', {
+        startHidden: document.getElementById('batchStartSection')?.classList.contains('hidden'),
+        entryHidden: document.getElementById('batchEntrySection')?.classList.contains('hidden'),
+        previewHidden: document.getElementById('batchPreviewSection')?.classList.contains('hidden'),
+        listHidden: document.getElementById('batchesListSection')?.classList.contains('hidden')
+      });
+      setBatchViewState('preview');
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 9.2] setBatchViewState complete');
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 9.3] State after setBatchViewState:', {
+        startHidden: document.getElementById('batchStartSection')?.classList.contains('hidden'),
+        entryHidden: document.getElementById('batchEntrySection')?.classList.contains('hidden'),
+        previewHidden: document.getElementById('batchPreviewSection')?.classList.contains('hidden'),
+        listHidden: document.getElementById('batchesListSection')?.classList.contains('hidden')
+      });
+      
+      // IMMEDIATE: Force preview section visible right after setBatchViewState
+      const immediatePreviewSection = document.getElementById('batchPreviewSection');
+      if (immediatePreviewSection) {
+        // Remove hidden class
+        immediatePreviewSection.classList.remove('hidden');
+        
+        // FORCE visibility with inline styles that override everything
+        immediatePreviewSection.style.cssText = `
+          display: block !important;
+          visibility: visible !important;
+          opacity: 1 !important;
+          position: relative !important;
+          width: 100% !important;
+        `;
+        console.log('[FLOW][addEntryToCurrentBatch][STEP 9.4] Forced preview section visible');
+        
+        // Check parent containers
+        let parent = immediatePreviewSection.parentElement;
+        let depth = 0;
+        while (parent && depth < 5) {
+          const parentStyle = window.getComputedStyle(parent);
+          console.log(`[FLOW][addEntryToCurrentBatch][STEP 9.4.${depth}] Parent ${depth} (${parent.tagName}):`, {
+            display: parentStyle.display,
+            visibility: parentStyle.visibility,
+            opacity: parentStyle.opacity,
+            width: parentStyle.width,
+            height: parentStyle.height,
+            hidden: parent.classList.contains('hidden')
+          });
+          
+          // Force parent visible if needed
+          if (parent.classList.contains('hidden')) {
+            parent.classList.remove('hidden');
+            parent.style.display = 'block';
+            parent.style.visibility = 'visible';
+            parent.style.opacity = '1';
+            console.log(`[FLOW][addEntryToCurrentBatch][STEP 9.4.${depth}] Forced parent visible`);
+          }
+          
+          parent = parent.parentElement;
+          depth++;
+        }
+        
+        const immediateRect = immediatePreviewSection.getBoundingClientRect();
+        console.log('[FLOW][addEntryToCurrentBatch][STEP 9.4] IMMEDIATE preview section check:', {
+          exists: true,
+          hidden: immediatePreviewSection.classList.contains('hidden'),
+          display: window.getComputedStyle(immediatePreviewSection).display,
+          visibility: window.getComputedStyle(immediatePreviewSection).visibility,
+          opacity: window.getComputedStyle(immediatePreviewSection).opacity,
+          width: window.getComputedStyle(immediatePreviewSection).width,
+          height: window.getComputedStyle(immediatePreviewSection).height,
+          boundingRect: {
+            top: immediateRect.top,
+            left: immediateRect.left,
+            width: immediateRect.width,
+            height: immediateRect.height,
+            visible: immediateRect.width > 0 && immediateRect.height > 0
+          }
+        });
+        
+        // Force scroll into view immediately
+        immediatePreviewSection.scrollIntoView({ behavior: 'auto', block: 'start', inline: 'nearest' });
+        
+        // Also ensure payment module is visible
+        if (paymentModule) {
+          paymentModule.classList.remove('hidden');
+          paymentModule.style.cssText = `
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+          `;
+          console.log('[FLOW][addEntryToCurrentBatch][STEP 9.4] Forced payment module visible');
+        }
+      } else {
+        console.error('[FLOW][addEntryToCurrentBatch][STEP 9.4] CRITICAL: Preview section not found immediately after setBatchViewState!');
+      }
+      
+      // Double-check preview section is visible
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 10] Final visibility check...');
+      
+      // Force payment module visible
+      if (paymentModule.classList.contains('hidden')) {
+        console.warn('[FLOW][addEntryToCurrentBatch][STEP 10.0] WARNING: Payment module was hidden, forcing visible!');
+        paymentModule.classList.remove('hidden');
+      }
+      
+      // Force preview section visible
+      if (previewSection.classList.contains('hidden')) {
+        console.warn('[FLOW][addEntryToCurrentBatch][STEP 10.1] WARNING: Preview section was hidden, forcing it visible.');
+        previewSection.classList.remove('hidden');
+        console.log('[FLOW][addEntryToCurrentBatch][STEP 10.2] Preview section forced visible');
+      } else {
+        console.log('[FLOW][addEntryToCurrentBatch][STEP 10.3] Preview section is visible');
+      }
+      
+      // Check computed styles to verify visibility
+      const previewSectionStyle = window.getComputedStyle(previewSection);
+      const paymentModuleStyle = window.getComputedStyle(paymentModule);
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 10.4] Computed styles check:', {
+        previewDisplay: previewSectionStyle.display,
+        previewVisibility: previewSectionStyle.visibility,
+        previewOpacity: previewSectionStyle.opacity,
+        previewHeight: previewSectionStyle.height,
+        paymentModuleDisplay: paymentModuleStyle.display,
+        paymentModuleVisibility: paymentModuleStyle.visibility,
+        paymentModuleOpacity: paymentModuleStyle.opacity
+      });
+      
+      // Final verification after a short delay
+      setTimeout(() => {
+        const finalPreviewSection = document.getElementById('batchPreviewSection');
+        const finalPaymentModule = document.getElementById('paymentModule');
+        const finalTable = document.getElementById('batchPreviewTable');
+        console.log('[FLOW][addEntryToCurrentBatch][STEP 10.5] DELAYED VERIFICATION (100ms later):', {
+          paymentModuleExists: !!finalPaymentModule,
+          paymentModuleHidden: finalPaymentModule?.classList.contains('hidden'),
+          paymentModuleInnerHTMLLength: finalPaymentModule?.innerHTML?.length || 0,
+          previewSectionExists: !!finalPreviewSection,
+          previewSectionHidden: finalPreviewSection?.classList.contains('hidden'),
+          previewTableExists: !!finalTable,
+          previewTableInnerHTMLLength: finalTable?.innerHTML?.length || 0,
+          hasCurrentBatch: !!window.currentPaymentBatch,
+          batchEntries: window.currentPaymentBatch?.entries?.length || 0
+        });
+        
+        // AGGRESSIVE: Force everything visible
+        if (finalPaymentModule) {
+          finalPaymentModule.classList.remove('hidden');
+          finalPaymentModule.style.cssText = `
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+          `;
+        }
+        
+        if (finalPreviewSection) {
+          finalPreviewSection.classList.remove('hidden');
+          // FORCE visibility without breaking layout
+          finalPreviewSection.style.cssText = `
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            width: 100% !important;
+          `;
+          
+          // Force the table inside to be visible too
+          if (finalTable) {
+            finalTable.style.cssText = `
+              display: table !important;
+              visibility: visible !important;
+              width: 100% !important;
+            `;
+          }
+          
+          // Scroll preview section into view
+          finalPreviewSection.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+          
+          // Check bounding rect to verify it's actually visible
+          const rect = finalPreviewSection.getBoundingClientRect();
+          console.log('[FLOW][addEntryToCurrentBatch][STEP 10.6] Preview section bounding rect:', {
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height,
+            visible: rect.width > 0 && rect.height > 0 && rect.top < window.innerHeight && rect.bottom > 0
+          });
+          
+          // If still zero dimensions, try even more aggressive approach
+          if (rect.width === 0 || rect.height === 0) {
+            console.error('[FLOW][addEntryToCurrentBatch][STEP 10.6.1] CRITICAL: Preview section still has zero dimensions! Trying nuclear option...');
+            // Try appending to body temporarily to see if it's a parent issue
+            const originalParent = finalPreviewSection.parentElement;
+            document.body.appendChild(finalPreviewSection);
+            const bodyRect = finalPreviewSection.getBoundingClientRect();
+            console.log('[FLOW][addEntryToCurrentBatch][STEP 10.6.2] When appended to body:', {
+              width: bodyRect.width,
+              height: bodyRect.height
+            });
+            // Put it back
+            originalParent.appendChild(finalPreviewSection);
+          }
+        }
+        
+        if (finalTable) {
+          const tableRect = finalTable.getBoundingClientRect();
+          console.log('[FLOW][addEntryToCurrentBatch][STEP 10.7] Preview table bounding rect:', {
+            top: tableRect.top,
+            left: tableRect.left,
+            width: tableRect.width,
+            height: tableRect.height,
+            visible: tableRect.width > 0 && tableRect.height > 0
+          });
+        }
+      }, 100);
+      
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 11] Final payment module state:', {
+        exists: !!paymentModule,
+        hidden: paymentModule?.classList.contains('hidden'),
+        innerHTMLLength: paymentModule?.innerHTML?.length || 0,
+        hasPreviewSection: !!paymentModule?.querySelector('#batchPreviewSection'),
+        previewSectionHidden: paymentModule?.querySelector('#batchPreviewSection')?.classList.contains('hidden'),
+        previewTableExists: !!paymentModule?.querySelector('#batchPreviewTable'),
+        previewTableContent: paymentModule?.querySelector('#batchPreviewTable')?.innerHTML?.substring(0, 100) || 'N/A',
+        previewSectionDisplay: window.getComputedStyle(paymentModule?.querySelector('#batchPreviewSection') || {}).display || 'N/A'
+      });
+      
+      console.log('[Batch] Entry added to current batch:', { customer: customer.name, paymentAmount, paymentType, totalEntries: window.currentPaymentBatch.entries.length });
+      debugBatchDom('after-add-entry');
+      console.log('[FLOW][addEntryToCurrentBatch][STEP 12] Function END');
+    }
+
+    function renderBatchPreview() {
+      console.log('[FLOW][renderBatchPreview][STEP 1] Function START');
+      console.log('[FLOW][renderBatchPreview][STEP 1.1] Checking payment module...');
+      const paymentModule = document.getElementById('paymentModule');
+      console.log('[FLOW][renderBatchPreview][STEP 1.2] Payment module:', {
+        exists: !!paymentModule,
+        hidden: paymentModule?.classList.contains('hidden'),
+        innerHTMLLength: paymentModule?.innerHTML?.length || 0
+      });
+      
+      console.log('[FLOW][renderBatchPreview][STEP 2] Looking for batchPreviewTable...');
+      const tbody = document.getElementById('batchPreviewTable');
+      console.log('[FLOW][renderBatchPreview][STEP 2.1] Table body found:', !!tbody);
+      if (!tbody) {
+        console.error('[FLOW][renderBatchPreview][STEP 2.2] CRITICAL ERROR: Table body not found!');
+        console.error('[Batch] renderBatchPreview: table body not found. Payment module may have been reset.');
+        debugBatchDom('renderPreview-missing');
+        // Try to find the payment module and check if it exists
+        const paymentModule = document.getElementById('paymentModule');
+        if (!paymentModule) {
+          console.error('[FLOW][renderBatchPreview][STEP 2.3] Payment module itself is missing!');
+          console.error('[Batch] Payment module itself is missing!');
+        } else {
+          console.error('[FLOW][renderBatchPreview][STEP 2.4] Payment module exists but table missing:', {
+            innerHTMLLength: paymentModule.innerHTML.length,
+            containsBatchPreview: paymentModule.innerHTML.includes('batchPreview'),
+            containsBatchPreviewTable: paymentModule.innerHTML.includes('batchPreviewTable'),
+            containsBatchPreviewSection: paymentModule.innerHTML.includes('batchPreviewSection')
+          });
+          console.log('[Batch] Payment module exists, but batchPreviewTable is missing. Current innerHTML length:', paymentModule.innerHTML.length);
+        }
+        return;
+      }
+      console.log('[FLOW][renderBatchPreview][STEP 2.5] Table body found, checking parent...');
+      console.log('[FLOW][renderBatchPreview][STEP 2.6] Table body parent:', {
+        tagName: tbody.parentElement?.tagName,
+        id: tbody.parentElement?.id,
+        hidden: tbody.parentElement?.classList.contains('hidden')
+      });
+      
+      console.log('[FLOW][renderBatchPreview][STEP 3] Checking current batch...');
+      const batch = window.currentPaymentBatch;
+      console.log('[FLOW][renderBatchPreview][STEP 3.1] Current batch:', {
+        exists: !!batch,
+        id: batch?.id,
+        entriesCount: batch?.entries?.length || 0
+      });
+      
+      if (!batch || batch.entries.length === 0) {
+        console.log('[FLOW][renderBatchPreview][STEP 3.2] No entries, showing empty message');
+        tbody.innerHTML = `<tr><td colspan="6" class="batch-empty-message">No payments added yet.</td></tr>`;
+        console.log('[Batch] renderBatchPreview: no entries to display.');
+        console.log('[FLOW][renderBatchPreview][STEP 3.3] Function END (no entries)');
+        return;
+      }
+      
+      console.log('[FLOW][renderBatchPreview][STEP 4] Building table rows...');
+      let rows = '';
+      let total = 0;
+      batch.entries.forEach((entry, index) => {
+        console.log('[FLOW][renderBatchPreview][STEP 4.' + (index + 1) + '] Processing entry:', {
+          index,
+          customerName: entry.customerName,
+          amount: entry.amount
+        });
+        total += entry.amount;
+        rows += `
+          <tr>
+            <td class="batch-col-date">${entry.date}</td>
+            <td class="batch-col-customer">${entry.customerName}</td>
+            <td class="batch-col-account">${entry.accountNumber}</td>
+            <td class="batch-col-property">${entry.property}</td>
+            <td class="batch-col-type">${entry.paymentType}</td>
+            <td class="batch-col-amount">$${entry.amount.toFixed(2)}</td>
+          </tr>
+        `;
+      });
+      console.log('[FLOW][renderBatchPreview][STEP 4.' + (batch.entries.length + 1) + '] Total calculated:', total);
+      
+      console.log('[FLOW][renderBatchPreview][STEP 5] Adding total row...');
+      rows += `
+        <tr class="batch-total-row">
+          <td colspan="5" class="batch-total-label">Total</td>
+          <td class="batch-col-amount batch-total-amount">$${total.toFixed(2)}</td>
+        </tr>
+      `;
+      console.log('[FLOW][renderBatchPreview][STEP 5.1] Rows HTML length:', rows.length);
+      
+      console.log('[FLOW][renderBatchPreview][STEP 6] Setting table body innerHTML...');
+      console.log('[FLOW][renderBatchPreview][STEP 6.1] Table body before update:', {
+        innerHTMLLength: tbody.innerHTML.length,
+        first100Chars: tbody.innerHTML.substring(0, 100)
+      });
+      tbody.innerHTML = rows;
+      console.log('[FLOW][renderBatchPreview][STEP 6.2] Table body after update:', {
+        innerHTMLLength: tbody.innerHTML.length,
+        first100Chars: tbody.innerHTML.substring(0, 100),
+        containsTotal: tbody.innerHTML.includes('Total')
+      });
+      
+      console.log('[Batch] renderBatchPreview: entries rendered =', batch.entries.length, 'Total = $' + total.toFixed(2));
+      console.log('[FLOW][renderBatchPreview][STEP 7] Function END');
+    }
+
+    function renderBatchesList() {
+      const tbody = document.getElementById('batchesListTable');
+      if (!tbody) {
+        console.warn('[Batch] renderBatchesList: table body not found.');
+        debugBatchDom('renderList-missing');
+        return;
+      }
+      
+      if (!window.paymentBatches || window.paymentBatches.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-3 text-center text-sm text-slate-500">No batches submitted yet.</td></tr>`;
+        console.log('[Batch] renderBatchesList: no submitted batches.');
+        return;
+      }
+      
+      let rows = '';
+      window.paymentBatches.slice().reverse().forEach(batch => {
+        const submitted = batch.submittedAt ? new Date(batch.submittedAt).toLocaleString() : '—';
+        rows += `
+          <tr>
+            <td class="px-4 py-2 text-sm text-slate-700">${batch.id}</td>
+            <td class="px-4 py-2 text-sm text-slate-700">${batch.username}</td>
+            <td class="px-4 py-2 text-sm text-slate-700">${batch.entries.length}</td>
+            <td class="px-4 py-2 text-sm text-slate-700 text-right">$${(batch.totalAmount || 0).toFixed(2)}</td>
+            <td class="px-4 py-2 text-sm text-slate-700">${submitted}</td>
+          </tr>
+        `;
+      });
+      
+      tbody.innerHTML = rows;
+      console.log('[Batch] renderBatchesList: batches rendered =', window.paymentBatches.length);
+    }
 
     // Add Client Module Functions
     function populateAddClientLocationSelect() {
@@ -1417,7 +2505,9 @@
           </button>
         </div>
         
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="mt-6">
+          <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Account Info</h4>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
             <input 
@@ -1469,58 +2559,65 @@
               <option value="Farmer">Farmer</option>
             </select>
           </div>
+        </div>
+        </div>
 
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Social Security Number</label>
-            <input 
-              type="text" 
-              id="newClientSSN" 
-              oninput="formatSSNInput(this)"
-              class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-              placeholder="xxx-xx-xxxx"
-              maxlength="11"
-            >
-          </div>
+        <!-- Identification Info Section -->
+        <div class="mt-6">
+          <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Identification Info</h4>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Social Security Number</label>
+              <input 
+                type="text" 
+                id="newClientSSN" 
+                oninput="formatSSNInput(this)"
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                placeholder="xxx-xx-xxxx"
+                maxlength="11"
+              >
+            </div>
 
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Type</label>
-            <select id="newClientIDType" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
-              <option value="">Select ID Type</option>
-              <option value="Drivers License">Drivers License</option>
-              <option value="ID">ID</option>
-              <option value="Passport">Passport</option>
-            </select>
-          </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Type</label>
+              <select id="newClientIDType" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+                <option value="">Select ID Type</option>
+                <option value="Drivers License">Drivers License</option>
+                <option value="ID">ID</option>
+                <option value="Passport">Passport</option>
+              </select>
+            </div>
 
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Number</label>
-            <input 
-              type="text" 
-              id="newClientIDNumber" 
-              class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-              placeholder="Enter ID number"
-            >
-          </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Number</label>
+              <input 
+                type="text" 
+                id="newClientIDNumber" 
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                placeholder="Enter ID number"
+              >
+            </div>
 
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Name</label>
-            <input 
-              type="text" 
-              id="newClientSecondaryContactName" 
-              class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-              placeholder="Enter secondary contact name"
-            >
-          </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Name</label>
+              <input 
+                type="text" 
+                id="newClientSecondaryContactName" 
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                placeholder="Enter secondary contact name"
+              >
+            </div>
 
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Number</label>
-            <input 
-              type="tel" 
-              id="newClientSecondaryContactPhone" 
-              oninput="formatPhoneInput(this)"
-              class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-              placeholder="(xxx)-xxx-xxxx"
-            >
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Number</label>
+              <input 
+                type="tel" 
+                id="newClientSecondaryContactPhone" 
+                oninput="formatPhoneInput(this)"
+                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                placeholder="(xxx)-xxx-xxxx"
+              >
+            </div>
           </div>
         </div>
 
@@ -2498,6 +3595,55 @@
         tbody.appendChild(row);
       });
     }
+    
+    function updateSettingsUsersTable() {
+      const tbody = document.getElementById('settingsUsersTableBody');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+      
+      if (!filteredUsers || filteredUsers.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="3" class="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
+              You don't have any users yet.
+            </td>
+          </tr>
+        `;
+        return;
+      }
+      
+      filteredUsers.forEach(user => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800';
+        
+        let createdDate = '—';
+        if (user.createdAt) {
+          try {
+            createdDate = new Date(user.createdAt).toLocaleDateString('en-US');
+          } catch (error) {
+            createdDate = user.createdAt;
+          }
+        }
+        
+        row.innerHTML = `
+          <td class="px-6 py-4 whitespace-nowrap">
+            <div class="text-sm font-medium text-slate-900 dark:text-slate-100">
+              ${user.fullName || 'Unnamed User'}
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+            ${createdDate}
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+            <button onclick="deleteUser('${user.id}')" class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
+              Delete
+            </button>
+          </td>
+        `;
+        
+        tbody.appendChild(row);
+      });
+    }
 
     // Search locations
     window.searchLocations = function() {
@@ -2508,6 +3654,19 @@
         (location.currentResident && location.currentResident.toLowerCase().includes(searchTerm))
       );
       updateLocationsTable();
+    };
+    
+    window.searchUsers = function() {
+      const searchInput = document.getElementById('settingsUserSearch');
+      const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
+      if (!searchTerm) {
+        filteredUsers = [...users];
+      } else {
+        filteredUsers = users.filter(user => 
+          (user.fullName || '').toLowerCase().includes(searchTerm)
+        );
+      }
+      updateSettingsUsersTable();
     };
 
     // Filter locations by status
@@ -2724,6 +3883,20 @@
       const premiseId = Math.floor(100000 + Math.random() * 900000).toString();
       document.getElementById('newLocationPremiseId').value = premiseId;
       document.getElementById('addLocationModal').classList.remove('hidden');
+    };
+    
+    // User management helpers
+    window.showAddUserModal = function() {
+      document.getElementById('newUserFullName').value = '';
+      document.getElementById('addUserModal').classList.remove('hidden');
+      setTimeout(() => {
+        document.getElementById('newUserFullName').focus();
+      }, 50);
+    };
+    
+    window.hideAddUserModal = function() {
+      document.getElementById('addUserModal').classList.add('hidden');
+      document.getElementById('newUserFullName').value = '';
     };
 
     // Hide add location modal
@@ -2963,6 +4136,46 @@
       updateLocationDropdowns(newLocation.id);
       
       alert('Location added successfully!');
+    };
+    
+    window.addUser = async function() {
+      const input = document.getElementById('newUserFullName');
+      const fullName = input.value.trim();
+      
+      if (!fullName) {
+        alert('Please enter the user\'s full name.');
+        return;
+      }
+      
+      const timestamp = Date.now();
+      const newUser = {
+        id: `USR-${String(timestamp).slice(-6)}`,
+        fullName,
+        createdAt: new Date(timestamp).toISOString()
+      };
+      
+      users.push(newUser);
+      filteredUsers = [...users];
+      updateSettingsUsersTable();
+      populateBatchUserSelect(fullName);
+      populateBatchStartUserSelect();
+      await saveUsersToFirestore();
+      hideAddUserModal();
+      alert('User added successfully!');
+    };
+    
+    window.deleteUser = async function(userId) {
+      if (!confirm('Are you sure you want to delete this user?')) {
+        return;
+      }
+      
+      users = users.filter(user => user.id !== userId);
+      filteredUsers = [...users];
+      updateSettingsUsersTable();
+      populateBatchUserSelect();
+      populateBatchStartUserSelect();
+      await saveUsersToFirestore();
+      alert('User deleted successfully!');
     };
 
     // Update location dropdowns and select the new location
@@ -3604,6 +4817,228 @@
     .modal-show { display: flex !important; }
     .safe-pad { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
     .tap { -webkit-tap-highlight-color: transparent; }
+    
+    /* CRITICAL: Force batch preview section to always be visible and have dimensions */
+    #batchPreviewSection {
+      display: block !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+      position: relative !important;
+      width: 100% !important;
+    }
+    
+    #batchPreviewSection.hidden {
+      display: block !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+    }
+    
+    /* BATCH PREVIEW TABLE - COMPREHENSIVE FIX */
+    #batchPreviewTableMain {
+      width: 100% !important;
+      border-collapse: collapse !important;
+      table-layout: fixed !important;
+      display: table !important;
+    }
+    
+    #batchPreviewTableMain thead {
+      display: table-header-group !important;
+    }
+    
+    #batchPreviewTableMain tbody {
+      display: table-row-group !important;
+    }
+    
+    #batchPreviewTableMain tr {
+      display: table-row !important;
+    }
+    
+    #batchPreviewTableMain th,
+    #batchPreviewTableMain td {
+      display: table-cell !important;
+      vertical-align: middle !important;
+      padding: 0.5rem 1rem !important;
+      border: none !important;
+    }
+    
+    /* Column widths - explicit and fixed */
+    .batch-col-date {
+      width: 12% !important;
+      min-width: 100px !important;
+      max-width: 120px !important;
+      text-align: left !important;
+      font-size: 0.75rem !important;
+      font-weight: 600 !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.05em !important;
+      color: #64748b !important;
+      padding: 0.5rem 1rem !important;
+      white-space: nowrap !important;
+    }
+    
+    .batch-col-customer {
+      width: 18% !important;
+      min-width: 150px !important;
+      text-align: left !important;
+      font-size: 0.75rem !important;
+      font-weight: 600 !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.05em !important;
+      color: #64748b !important;
+      padding: 0.5rem 1rem !important;
+    }
+    
+    .batch-col-account {
+      width: 12% !important;
+      min-width: 100px !important;
+      text-align: left !important;
+      font-size: 0.75rem !important;
+      font-weight: 600 !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.05em !important;
+      color: #64748b !important;
+      padding: 0.5rem 1rem !important;
+      white-space: nowrap !important;
+    }
+    
+    .batch-col-property {
+      width: 30% !important;
+      min-width: 200px !important;
+      text-align: left !important;
+      font-size: 0.75rem !important;
+      font-weight: 600 !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.05em !important;
+      color: #64748b !important;
+      padding: 0.5rem 1rem !important;
+      word-wrap: break-word !important;
+      overflow-wrap: break-word !important;
+    }
+    
+    .batch-col-type {
+      width: 10% !important;
+      min-width: 80px !important;
+      text-align: left !important;
+      font-size: 0.75rem !important;
+      font-weight: 600 !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.05em !important;
+      color: #64748b !important;
+      padding: 0.5rem 1rem !important;
+      white-space: nowrap !important;
+    }
+    
+    .batch-col-amount {
+      width: 18% !important;
+      min-width: 100px !important;
+      text-align: right !important;
+      font-size: 0.75rem !important;
+      font-weight: 600 !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.05em !important;
+      color: #64748b !important;
+      padding: 0.5rem 1rem !important;
+      white-space: nowrap !important;
+    }
+    
+    /* Data cells - match header alignment */
+    #batchPreviewTableMain tbody .batch-col-date {
+      font-size: 0.875rem !important;
+      font-weight: normal !important;
+      text-transform: none !important;
+      color: #334155 !important;
+      white-space: nowrap !important;
+    }
+    
+    #batchPreviewTableMain tbody .batch-col-customer {
+      font-size: 0.875rem !important;
+      font-weight: normal !important;
+      text-transform: none !important;
+      color: #334155 !important;
+    }
+    
+    #batchPreviewTableMain tbody .batch-col-account {
+      font-size: 0.875rem !important;
+      font-weight: normal !important;
+      text-transform: none !important;
+      color: #334155 !important;
+      white-space: nowrap !important;
+    }
+    
+    #batchPreviewTableMain tbody .batch-col-property {
+      font-size: 0.875rem !important;
+      font-weight: normal !important;
+      text-transform: none !important;
+      color: #334155 !important;
+      word-wrap: break-word !important;
+      overflow-wrap: break-word !important;
+    }
+    
+    #batchPreviewTableMain tbody .batch-col-type {
+      font-size: 0.875rem !important;
+      font-weight: normal !important;
+      text-transform: none !important;
+      color: #334155 !important;
+      white-space: nowrap !important;
+    }
+    
+    #batchPreviewTableMain tbody .batch-col-amount {
+      font-size: 0.875rem !important;
+      font-weight: normal !important;
+      text-transform: none !important;
+      color: #334155 !important;
+      text-align: right !important;
+      white-space: nowrap !important;
+    }
+    
+    /* Total row */
+    .batch-total-row {
+      background-color: #f1f5f9 !important;
+      font-weight: 600 !important;
+    }
+    
+    .batch-total-label {
+      text-align: right !important;
+      font-size: 0.875rem !important;
+      color: #334155 !important;
+      padding: 0.5rem 1rem !important;
+      white-space: nowrap !important;
+    }
+    
+    .batch-total-amount {
+      text-align: right !important;
+      font-size: 0.875rem !important;
+      color: #334155 !important;
+      font-weight: 600 !important;
+      padding: 0.5rem 1rem !important;
+      white-space: nowrap !important;
+    }
+    
+    /* Empty message */
+    .batch-empty-message {
+      text-align: center !important;
+      font-size: 0.875rem !important;
+      color: #64748b !important;
+      padding: 0.75rem 1rem !important;
+    }
+    
+    /* Ensure table body is visible */
+    #batchPreviewTable {
+      display: table-row-group !important;
+      visibility: visible !important;
+    }
+    
+    #paymentModule {
+      display: block !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+    }
+    
+    #paymentModule.hidden {
+      display: block !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+    }
   </style>
 </head>
 <body class="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 tap">
@@ -3676,6 +5111,18 @@
                     <!-- Status will be populated by JavaScript -->
                   </span>
                 </div>
+              </div>
+              
+              <div class="mb-4">
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Type</label>
+                <select 
+                  id="paymentType" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                >
+                  <option value="">Select Payment Type</option>
+                  <option value="Check">Check</option>
+                  <option value="Cash">Cash</option>
+                </select>
               </div>
               
               <div class="mb-4">
@@ -3809,7 +5256,9 @@
             </button>
           </div>
           
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="mt-6">
+            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Account Info</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
               <input 
@@ -3851,58 +5300,65 @@
                 <option value="add-new">+ Add New Location</option>
               </select>
             </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Social Security Number</label>
-              <input 
-                type="text" 
-                id="newClientSSN" 
-                oninput="formatSSNInput(this)"
-                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                placeholder="xxx-xx-xxxx"
-                maxlength="11"
-              >
             </div>
+          </div>
 
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Type</label>
-              <select id="newClientIDType" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
-                <option value="">Select ID Type</option>
-                <option value="Drivers License">Drivers License</option>
-                <option value="ID">ID</option>
-                <option value="Passport">Passport</option>
-              </select>
-            </div>
+          <!-- Identification Info Section -->
+          <div class="mt-6">
+            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Identification Info</h4>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Social Security Number</label>
+                <input 
+                  type="text" 
+                  id="newClientSSN" 
+                  oninput="formatSSNInput(this)"
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="xxx-xx-xxxx"
+                  maxlength="11"
+                >
+              </div>
 
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Number</label>
-              <input 
-                type="text" 
-                id="newClientIDNumber" 
-                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                placeholder="Enter ID number"
-              >
-            </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Type</label>
+                <select id="newClientIDType" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+                  <option value="">Select ID Type</option>
+                  <option value="Drivers License">Drivers License</option>
+                  <option value="ID">ID</option>
+                  <option value="Passport">Passport</option>
+                </select>
+              </div>
 
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Name</label>
-              <input 
-                type="text" 
-                id="newClientSecondaryContactName" 
-                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                placeholder="Enter secondary contact name"
-              >
-            </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Number</label>
+                <input 
+                  type="text" 
+                  id="newClientIDNumber" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="Enter ID number"
+                >
+              </div>
 
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Number</label>
-              <input 
-                type="tel" 
-                id="newClientSecondaryContactPhone" 
-                oninput="formatPhoneInput(this)"
-                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                placeholder="(xxx)-xxx-xxxx"
-              >
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Name</label>
+                <input 
+                  type="text" 
+                  id="newClientSecondaryContactName" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="Enter secondary contact name"
+                >
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Number</label>
+                <input 
+                  type="tel" 
+                  id="newClientSecondaryContactPhone" 
+                  oninput="formatPhoneInput(this)"
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="(xxx)-xxx-xxxx"
+                >
+              </div>
             </div>
           </div>
 
@@ -4118,6 +5574,13 @@
             >
               Codes
             </button>
+            <button 
+              id="settingsUsersTab"
+              onclick="switchSettingsView('users')" 
+              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
+            >
+              Users
+            </button>
           </div>
 
           <!-- Accounts Section -->
@@ -4268,6 +5731,46 @@
               </table>
             </div>
           </div>
+          
+          <!-- Users Section -->
+          <div id="settingsUsersContent" class="hidden">
+            <div class="flex justify-between items-center mb-6">
+              <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">System Users</h4>
+              <button 
+                onclick="showAddUserModal()" 
+                class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Add User
+              </button>
+            </div>
+            
+            <div class="flex flex-col md:flex-row gap-4 mb-6">
+              <div class="flex-1">
+                <input 
+                  id="settingsUserSearch" 
+                  type="text" 
+                  placeholder="Search users..." 
+                  class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onkeyup="searchUsers()"
+                />
+              </div>
+            </div>
+            
+            <div class="overflow-x-auto">
+              <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-700">
+                  <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Full Name</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Created</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="settingsUsersTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
+                  <!-- User rows populated dynamically -->
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -4288,9 +5791,7 @@
           onclick="showPaymentModule()" 
           class="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
         >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
-          </svg>
+          <span class="text-4xl font-black leading-none">$</span>
           <span class="text-base">Make Payment</span>
         </button>
         
@@ -4754,7 +6255,7 @@
         </form>
       </div>
     </div>
-
+    
     <!-- Add Location Modal -->
     <div id="addLocationModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
       <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
@@ -4841,6 +6342,58 @@
               class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
             >
               Add Location
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    
+    <!-- Add User Modal -->
+    <div id="addUserModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add System User</h3>
+          <button 
+            onclick="hideAddUserModal()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <form class="space-y-4" onsubmit="event.preventDefault(); addUser();">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
+            <input 
+              id="newUserFullName" 
+              type="text" 
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Enter full name"
+              required
+            />
+          </div>
+          
+          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
+            <p class="text-sm text-blue-800 dark:text-blue-200">
+              Users are stored in the users collection in Firestore using their full name.
+            </p>
+          </div>
+          
+          <div class="flex gap-3">
+            <button 
+              type="button"
+              onclick="hideAddUserModal()" 
+              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit"
+              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+            >
+              Add User
             </button>
           </div>
         </form>
