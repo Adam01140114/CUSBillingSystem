@@ -846,6 +846,12 @@
             >
               Produce Bill
             </button>
+            
+            <!-- PDF Display Container -->
+            <div id="billPdfDisplay" class="hidden mt-4">
+              <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Generated Bill PDF</h4>
+              <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: 600px;" title="Bill PDF Preview"></iframe>
+            </div>
           </div>
         </div>
       `;
@@ -931,16 +937,77 @@
           throw new Error('Failed to generate PDF');
         }
 
-        // Download the PDF
+        // Get the PDF blob
         const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
+        
+        // Create blob URL for download
+        const downloadUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
+        a.href = downloadUrl;
         a.download = 'bill.pdf';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        URL.revokeObjectURL(downloadUrl);
+        
+        // Display the PDF below the button
+        const displayUrl = URL.createObjectURL(blob);
+        const pdfDisplay = document.getElementById('billPdfDisplay');
+        const pdfViewer = document.getElementById('billPdfViewer');
+        const billModule = document.getElementById('billModule');
+        
+        if (pdfDisplay && pdfViewer) {
+          // Revoke any previous display URL to prevent memory leaks
+          if (pdfViewer.src && pdfViewer.src.startsWith('blob:')) {
+            URL.revokeObjectURL(pdfViewer.src);
+          }
+          
+          pdfViewer.src = displayUrl;
+          pdfDisplay.classList.remove('hidden');
+          
+          // Increase bill module height by 25% when PDF is displayed
+          if (billModule) {
+            // Wait a moment for the PDF display to render, then calculate height
+            setTimeout(() => {
+              const currentHeight = billModule.offsetHeight;
+              billModule.style.minHeight = `${currentHeight * 1.25}px`;
+              billModule.style.paddingBottom = '2rem';
+            }, 50);
+          }
+          
+          // Scroll to the PDF viewer smoothly
+          setTimeout(() => {
+            pdfDisplay.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }, 100);
+        } else {
+          // If elements don't exist, create them dynamically
+          const customerBillInfo = document.getElementById('customerBillInfo');
+          if (customerBillInfo) {
+            const pdfContainer = document.createElement('div');
+            pdfContainer.id = 'billPdfDisplay';
+            pdfContainer.className = 'mt-4';
+            pdfContainer.innerHTML = `
+              <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Generated Bill PDF</h4>
+              <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: 600px;" title="Bill PDF Preview"></iframe>
+            `;
+            customerBillInfo.appendChild(pdfContainer);
+            document.getElementById('billPdfViewer').src = displayUrl;
+            
+            // Increase bill module height by 25% when PDF is displayed
+            if (billModule) {
+              // Wait a moment for the PDF display to render, then calculate height
+              setTimeout(() => {
+                const currentHeight = billModule.offsetHeight;
+                billModule.style.minHeight = `${currentHeight * 1.25}px`;
+                billModule.style.paddingBottom = '2rem';
+              }, 50);
+            }
+            
+            setTimeout(() => {
+              pdfContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }, 100);
+          }
+        }
 
         alert('Bill PDF generated successfully!');
       } catch (error) {
@@ -3539,7 +3606,7 @@
     .tap { -webkit-tap-highlight-color: transparent; }
   </style>
 </head>
-<body class="min-h-screen text-slate-800 dark:text-slate-100 tap">
+<body class="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 tap">
   <div class="mx-auto max-w-7xl px-4 pt-6 pb-24 safe-pad">
     
 
@@ -3547,7 +3614,8 @@
     <div id="dashboardScreen">
       <!-- Header -->
       <header class="mb-8">
-        <div>
+        <div class="text-center">
+          <br><br>
           <h1 class="text-3xl font-bold text-slate-800 dark:text-slate-200">CUS Admin Dashboard</h1>
           <p class="text-slate-600 dark:text-slate-400">Manage customer accounts and billing</p>
         </div>
@@ -3687,12 +3755,45 @@
                 </div>
               </div>
               
+              <!-- Bill Preview -->
+              <div id="billPreview" class="mb-4 p-4 bg-white dark:bg-slate-600 rounded-lg border-2 border-slate-300 dark:border-slate-500">
+                <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-3">Bill Preview</h4>
+                <div class="space-y-2 text-sm">
+                  <div class="flex justify-between">
+                    <span class="text-slate-600 dark:text-slate-400">Service Cost:</span>
+                    <span id="previewServiceCost" class="font-medium text-slate-800 dark:text-slate-200">$0.00</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-slate-600 dark:text-slate-400">Late Fee:</span>
+                    <span id="previewLateFee" class="font-medium text-slate-800 dark:text-slate-200">$0.00</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-slate-600 dark:text-slate-400">Surcharges:</span>
+                    <span id="previewSurcharges" class="font-medium text-slate-800 dark:text-slate-200">$0.00</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-slate-600 dark:text-slate-400">Factor Adjustment:</span>
+                    <span id="previewFactorAdjustment" class="font-medium text-slate-800 dark:text-slate-200">$0.00</span>
+                  </div>
+                  <div class="flex justify-between pt-2 border-t border-slate-300 dark:border-slate-500">
+                    <span class="font-semibold text-slate-800 dark:text-slate-200">Total Amount:</span>
+                    <span id="previewTotalAmount" class="font-bold text-lg text-slate-800 dark:text-slate-200">$0.00</span>
+                  </div>
+                </div>
+              </div>
+              
               <button 
                 onclick="produceBill()" 
                 class="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
               >
                 Produce Bill
               </button>
+              
+              <!-- PDF Display Container -->
+              <div id="billPdfDisplay" class="hidden mt-4">
+                <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Generated Bill PDF</h4>
+                <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: 600px;" title="Bill PDF Preview"></iframe>
+              </div>
             </div>
           </div>
         </div>
@@ -4172,7 +4273,7 @@
 
       <!-- Main Action Buttons -->
       <br><br>
-      <div class="flex flex-col items-center gap-4 mb-8 p-[50px] max-w-2xl mx-auto border-2 border-blue-300 dark:border-blue-600 rounded-2xl">
+      <div class="flex flex-col items-center gap-4 mb-8 p-8 max-w-2xl mx-auto bg-white dark:bg-slate-800 rounded-3xl border border-blue-100 dark:border-slate-700 shadow-md hover:shadow-2xl hover:scale-[1.02] focus-within:shadow-2xl focus-within:scale-[1.02] transition-all duration-300 ease-out cursor-default">
         <button 
           onclick="showAddClientModule()" 
           class="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
@@ -4210,7 +4311,7 @@
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
-          <span class="text-base">Search</span>
+          <span class="text-base">Search Database</span>
         </button>
         
         <button 
