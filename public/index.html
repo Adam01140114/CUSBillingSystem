@@ -1534,32 +1534,55 @@
           </div>
         </div>
 
-        <div id="batchPreviewSection" data-batch-section="preview" class="hidden mt-8">
-          <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Batch Preview</h4>
-            <div class="flex flex-col md:flex-row gap-3">
-              <button onclick="addAnotherBatchEntry()" class="bg-white border border-slate-300 text-slate-700 px-5 py-2 rounded-xl hover:bg-slate-50">Add Entry</button>
-              <button onclick="submitCurrentBatch()" class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-xl">Submit Batch</button>
+        <div id="batchPreviewSection" data-batch-section="preview" class="hidden mt-8 batch-preview-custom">
+          <div class="w-full rounded-xl border border-slate-200 bg-white shadow-md overflow-hidden">
+            <!-- Header -->
+            <div class="border-b px-6 py-4 bg-slate-50 flex items-center justify-between">
+              <h2 class="text-lg font-semibold text-slate-800">Batch Preview</h2>
+              <button class="px-4 py-2 text-sm bg-green-600 text-white rounded-md shadow hover:bg-green-700 transition">
+                Submit Batch
+              </button>
             </div>
-          </div>
-          <div class="overflow-x-auto bg-white rounded-2xl border border-slate-200 shadow-inner">
-            <table id="batchPreviewTableMain" class="batch-preview-table">
-              <thead class="bg-slate-100">
-                <tr>
-                  <th class="batch-col-date">Date</th>
-                  <th class="batch-col-customer">Customer</th>
-                  <th class="batch-col-account">Account #</th>
-                  <th class="batch-col-property">Property</th>
-                  <th class="batch-col-type">Type</th>
-                  <th class="batch-col-amount">Amount</th>
-                </tr>
-              </thead>
-              <tbody id="batchPreviewTable" class="bg-white">
-                <tr>
-                  <td colspan="6" class="batch-empty-message">No payments added yet.</td>
-                </tr>
-              </tbody>
-            </table>
+
+            <!-- Scrollable Table Wrapper -->
+            <div class="overflow-x-auto">
+              <table class="min-w-full table-fixed border-collapse text-sm">
+                <colgroup>
+                  <col style="width: 100px;" />
+                  <col style="width: 160px;" />
+                  <col style="width: 267px;" />
+                  <col style="width: 200px;" />
+                  <col style="width: 96px;" />
+                  <col style="width: 112px;" />
+                </colgroup>
+
+                <!-- Column Headers -->
+                <thead class="bg-slate-100 text-xs uppercase text-slate-600">
+                  <tr>
+                    <th class="px-4 py-3 text-left font-semibold">Date</th>
+                    <th class="px-4 py-3 text-left font-semibold">Customer</th>
+                    <th class="px-4 py-3 text-left font-semibold">Account #</th>
+                    <th class="px-4 py-3 text-left font-semibold">Property</th>
+                    <th class="px-4 py-3 text-left font-semibold">Type</th>
+                    <th class="px-4 py-3 text-right font-semibold">Amount</th>
+                  </tr>
+                </thead>
+
+                <!-- Table Rows -->
+                <tbody id="batchPreviewTable" class="divide-y divide-slate-100">
+                  <!-- Filled by renderBatchPreview() -->
+                </tbody>
+
+                <!-- Table Footer -->
+                <tfoot class="bg-slate-100">
+                  <tr>
+                    <td colspan="4"></td>
+                    <td class="px-4 py-3 text-right font-semibold text-slate-700">Total</td>
+                    <td id="batchPreviewTotal" class="px-4 py-3 text-right font-bold text-slate-900">$0.00</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -2157,107 +2180,52 @@
     }
 
     function renderBatchPreview() {
-      console.log('[FLOW][renderBatchPreview][STEP 1] Function START');
-      console.log('[FLOW][renderBatchPreview][STEP 1.1] Checking payment module...');
-      const paymentModule = document.getElementById('paymentModule');
-      console.log('[FLOW][renderBatchPreview][STEP 1.2] Payment module:', {
-        exists: !!paymentModule,
-        hidden: paymentModule?.classList.contains('hidden'),
-        innerHTMLLength: paymentModule?.innerHTML?.length || 0
-      });
-      
-      console.log('[FLOW][renderBatchPreview][STEP 2] Looking for batchPreviewTable...');
-      const tbody = document.getElementById('batchPreviewTable');
-      console.log('[FLOW][renderBatchPreview][STEP 2.1] Table body found:', !!tbody);
-      if (!tbody) {
-        console.error('[FLOW][renderBatchPreview][STEP 2.2] CRITICAL ERROR: Table body not found!');
-        console.error('[Batch] renderBatchPreview: table body not found. Payment module may have been reset.');
-        debugBatchDom('renderPreview-missing');
-        // Try to find the payment module and check if it exists
-        const paymentModule = document.getElementById('paymentModule');
-        if (!paymentModule) {
-          console.error('[FLOW][renderBatchPreview][STEP 2.3] Payment module itself is missing!');
-          console.error('[Batch] Payment module itself is missing!');
-        } else {
-          console.error('[FLOW][renderBatchPreview][STEP 2.4] Payment module exists but table missing:', {
-            innerHTMLLength: paymentModule.innerHTML.length,
-            containsBatchPreview: paymentModule.innerHTML.includes('batchPreview'),
-            containsBatchPreviewTable: paymentModule.innerHTML.includes('batchPreviewTable'),
-            containsBatchPreviewSection: paymentModule.innerHTML.includes('batchPreviewSection')
-          });
-          console.log('[Batch] Payment module exists, but batchPreviewTable is missing. Current innerHTML length:', paymentModule.innerHTML.length);
-        }
-        return;
-      }
-      console.log('[FLOW][renderBatchPreview][STEP 2.5] Table body found, checking parent...');
-      console.log('[FLOW][renderBatchPreview][STEP 2.6] Table body parent:', {
-        tagName: tbody.parentElement?.tagName,
-        id: tbody.parentElement?.id,
-        hidden: tbody.parentElement?.classList.contains('hidden')
-      });
-      
-      console.log('[FLOW][renderBatchPreview][STEP 3] Checking current batch...');
-      const batch = window.currentPaymentBatch;
-      console.log('[FLOW][renderBatchPreview][STEP 3.1] Current batch:', {
-        exists: !!batch,
-        id: batch?.id,
-        entriesCount: batch?.entries?.length || 0
-      });
-      
-      if (!batch || batch.entries.length === 0) {
-        console.log('[FLOW][renderBatchPreview][STEP 3.2] No entries, showing empty message');
-        tbody.innerHTML = `<tr><td colspan="6" class="batch-empty-message">No payments added yet.</td></tr>`;
-        console.log('[Batch] renderBatchPreview: no entries to display.');
-        console.log('[FLOW][renderBatchPreview][STEP 3.3] Function END (no entries)');
-        return;
-      }
-      
-      console.log('[FLOW][renderBatchPreview][STEP 4] Building table rows...');
-      let rows = '';
-      let total = 0;
-      batch.entries.forEach((entry, index) => {
-        console.log('[FLOW][renderBatchPreview][STEP 4.' + (index + 1) + '] Processing entry:', {
-          index,
-          customerName: entry.customerName,
-          amount: entry.amount
-        });
-        total += entry.amount;
-        rows += `
+      const tbody = document.getElementById("batchPreviewTable");
+      const totalCell = document.getElementById("batchPreviewTotal");
+
+      // If tbody doesn't exist, just return
+      if (!tbody) return;
+
+      tbody.innerHTML = "";
+
+      if (!window.currentPaymentBatch || !window.currentPaymentBatch.entries || window.currentPaymentBatch.entries.length === 0) {
+        tbody.innerHTML = `
           <tr>
-            <td class="batch-col-date">${entry.date}</td>
-            <td class="batch-col-customer">${entry.customerName}</td>
-            <td class="batch-col-account">${entry.accountNumber}</td>
-            <td class="batch-col-property">${entry.property}</td>
-            <td class="batch-col-type">${entry.paymentType}</td>
-            <td class="batch-col-amount">$${entry.amount.toFixed(2)}</td>
+            <td colspan="6" class="px-4 py-3 text-center text-sm text-slate-500">
+              No payments added yet.
+            </td>
           </tr>
         `;
+        if (totalCell) totalCell.textContent = "$0.00";
+        return;
+      }
+
+      window.currentPaymentBatch.entries.forEach(entry => {
+        const row = document.createElement("tr");
+        row.className = "hover:bg-slate-50 transition-colors";
+
+        // Format property as multi-line (the KEY fix)
+        const [street, cityStateZip] = entry.property.split(/,(.+)/);
+
+        row.innerHTML = `
+            <td class="px-4 py-4 align-top whitespace-nowrap">${entry.date || ''}</td>
+            <td class="px-4 py-4 align-top whitespace-nowrap">${entry.customerName || ''}</td>
+            <td class="px-4 py-4 align-top whitespace-nowrap">${entry.accountNumber || ''}</td>
+            <td class="px-4 py-4 align-top leading-5">
+                ${street || ''}${cityStateZip ? ',<br>' + cityStateZip.trim() : ''}
+            </td>
+            <td class="px-4 py-4 align-top whitespace-nowrap">${entry.paymentType || ''}</td>
+            <td class="px-4 py-4 align-top text-right whitespace-nowrap">$${(entry.amount || 0).toFixed(2)}</td>
+        `;
+
+        tbody.appendChild(row);
       });
-      console.log('[FLOW][renderBatchPreview][STEP 4.' + (batch.entries.length + 1) + '] Total calculated:', total);
-      
-      console.log('[FLOW][renderBatchPreview][STEP 5] Adding total row...');
-      rows += `
-        <tr class="batch-total-row">
-          <td colspan="5" class="batch-total-label">Total</td>
-          <td class="batch-col-amount batch-total-amount">$${total.toFixed(2)}</td>
-        </tr>
-      `;
-      console.log('[FLOW][renderBatchPreview][STEP 5.1] Rows HTML length:', rows.length);
-      
-      console.log('[FLOW][renderBatchPreview][STEP 6] Setting table body innerHTML...');
-      console.log('[FLOW][renderBatchPreview][STEP 6.1] Table body before update:', {
-        innerHTMLLength: tbody.innerHTML.length,
-        first100Chars: tbody.innerHTML.substring(0, 100)
-      });
-      tbody.innerHTML = rows;
-      console.log('[FLOW][renderBatchPreview][STEP 6.2] Table body after update:', {
-        innerHTMLLength: tbody.innerHTML.length,
-        first100Chars: tbody.innerHTML.substring(0, 100),
-        containsTotal: tbody.innerHTML.includes('Total')
-      });
-      
-      console.log('[Batch] renderBatchPreview: entries rendered =', batch.entries.length, 'Total = $' + total.toFixed(2));
-      console.log('[FLOW][renderBatchPreview][STEP 7] Function END');
+
+      // Update total
+      const total = window.currentPaymentBatch.entries.reduce((sum, e) => sum + (e.amount || 0), 0);
+      if (totalCell) {
+        totalCell.textContent = `$${total.toFixed(2)}`;
+      }
     }
 
     function renderBatchesList() {
@@ -4818,215 +4786,229 @@
     .safe-pad { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
     .tap { -webkit-tap-highlight-color: transparent; }
     
-    /* CRITICAL: Force batch preview section to always be visible and have dimensions */
-    #batchPreviewSection {
-      display: block !important;
-      visibility: visible !important;
-      opacity: 1 !important;
-      position: relative !important;
-      width: 100% !important;
-    }
+    /* Batch Preview - Custom CSS (overrides Tailwind utilities) */
+    /* Use !important to override Tailwind's utility classes */
+    /* Target specific elements within .batch-preview-custom for full control */
     
-    #batchPreviewSection.hidden {
-      display: block !important;
-      visibility: visible !important;
-      opacity: 1 !important;
-    }
-    
-    /* BATCH PREVIEW TABLE - COMPREHENSIVE FIX */
-    #batchPreviewTableMain {
-      width: 100% !important;
-      border-collapse: collapse !important;
+    .batch-preview-custom table {
+      /* Custom table styles - these will override Tailwind */
+      width: 100%;
+      border-collapse: collapse;
       table-layout: fixed !important;
-      display: table !important;
+      border: 1px solid #e2e8f0; /* Outer border */
     }
     
-    #batchPreviewTableMain thead {
-      display: table-header-group !important;
-    }
-    
-    #batchPreviewTableMain tbody {
-      display: table-row-group !important;
-    }
-    
-    #batchPreviewTableMain tr {
-      display: table-row !important;
-    }
-    
-    #batchPreviewTableMain th,
-    #batchPreviewTableMain td {
-      display: table-cell !important;
-      vertical-align: middle !important;
-      padding: 0.5rem 1rem !important;
-      border: none !important;
-    }
-    
-    /* Column widths - explicit and fixed */
-    .batch-col-date {
-      width: 12% !important;
+    /* DRASTIC MEASURES: Force Date column to be exactly 100px - no exceptions */
+    .batch-preview-custom colgroup col:nth-child(1) { 
+      width: 100px !important; 
       min-width: 100px !important;
-      max-width: 120px !important;
-      text-align: left !important;
-      font-size: 0.75rem !important;
-      font-weight: 600 !important;
-      text-transform: uppercase !important;
-      letter-spacing: 0.05em !important;
-      color: #64748b !important;
-      padding: 0.5rem 1rem !important;
-      white-space: nowrap !important;
+      max-width: 100px !important;
     }
     
-    .batch-col-customer {
-      width: 18% !important;
-      min-width: 150px !important;
-      text-align: left !important;
-      font-size: 0.75rem !important;
-      font-weight: 600 !important;
-      text-transform: uppercase !important;
-      letter-spacing: 0.05em !important;
-      color: #64748b !important;
-      padding: 0.5rem 1rem !important;
-    }
-    
-    .batch-col-account {
-      width: 12% !important;
+    /* Force Date header cell to be exactly 100px */
+    .batch-preview-custom thead th:nth-child(1) {
+      width: 100px !important;
       min-width: 100px !important;
-      text-align: left !important;
-      font-size: 0.75rem !important;
-      font-weight: 600 !important;
-      text-transform: uppercase !important;
-      letter-spacing: 0.05em !important;
-      color: #64748b !important;
-      padding: 0.5rem 1rem !important;
-      white-space: nowrap !important;
+      max-width: 100px !important;
+      box-sizing: border-box !important;
     }
     
-    .batch-col-property {
-      width: 30% !important;
+    /* Force Date data cells to be exactly 100px */
+    .batch-preview-custom tbody td:nth-child(1),
+    .batch-preview-custom tfoot td:nth-child(1) {
+      width: 130px !important;
+      min-width: 130px !important;
+      max-width: 130px !important;
+      box-sizing: border-box !important;
+    }
+    
+    /* DRASTIC MEASURES: Force Customer column to be exactly 160px */
+    .batch-preview-custom colgroup col:nth-child(2) { 
+      width: 160px !important; 
+      min-width: 160px !important;
+      max-width: 160px !important;
+    }
+    /* Customer header 50px narrower */
+    .batch-preview-custom thead th:nth-child(2) {
+      width: 160px !important;
+      min-width: 160px !important;
+      max-width: 160px !important;
+      box-sizing: border-box !important;
+    }
+    .batch-preview-custom tbody td:nth-child(2),
+    .batch-preview-custom tfoot td:nth-child(2) {
+      width: 202px !important;
+      min-width: 202px !important;
+      max-width: 202px !important;
+      box-sizing: border-box !important;
+    }
+    
+    /* DRASTIC MEASURES: Force Account # column to be exactly 267px */
+    .batch-preview-custom colgroup col:nth-child(3) { 
+      width: 267px !important; 
+      min-width: 267px !important;
+      max-width: 267px !important;
+    }
+    /* Account # header to be exactly 267px */
+    .batch-preview-custom thead th:nth-child(3) {
+      width: 267px !important;
+      min-width: 267px !important;
+      max-width: 267px !important;
+      box-sizing: border-box !important;
+    }
+    .batch-preview-custom tbody td:nth-child(3),
+    .batch-preview-custom tfoot td:nth-child(3) {
+      width: 340px !important;
+      min-width: 340px !important;
+      max-width: 340px !important;
+      box-sizing: border-box !important;
+    }
+    
+    /* DRASTIC MEASURES: Force Property column to be exactly 200px */
+    .batch-preview-custom colgroup col:nth-child(4) { 
+      width: 200px !important; 
       min-width: 200px !important;
-      text-align: left !important;
-      font-size: 0.75rem !important;
-      font-weight: 600 !important;
-      text-transform: uppercase !important;
-      letter-spacing: 0.05em !important;
-      color: #64748b !important;
-      padding: 0.5rem 1rem !important;
-      word-wrap: break-word !important;
-      overflow-wrap: break-word !important;
+      max-width: 200px !important;
+    }
+    /* Property header 50px narrower */
+    .batch-preview-custom thead th:nth-child(4) {
+      width: 150px !important;
+      min-width: 150px !important;
+      max-width: 150px !important;
+      box-sizing: border-box !important;
+    }
+    .batch-preview-custom tbody td:nth-child(4),
+    .batch-preview-custom tfoot td:nth-child(4) {
+      width: 255px !important;
+      min-width: 255px !important;
+      max-width: 255px !important;
+      box-sizing: border-box !important;
     }
     
-    .batch-col-type {
-      width: 10% !important;
-      min-width: 80px !important;
-      text-align: left !important;
-      font-size: 0.75rem !important;
-      font-weight: 600 !important;
-      text-transform: uppercase !important;
-      letter-spacing: 0.05em !important;
-      color: #64748b !important;
-      padding: 0.5rem 1rem !important;
-      white-space: nowrap !important;
+    /* DRASTIC MEASURES: Force Type column to be exactly 96px */
+    .batch-preview-custom colgroup col:nth-child(5) { 
+      width: 96px !important; 
+      min-width: 96px !important;
+      max-width: 96px !important;
+    }
+    /* Type header 50px narrower */
+    .batch-preview-custom thead th:nth-child(5) {
+      width: 46px !important;
+      min-width: 46px !important;
+      max-width: 46px !important;
+      box-sizing: border-box !important;
+    }
+    .batch-preview-custom tbody td:nth-child(5),
+    .batch-preview-custom tfoot td:nth-child(5) {
+      width: 125px !important;
+      min-width: 125px !important;
+      max-width: 125px !important;
+      box-sizing: border-box !important;
     }
     
-    .batch-col-amount {
-      width: 18% !important;
-      min-width: 100px !important;
-      text-align: right !important;
-      font-size: 0.75rem !important;
-      font-weight: 600 !important;
-      text-transform: uppercase !important;
-      letter-spacing: 0.05em !important;
-      color: #64748b !important;
-      padding: 0.5rem 1rem !important;
-      white-space: nowrap !important;
+    /* DRASTIC MEASURES: Force Amount column to be exactly 112px */
+    .batch-preview-custom colgroup col:nth-child(6) { 
+      width: 112px !important; 
+      min-width: 112px !important;
+      max-width: 112px !important;
+    }
+    /* Amount header 50px narrower */
+    .batch-preview-custom thead th:nth-child(6) {
+      width: 62px !important;
+      min-width: 62px !important;
+      max-width: 62px !important;
+      box-sizing: border-box !important;
+    }
+    .batch-preview-custom tbody td:nth-child(6),
+    .batch-preview-custom tfoot td:nth-child(6) {
+      width: 112px !important;
+      min-width: 140px !important;
+      max-width: 140px !important;
+      box-sizing: border-box !important;
     }
     
-    /* Data cells - match header alignment */
-    #batchPreviewTableMain tbody .batch-col-date {
+    /* Ensure all cells align properly - each in its own column box */
+    .batch-preview-custom th,
+    .batch-preview-custom td {
+      vertical-align: top;
+      box-sizing: border-box;
+      border: 1px solid #e2e8f0; /* Grid lines between cells */
+    }
+    
+    /* Remove double borders by only showing right and bottom */
+    .batch-preview-custom th,
+    .batch-preview-custom td {
+      border-top: 1px solid #e2e8f0;
+      border-left: 1px solid #e2e8f0;
+      border-right: none;
+      border-bottom: none;
+    }
+    
+    /* Add right border to last column */
+    .batch-preview-custom th:last-child,
+    .batch-preview-custom td:last-child {
+      border-right: 1px solid #e2e8f0;
+    }
+    
+    /* Add bottom border to last row */
+    .batch-preview-custom tbody tr:last-child td,
+    .batch-preview-custom tfoot tr td {
+      border-bottom: 1px solid #e2e8f0;
+    }
+    
+    /* Property column can wrap */
+    .batch-preview-custom tbody td:nth-child(4) {
+      white-space: normal;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+    
+    /* All other columns should not wrap and stay in their boxes */
+    .batch-preview-custom tbody td:not(:nth-child(4)) {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    /* Ensure header and body cells align perfectly */
+    .batch-preview-custom thead th,
+    .batch-preview-custom tbody td {
+      padding-left: 1rem !important;
+      padding-right: 1rem !important;
+    }
+    
+    .batch-preview-custom thead th {
+      padding-top: 0.75rem !important;
+      padding-bottom: 0.75rem !important;
+    }
+    
+    .batch-preview-custom tbody td {
+      padding-top: 1rem !important;
+      padding-bottom: 1rem !important;
+    }
+    
+    /* Custom cell styles - override Tailwind padding, spacing, etc. */
+    /* Example: uncomment and customize as needed */
+    /*
+    .batch-preview-custom th,
+    .batch-preview-custom td {
+      padding: 1rem !important;
       font-size: 0.875rem !important;
-      font-weight: normal !important;
-      text-transform: none !important;
-      color: #334155 !important;
-      white-space: nowrap !important;
+    }
+    */
+    
+    /* Override specific Tailwind classes within batch preview */
+    .batch-preview-custom .px-4 {
+      padding-left: 1rem !important;
+      padding-right: 1rem !important;
     }
     
-    #batchPreviewTableMain tbody .batch-col-customer {
-      font-size: 0.875rem !important;
-      font-weight: normal !important;
-      text-transform: none !important;
-      color: #334155 !important;
+    .batch-preview-custom .py-4 {
+      padding-top: 1rem !important;
+      padding-bottom: 1rem !important;
     }
     
-    #batchPreviewTableMain tbody .batch-col-account {
-      font-size: 0.875rem !important;
-      font-weight: normal !important;
-      text-transform: none !important;
-      color: #334155 !important;
-      white-space: nowrap !important;
-    }
-    
-    #batchPreviewTableMain tbody .batch-col-property {
-      font-size: 0.875rem !important;
-      font-weight: normal !important;
-      text-transform: none !important;
-      color: #334155 !important;
-      word-wrap: break-word !important;
-      overflow-wrap: break-word !important;
-    }
-    
-    #batchPreviewTableMain tbody .batch-col-type {
-      font-size: 0.875rem !important;
-      font-weight: normal !important;
-      text-transform: none !important;
-      color: #334155 !important;
-      white-space: nowrap !important;
-    }
-    
-    #batchPreviewTableMain tbody .batch-col-amount {
-      font-size: 0.875rem !important;
-      font-weight: normal !important;
-      text-transform: none !important;
-      color: #334155 !important;
-      text-align: right !important;
-      white-space: nowrap !important;
-    }
-    
-    /* Total row */
-    .batch-total-row {
-      background-color: #f1f5f9 !important;
-      font-weight: 600 !important;
-    }
-    
-    .batch-total-label {
-      text-align: right !important;
-      font-size: 0.875rem !important;
-      color: #334155 !important;
-      padding: 0.5rem 1rem !important;
-      white-space: nowrap !important;
-    }
-    
-    .batch-total-amount {
-      text-align: right !important;
-      font-size: 0.875rem !important;
-      color: #334155 !important;
-      font-weight: 600 !important;
-      padding: 0.5rem 1rem !important;
-      white-space: nowrap !important;
-    }
-    
-    /* Empty message */
-    .batch-empty-message {
-      text-align: center !important;
-      font-size: 0.875rem !important;
-      color: #64748b !important;
-      padding: 0.75rem 1rem !important;
-    }
-    
-    /* Ensure table body is visible */
-    #batchPreviewTable {
-      display: table-row-group !important;
-      visibility: visible !important;
-    }
+    /* Add your custom styles here - they will take precedence over Tailwind */
     
     #paymentModule {
       display: block !important;

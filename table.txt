@@ -1,0 +1,266 @@
+BATCH PREVIEW TABLE ALIGNMENT FIXES - ATTEMPT LOG
+====================================================
+
+ATTEMPT 1: Simplified Table Structure with Inline Width Styles
+---------------------------------------------------------------
+Date: Current session
+Status: FAILED
+
+Approach:
+- Removed all complex custom CSS classes (batch-col-date, batch-col-customer, etc.)
+- Switched back to standard Tailwind utility classes
+- Added inline style="width: X%" on each <th> element to set column widths:
+  * Date: 12%
+  * Customer: 20%
+  * Account #: 12%
+  * Property: 28%
+  * Type: 10%
+  * Amount: 18%
+- Used standard table structure with Tailwind classes (px-4 py-2, text-sm, etc.)
+- Total row uses empty <td> cells for first 4 columns, "Total" in Type column (right-aligned), amount in Amount column
+- Added minimal CSS for property column word-wrapping
+
+Expected Result:
+- Headers should align with data columns
+- Column widths should be consistent
+- Property addresses should wrap properly without breaking layout
+- Total row should show "Total" in Type column and amount in Amount column
+
+Implementation Details:
+- Table HTML: Standard <table> with <thead> and <tbody>
+- Row generation: Uses standard Tailwind classes (px-4 py-2 text-sm text-slate-700)
+- Property column: Has word-break: break-word CSS to handle long addresses
+- Total row: 6 individual <td> cells (4 empty, 1 with "Total", 1 with amount)
+
+Files Modified:
+- public/index.html: Updated table structure, row generation, and CSS
+
+WHY IT FAILED:
+- Property column text is displaying vertically stacked (each character on its own line)
+- Root cause: The row generation code had `style="word-break: break-word; max-width: 0;"` on the property column
+- The `max-width: 0` on a table cell causes text to stack vertically instead of wrapping horizontally
+- This breaks the entire table layout and makes addresses unreadable
+- The word-break CSS combined with max-width: 0 creates a conflict that forces vertical stacking
+
+---
+
+ATTEMPT 2: Fixed Property Column Text Wrapping
+----------------------------------------------
+Date: Current session
+Status: FAILED
+
+Approach:
+- Remove the problematic `max-width: 0` style from property column
+- Keep word-break for wrapping but ensure proper horizontal flow
+- Use `white-space: normal` explicitly to prevent vertical stacking
+- Ensure table cells have proper width constraints without breaking text flow
+- Keep inline width styles on headers for column alignment
+- Use standard Tailwind classes for consistent styling
+
+Expected Result:
+- Property addresses should wrap horizontally across multiple lines within the cell
+- Text should NOT stack vertically (each character on its own line)
+- All columns should align properly with headers
+- Table should maintain consistent column widths
+- Total row should display correctly
+
+Implementation Details:
+- Remove `max-width: 0` from property column in row generation
+- Add `white-space: normal` to property column CSS
+- Keep `word-break: break-word` for long addresses but ensure horizontal wrapping
+- Maintain inline width styles on <th> elements
+- Use standard table structure with Tailwind utility classes
+
+Why This Will Work:
+- Removing `max-width: 0` allows the cell to have proper width and text flows horizontally
+- `white-space: normal` explicitly prevents vertical character stacking
+- `word-break: break-word` will wrap long words at appropriate break points horizontally
+- Inline width styles on headers ensure column alignment
+- Standard Tailwind classes provide consistent, reliable styling
+
+Files Modified:
+- public/index.html: Fix property column styling in row generation and CSS
+
+WHY IT FAILED:
+- Property column text is STILL displaying vertically stacked (each character on its own line)
+- The CSS changes didn't take effect or are being overridden
+- Possible causes:
+  * CSS specificity issues - other styles may be overriding
+  * Table layout algorithm issue - browser may be forcing vertical layout
+  * Tailwind classes conflicting with custom CSS
+  * The `word-break: break-word` combined with table cell constraints may still be causing issues
+- Need to try a more aggressive approach with inline styles and !important flags
+
+---
+
+ATTEMPT 3: Aggressive CSS Override with Inline Styles
+------------------------------------------------------
+Date: Current session
+Status: PARTIALLY WORKED
+
+Approach:
+- Use inline styles directly on the property <td> element with !important
+- Force display and layout properties explicitly
+- Remove all word-break/overflow-wrap that might cause vertical stacking
+- Use simple text wrapping with overflow handling
+- Ensure table cell has explicit width and doesn't collapse
+- Add explicit line-height to prevent character-by-character stacking
+- Set table-layout: fixed with explicit column widths
+
+Expected Result:
+- Property text displays horizontally and wraps to new lines normally
+- No vertical character stacking
+- All columns align properly
+- Table maintains proper structure
+
+Implementation Details:
+- Added inline style: `style="white-space: normal !important; display: table-cell !important; line-height: 1.5em !important; vertical-align: middle !important; text-align: left !important;"`
+- Set table-layout: fixed
+- Added explicit width: 28% and min-width: 200px to property column
+- Simplified CSS to just white-space: normal
+
+Why This Will Work:
+- Inline styles with !important will override any conflicting CSS
+- table-layout: fixed ensures consistent column widths
+- min-width: 200px prevents property column from collapsing
+- Natural text flow should prevent vertical stacking
+
+Files Modified:
+- public/index.html: Add aggressive inline styles to property column, set table-layout: fixed
+
+WHY IT PARTIALLY WORKED:
+- Property column text is now displaying correctly (horizontal, not vertically stacked) ✓
+- BUT total row is misaligned - "Total" text is spanning across multiple columns incorrectly
+- Issue: With table-layout: fixed, the total row's empty cells might be collapsing or the colspan isn't working properly
+- Need to ensure total row cells maintain proper column widths and alignment
+
+---
+
+ATTEMPT 4: Fix Total Row Alignment with Fixed Table Layout
+-----------------------------------------------------------
+Date: Current session
+Status: FAILED
+
+Approach:
+- Keep table-layout: fixed (it fixed the property column issue)
+- Fix total row to properly align with columns
+- Ensure each cell in total row respects the column widths
+- Use explicit empty cells for first 4 columns, "Total" in Type column, amount in Amount column
+- Add CSS to ensure total row cells maintain column widths
+
+Expected Result:
+- Property column continues to display correctly (horizontal text)
+- Total row aligns properly with column headers
+- "Total" appears in Type column (5th column), right-aligned
+- Amount appears in Amount column (6th column), right-aligned
+- All columns maintain proper alignment
+
+Implementation Details:
+- Keep table-layout: fixed
+- Total row: 6 individual <td> cells matching column structure
+- First 4 cells: empty but maintain column width with &nbsp; and inline width styles
+- 5th cell (Type column): "Total" text, right-aligned
+- 6th cell (Amount column): amount, right-aligned
+- Added CSS rules for total row cells with explicit widths
+
+Why This Will Work:
+- table-layout: fixed ensures consistent column widths across all rows
+- Individual cells (not colspan) will respect the column widths set on headers
+- Empty cells will still take up space maintaining alignment
+- Right-alignment on Type and Amount columns will position text correctly
+
+Files Modified:
+- public/index.html: Fix total row structure and add CSS for proper cell width maintenance
+
+WHY IT FAILED:
+- Data rows are NOT aligned with column headers - headers appear wider than data cells
+- Visual misalignment: data cells don't match the X coordinate of their corresponding headers
+- Root cause: Headers have inline width styles (12%, 20%, 12%, 28%, 10%, 18%) but data cells don't have matching width constraints
+- With table-layout: fixed, the browser should respect header widths, but data cells might have different padding/content causing misalignment
+- Need to add explicit width styles to ALL data cells (not just total row) to match headers exactly
+
+---
+
+ATTEMPT 5: Add Explicit Width Styles to All Data Cells
+--------------------------------------------------------
+Date: Current session
+Status: FAILED
+
+Approach:
+- Add inline width styles to EVERY data cell in the table to match header widths exactly
+- Ensure all <td> elements have the same width percentages as their corresponding <th> elements
+- Match padding between headers and data cells
+- Ensure table-layout: fixed is working correctly
+- Use consistent width styles: Date (12%), Customer (20%), Account # (12%), Property (28%), Type (10%), Amount (18%)
+
+Expected Result:
+- Data rows align perfectly with column headers
+- All columns maintain consistent width from header to data to total row
+- No visual misalignment between headers and data
+- Property column continues to display correctly
+- Total row aligns properly
+
+Implementation Details:
+- Add inline style="width: X%" to each <td> in data rows matching header widths
+- Ensure padding is consistent (px-4 py-2 on both th and td)
+- Keep table-layout: fixed
+- All cells should have explicit width constraints
+
+Why This Will Work:
+- Explicit width styles on data cells will force them to match header widths exactly
+- table-layout: fixed combined with explicit widths ensures consistent column alignment
+- Matching padding ensures content aligns at the same X coordinate
+- This addresses the root cause: data cells not having the same width constraints as headers
+
+Files Modified:
+- public/index.html: Add explicit width styles to all data cells in renderBatchPreview function
+
+WHY IT FAILED:
+- Still had alignment issues because of conflicting CSS rules
+- Customer column was missing whitespace-nowrap, causing names to break onto 2 lines
+- Too many !important CSS rules were fighting each other
+- Property column had excessive inline styles that conflicted with CSS
+- Need to simplify: remove aggressive CSS, add whitespace-nowrap to customer, let CSS handle property wrapping
+
+---
+
+ATTEMPT 6: Clean CSS and Proper Whitespace Control
+---------------------------------------------------
+Date: Current session
+Status: IN PROGRESS
+
+Approach:
+- Replace renderBatchPreview with clean, minimal version (remove excessive logging)
+- Simplify CSS: remove all !important rules and conflicting width definitions
+- Use table-layout: auto instead of fixed
+- Define column widths only on <th> elements, let table naturally align
+- Add whitespace-nowrap to Customer column (and all non-property columns)
+- Only Property column should wrap (white-space: normal)
+- Use CSS class .property-cell for property column instead of inline styles
+
+Expected Result:
+- Clean, maintainable code without excessive logging
+- Customer names stay on one line
+- Property addresses wrap nicely without breaking table layout
+- Columns align properly without fighting CSS rules
+- Table layout is predictable and consistent
+
+Implementation Details:
+- Clean renderBatchPreview function with minimal code
+- CSS: table-layout: auto, widths defined only on thead th
+- Default tbody td: white-space: nowrap, vertical-align: middle
+- Property cells: white-space: normal via .property-cell class
+- Remove all !important flags and conflicting rules
+
+Why This Will Work:
+- table-layout: auto with widths on headers lets browser naturally align columns
+- whitespace-nowrap on customer prevents name breaking
+- Single CSS rule for property wrapping (no inline style conflicts)
+- No competing CSS rules means predictable behavior
+- Clean code is easier to debug and maintain
+
+Files Modified:
+- public/index.html: Replace renderBatchPreview, simplify CSS, add whitespace-nowrap to customer
+
+---
+
