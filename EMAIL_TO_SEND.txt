@@ -1,0 +1,118 @@
+Subject: CUS Billing Portal - Data Elements List for Database Mapping
+
+Hi [Boss's Name],
+
+Thank you for reaching out. I've compiled the complete list of data elements that the CUS Billing Portal application handles. This list includes all fields that need to be mapped from the current Utility Database.
+
+DATA ELEMENTS SUMMARY
+
+The application manages data across five main collections:
+
+1. CUSTOMER DATA (25+ fields)
+   Core Fields:
+   - Customer ID/Account Number (format: CUS-XXXXXX)
+   - Full Name
+   - Service Address (full address string)
+   - Created Date (critical for proration calculations)
+
+   Contact Information:
+   - Email
+   - Phone (format: (xxx)-xxx-xxxx)
+   - Secondary Contact Name & Phone
+
+   Identity Information:
+   - Entity Type (Individual, Business, LLC, etc.)
+   - SSN (format: xxx-xx-xxxx)
+   - ID Type & ID Number
+
+   Mailing Address (if different from service address):
+   - Full Mailing Address
+   - Mailing Street, City, State, ZIP
+
+   Billing & Payment:
+   - Current Bill Amount
+   - Past Due Amount
+   - Last Payment Date
+   - Payment Status (calculated: current, overdue, inactive, pending closing)
+   - Payment History (array of payment records)
+
+   Tax Codes & Adjustments:
+   - Tax Codes (array of code objects with id, name, percentage)
+   - Factor Multiplier (e.g., 1.2)
+
+2. LOCATION DATA (11 fields)
+   - Location ID (format: LOC-XXX)
+   - Premise ID (from utility system)
+   - Full Property Address
+   - Address Components (Street, City, State, ZIP)
+   - Owner Information (First Name, Last Name, Full Name)
+   - Current Resident Name
+   - Status (available, occupied, inactive)
+
+3. TAX CODE DATA (5 fields)
+   - Code ID
+   - Code Name (e.g., "Individual", "Commercial")
+   - Percentage Rate (e.g., 12 = 12%)
+   - Description
+   - Applicable Counties (array)
+
+4. PAYMENT BATCH DATA
+   - Batch ID
+   - Username (batch creator)
+   - Start/Submission Timestamps
+   - Status
+   - Entries Array (customer ID, name, account number, date, amount, payment type)
+
+5. USER DATA
+   - User ID
+   - Full Name
+   - Email
+   - Role & Permissions
+
+IMPORTANT FORMAT REQUIREMENTS
+
+- Account Numbers: Must follow CUS-XXXXXX format (6 digits)
+- Phone Numbers: Format as (xxx)-xxx-xxxx
+- SSNs: Format as xxx-xx-xxxx
+- Dates: Use MM/DD/YYYY format or ISO format
+- Currency: Decimal numbers with 2 decimal places (e.g., 170.00)
+- Percentages: Whole numbers (e.g., 12 = 12%)
+
+KEY MAPPING CONSIDERATIONS
+
+1. Payment Status is a calculated field based on past due amount - don't migrate directly
+2. Tax Codes must exist in the Code collection before assigning to customers
+3. Created Date is critical for proration calculations (customers added mid-month get prorated bills)
+4. Locations are linked to customers by matching address or locationId
+
+SAMPLE DATA STRUCTURE
+
+Customer Example:
+- ID: CUS-525678
+- Account Number: CUS-525678
+- Name: John Doe
+- Email: john.doe@email.com
+- Phone: (831)-555-1234
+- Address: 921 Sloat Drive, Salinas, CA 93907
+- Past Due: 0.00
+- Last Payment: 01/15/2025
+- Created Date: 2025-01-15T10:30:00.000Z
+- Entity Type: Individual
+- SSN: 123-45-6789
+- Tax Codes: [Individual (12%)]
+- Factor: 1.2
+
+I've attached a detailed mapping document (DATA_ELEMENTS_MAPPING.md) that includes:
+- Complete field descriptions with data types
+- Format specifications and examples
+- Migration checklist
+- Data relationships
+- Questions to ask about the source database
+
+Please let me know if you need any clarification on specific fields or if you'd like me to help with the mapping process once you've identified the source fields.
+
+Best regards,
+[Your Name]
+
+
+

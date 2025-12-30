@@ -9,6 +9,8 @@
   <title>CUS Billing - Admin Portal</title>
   <!-- Tailwind CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- SheetJS for Excel parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <!-- Firebase SDK -->
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
@@ -124,22 +126,39 @@
     }
 
     // Firestore functions
-    async function saveLocationsToFirestore() {
+    async function saveLocationsToFirestore(progressCallback) {
       try {
         const locationsRef = collection(db, 'locations');
         // Clear existing locations first
         const existingLocations = await getDocs(locationsRef);
+        const deletePromises = [];
         existingLocations.forEach(doc => {
-          deleteDoc(doc.ref);
+          deletePromises.push(deleteDoc(doc.ref));
         });
+        await Promise.all(deletePromises);
         
         // Add all current locations
+        const totalLocations = locations.length;
+        let savedCount = 0;
         for (const location of locations) {
           await addDoc(locationsRef, location);
+          savedCount++;
+          
+          // Update progress every location (or every 10 for console)
+          if (savedCount % 10 === 0 || savedCount === totalLocations) {
+            console.log('[Firestore] Saved', savedCount, 'of', totalLocations, 'locations');
+          }
+          
+          // Call progress callback if provided
+          if (progressCallback) {
+            const percent = Math.round((savedCount / totalLocations) * 100);
+            progressCallback(savedCount, totalLocations, percent);
+          }
         }
         console.log('Locations saved to Firestore');
       } catch (error) {
         console.error('Error saving locations:', error);
+        throw error; // Re-throw to be caught by caller
       }
     }
 
@@ -159,23 +178,46 @@
       }
     }
 
-    async function saveCustomersToFirestore() {
+    async function saveCustomersToFirestore(progressCallback) {
       try {
+        console.log('[Firestore] Starting save operation for', customers.length, 'customers');
         const customersRef = collection(db, 'customers');
+        
         // Clear existing customers first
+        console.log('[Firestore] Fetching existing customers to delete...');
         const existingCustomers = await getDocs(customersRef);
+        const deletePromises = [];
         existingCustomers.forEach(doc => {
-          deleteDoc(doc.ref);
+          deletePromises.push(deleteDoc(doc.ref));
         });
+        console.log('[Firestore] Deleting', deletePromises.length, 'existing customers...');
+        await Promise.all(deletePromises);
+        console.log('[Firestore] Existing customers deleted');
         
         // Add all current customers using their ID as document ID
+        console.log('[Firestore] Adding', customers.length, 'customers...');
+        const totalCustomers = customers.length;
+        let savedCount = 0;
         for (const customer of customers) {
           const customerRef = doc(customersRef, customer.id);
           await setDoc(customerRef, customer);
+          savedCount++;
+          
+          // Update progress every customer (or every 100 for console)
+          if (savedCount % 100 === 0) {
+            console.log('[Firestore] Saved', savedCount, 'of', totalCustomers, 'customers');
+          }
+          
+          // Call progress callback if provided
+          if (progressCallback) {
+            const percent = Math.round((savedCount / totalCustomers) * 100);
+            progressCallback(savedCount, totalCustomers, percent);
+          }
         }
-        console.log('Customers saved to Firestore');
+        console.log('[Firestore] All customers saved successfully');
       } catch (error) {
-        console.error('Error saving customers:', error);
+        console.error('[Firestore] Error saving customers:', error);
+        throw error; // Re-throw to be caught by caller
       }
     }
 
@@ -185,12 +227,22 @@
         const snapshot = await getDocs(customersRef);
         customers = [];
         snapshot.forEach(doc => {
-          customers.push({ id: doc.id, ...doc.data() });
+          const customer = { id: doc.id, ...doc.data() };
+          // Populate codes from importData if available
+          if (customer.importData) {
+            populateCustomerCodesFromImportData(customer);
+          }
+          customers.push(customer);
         });
         filteredCustomers = [...customers];
         updateCustomerTable();
         console.log('Customers loaded from Firestore:', customers.length, 'customers');
         console.log('Customer data:', customers);
+        
+        // Save codes to Firestore if any new codes were added during load
+        if (codes.length > 0) {
+          await saveCodesToFirestore();
+        }
       } catch (error) {
         console.error('Error loading customers:', error);
       }
@@ -611,14 +663,15 @@
         
         // Calculate actual amount based on breakdown logic
         const serviceCost = calculateProratedServiceCost(customer);
-        const lateFee = customer.pastDue > 0 ? 20 : 0; // $20 late fee
-        const subtotal = serviceCost + lateFee;
+        const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
+        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
+        const subtotal = serviceCost + pastDue + lateFee;
         
-        // Calculate code surcharges
+        // Calculate code surcharges (applied only to service cost, not subtotal)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
-            totalSurcharge += subtotal * (code.percentage / 100);
+            totalSurcharge += serviceCost * (code.percentage / 100);
           });
         }
         
@@ -632,25 +685,40 @@
               ${customer.accountNumber}
             </div>
           </td>
-          <td class="px-6 py-4 whitespace-nowrap text-center">
+          <td class="px-0 py-4 pr-0 -mr-4 whitespace-nowrap text-center max-w-[180px]">
             <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
                  ondblclick="editCustomerField('${customer.id}', 'name', '${customer.name}')" 
                  title="Double-click to edit">
               ${customer.name}
             </div>
-            <button 
-              onclick="showCustomerFullInfo('${customer.id}')" 
-              class="mt-2 text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs font-medium"
-            >
-              View Full Info
-            </button>
+            <div class="flex flex-col items-center gap-1 mt-2">
+              <button 
+                onclick="showCustomerFullInfo('${customer.id}')" 
+                class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs font-medium"
+              >
+                View Full Info
+              </button>
+              <button 
+                onclick="showCustomerDataProfile('${customer.id}')" 
+                class="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300 text-xs font-medium"
+              >
+                View Data Profile
+              </button>
+            </div>
           </td>
-          <td class="px-6 py-4 text-center">
+          <td class="px-0 py-4 pl-0 -ml-4 text-center max-w-[180px]">
             <div class="text-sm text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
-                 ondblclick="editCustomerField('${customer.id}', 'address', '${customer.address}')" 
+                 ondblclick="editCustomerField('${customer.id}', 'address', '${getCustomerDisplayAddress(customer)}')" 
                  title="Double-click to edit">
-              <div class="font-medium whitespace-nowrap">${customer.address.split(',')[0].trim()}</div>
-              <div class="text-slate-500 dark:text-slate-400 whitespace-nowrap">${customer.address.split(',').slice(1).join(',').trim()}</div>
+              ${(() => {
+                const displayAddress = getCustomerDisplayAddress(customer);
+                if (typeof displayAddress === 'string' && displayAddress.includes(',')) {
+                  return `<div class="font-medium whitespace-nowrap">${displayAddress.split(',')[0].trim()}</div>
+                  <div class="text-slate-500 dark:text-slate-400 whitespace-nowrap">${displayAddress.split(',').slice(1).join(',').trim()}</div>`;
+                } else {
+                  return `<div class="font-medium whitespace-nowrap">${displayAddress}</div>`;
+                }
+              })()}
             </div>
           </td>
           <td class="px-6 py-4 whitespace-nowrap text-center">
@@ -805,14 +873,15 @@
       if (customer) {
         // Calculate prorated service cost based on when customer was added
         const serviceCost = calculateProratedServiceCost(customer);
-        const lateFee = customer.pastDue > 0 ? 20 : 0;
-        const subtotal = serviceCost + lateFee;
+        const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
+        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
+        const subtotal = serviceCost + pastDue + lateFee;
         
-        // Calculate code surcharges
+        // Calculate code surcharges (applied only to service cost, not subtotal)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
-            totalSurcharge += subtotal * (code.percentage / 100);
+            totalSurcharge += serviceCost * (code.percentage / 100);
           });
         }
         
@@ -855,6 +924,11 @@
     // Calculate prorated service cost based on when customer was added
     function calculateProratedServiceCost(customer) {
       const baseServiceCost = 170;
+      
+      // Imported customers should not be prorated - always charge full amount
+      if (customer.importData) {
+        return baseServiceCost;
+      }
       
       // If customer was added this month, calculate proration
       const now = new Date();
@@ -914,21 +988,22 @@
       if (customer) {
         // Calculate prorated service cost based on when customer was added
         const serviceCost = calculateProratedServiceCost(customer);
-        const lateFee = customer.pastDue > 0 ? 20 : 0;
-        const subtotal = serviceCost + lateFee;
+        const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
+        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
+        const subtotal = serviceCost + pastDue + lateFee;
         
-        // Calculate code surcharges
+        // Calculate code surcharges (applied only to service cost, not subtotal)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
-            totalSurcharge += subtotal * (code.percentage / 100);
+            totalSurcharge += serviceCost * (code.percentage / 100);
           });
         }
         
         // Calculate factor adjustment (based on service cost only)
         const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
         const factorAdjustment = serviceCost * (factor - 1);
-        const totalAmount = serviceCost + lateFee + totalSurcharge + factorAdjustment;
+        const totalAmount = serviceCost + pastDue + lateFee + totalSurcharge + factorAdjustment;
         
         // Calculate due date as last day of current month
         const now = new Date();
@@ -1061,21 +1136,22 @@
       try {
         // Calculate all the amounts (same logic as showCustomerBillInfo)
         const serviceCost = calculateProratedServiceCost(customer);
-        const lateFee = customer.pastDue > 0 ? 20 : 0;
-        const subtotal = serviceCost + lateFee;
+        const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
+        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
+        const subtotal = serviceCost + pastDue + lateFee;
         
-        // Calculate code surcharges
+        // Calculate code surcharges (applied only to service cost, not subtotal)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
-            totalSurcharge += subtotal * (code.percentage / 100);
+            totalSurcharge += serviceCost * (code.percentage / 100);
           });
         }
         
         // Calculate factor adjustment (based on service cost only)
         const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
         const factorAdjustment = serviceCost * (factor - 1);
-        const totalAmount = serviceCost + lateFee + totalSurcharge + factorAdjustment;
+        const totalAmount = serviceCost + pastDue + lateFee + totalSurcharge + factorAdjustment;
         
         // Calculate dates
         const now = new Date();
@@ -3234,6 +3310,139 @@
       }
     };
 
+    // Delete all user data
+    window.deleteAllUserData = async function() {
+      const confirmMessage = 'Are you sure you want to delete ALL customer data? This action cannot be undone and will permanently delete all customers from the database.';
+      if (!confirm(confirmMessage)) {
+        return;
+      }
+      
+      // Double confirmation
+      const doubleConfirm = confirm('This will delete ALL customer data. Type OK to confirm, or Cancel to abort.');
+      if (!doubleConfirm) {
+        return;
+      }
+
+      try {
+        console.log('[Delete] Starting deletion of all customer data...');
+        
+        // Show progress modal
+        const deleteProgressModal = document.getElementById('deleteProgressModal');
+        const deleteProgress = document.getElementById('deleteProgress');
+        const deleteProgressText = document.getElementById('deleteProgressText');
+        const deleteProgressBar = document.getElementById('deleteProgressBar');
+        const deleteProgressStats = document.getElementById('deleteProgressStats');
+        
+        if (deleteProgressModal) {
+          deleteProgressModal.classList.remove('hidden');
+        }
+        if (deleteProgress) {
+          deleteProgress.classList.remove('hidden');
+        }
+        
+        const customersRef = collection(db, 'customers');
+        
+        // Get all customers from Firestore
+        const existingCustomers = await getDocs(customersRef);
+        const totalCustomers = existingCustomers.size;
+        const customerDocs = [];
+        existingCustomers.forEach(doc => {
+          customerDocs.push(doc);
+        });
+        
+        console.log('[Delete] Deleting', totalCustomers, 'customers from Firestore...');
+        
+        // Process deletions in batches with progress updates
+        const batchSize = 50;
+        let deletedCount = 0;
+        
+        for (let i = 0; i < customerDocs.length; i += batchSize) {
+          const batch = customerDocs.slice(i, Math.min(i + batchSize, customerDocs.length));
+          const batchPromises = batch.map(doc => deleteDoc(doc.ref));
+          
+          await Promise.all(batchPromises);
+          deletedCount += batch.length;
+          
+          // Update progress
+          const percent = Math.round((deletedCount / totalCustomers) * 100);
+          if (deleteProgressText) {
+            deleteProgressText.textContent = `${deletedCount} / ${totalCustomers}`;
+          }
+          if (deleteProgressBar) {
+            deleteProgressBar.style.width = percent + '%';
+          }
+          if (deleteProgressStats) {
+            deleteProgressStats.textContent = `Deleted: ${deletedCount} of ${totalCustomers} customers`;
+          }
+          
+          // Allow UI to update
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        
+        console.log('[Delete] All customers deleted from Firestore');
+        
+        // Update progress to 100%
+        if (deleteProgressText) {
+          deleteProgressText.textContent = `${totalCustomers} / ${totalCustomers}`;
+        }
+        if (deleteProgressBar) {
+          deleteProgressBar.style.width = '100%';
+        }
+        if (deleteProgressStats) {
+          deleteProgressStats.textContent = `Deleted: ${totalCustomers} of ${totalCustomers} customers`;
+        }
+        
+        // Clear local arrays
+        customers = [];
+        filteredCustomers = [];
+        
+        // Update all locations to be available
+        locations.forEach(location => {
+          location.currentResident = null;
+          location.status = 'available';
+          location.ownerFirstName = '';
+          location.ownerLastName = '';
+          location.ownerFullName = '';
+        });
+        filteredLocations = [...locations];
+        
+        // Save location changes
+        await saveLocationsToFirestore();
+        
+        // Reload data from Firestore to ensure UI is in sync
+        await loadCustomersFromFirestore();
+        
+        // Update displays
+        updateDashboard();
+        updateCustomerTable();
+        updateSettingsCustomerTable();
+        
+        // Hide progress modal
+        if (deleteProgressModal) {
+          deleteProgressModal.classList.add('hidden');
+        }
+        if (deleteProgress) {
+          deleteProgress.classList.add('hidden');
+        }
+        
+        alert('All customer data has been deleted successfully!');
+      } catch (error) {
+        console.error('[Delete] Error deleting all customer data:', error);
+        
+        // Hide progress modal on error
+        const deleteProgressModal = document.getElementById('deleteProgressModal');
+        const deleteProgress = document.getElementById('deleteProgress');
+        if (deleteProgressModal) {
+          deleteProgressModal.classList.add('hidden');
+        }
+        if (deleteProgress) {
+          deleteProgress.classList.add('hidden');
+        }
+        
+        alert('Error deleting customer data: ' + error.message);
+      }
+    };
+
     // Search customers
     window.searchCustomers = function() {
       const searchTerm = document.getElementById('customerSearch').value.toLowerCase();
@@ -3354,14 +3563,15 @@
         
         // Calculate actual amount based on breakdown logic
         const serviceCost = calculateProratedServiceCost(customer);
-        const lateFee = customer.pastDue > 0 ? 20 : 0; // $20 late fee
-        const subtotal = serviceCost + lateFee;
+        const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
+        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
+        const subtotal = serviceCost + pastDue + lateFee;
         
-        // Calculate code surcharges
+        // Calculate code surcharges (applied only to service cost, not subtotal)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
-            totalSurcharge += subtotal * (code.percentage / 100);
+            totalSurcharge += serviceCost * (code.percentage / 100);
           });
         }
         
@@ -3375,25 +3585,40 @@
               ${customer.accountNumber}
             </div>
           </td>
-          <td class="px-6 py-4 whitespace-nowrap text-center">
+          <td class="px-0 py-4 pr-0 -mr-4 whitespace-nowrap text-center max-w-[180px]">
             <div class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
                  ondblclick="editCustomerField('${customer.id}', 'name', '${customer.name}')" 
                  title="Double-click to edit">
               ${customer.name}
             </div>
-            <button 
-              onclick="showCustomerFullInfo('${customer.id}')" 
-              class="mt-2 text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs font-medium"
-            >
-              View Full Info
-            </button>
+            <div class="flex flex-col items-center gap-1 mt-2">
+              <button 
+                onclick="showCustomerFullInfo('${customer.id}')" 
+                class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs font-medium"
+              >
+                View Full Info
+              </button>
+              <button 
+                onclick="showCustomerDataProfile('${customer.id}')" 
+                class="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300 text-xs font-medium"
+              >
+                View Data Profile
+              </button>
+            </div>
           </td>
-          <td class="px-6 py-4 text-center">
+          <td class="px-0 py-4 pl-0 -ml-4 text-center max-w-[180px]">
             <div class="text-sm text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 p-2 rounded" 
-                 ondblclick="editCustomerField('${customer.id}', 'address', '${customer.address}')" 
+                 ondblclick="editCustomerField('${customer.id}', 'address', '${getCustomerDisplayAddress(customer)}')" 
                  title="Double-click to edit">
-              <div class="font-medium whitespace-nowrap">${customer.address.split(',')[0].trim()}</div>
-              <div class="text-slate-500 dark:text-slate-400 whitespace-nowrap">${customer.address.split(',').slice(1).join(',').trim()}</div>
+              ${(() => {
+                const displayAddress = getCustomerDisplayAddress(customer);
+                if (typeof displayAddress === 'string' && displayAddress.includes(',')) {
+                  return `<div class="font-medium whitespace-nowrap">${displayAddress.split(',')[0].trim()}</div>
+                  <div class="text-slate-500 dark:text-slate-400 whitespace-nowrap">${displayAddress.split(',').slice(1).join(',').trim()}</div>`;
+                } else {
+                  return `<div class="font-medium whitespace-nowrap">${displayAddress}</div>`;
+                }
+              })()}
             </div>
           </td>
           <td class="px-6 py-4 whitespace-nowrap text-center">
@@ -4181,6 +4406,744 @@
       document.getElementById('locationFileInput').value = '';
     };
 
+    // Show import customer data modal
+    window.showImportCustomerDataModal = function() {
+      console.log('showImportCustomerDataModal called');
+      try {
+        const modal = document.getElementById('importCustomerDataModal');
+        if (!modal) {
+          console.error('Import customer data modal not found');
+          alert('Error: Import modal not found. Please refresh the page.');
+          return;
+        }
+        console.log('Modal found, showing...');
+        modal.classList.remove('hidden');
+        // Add file input listener for preview
+        const fileInput = document.getElementById('customerDataFileInput');
+        if (fileInput) {
+          fileInput.onchange = function() {
+            previewExcelFile(this.files[0]);
+          };
+        } else {
+          console.warn('File input not found');
+        }
+      } catch (error) {
+        console.error('Error showing import customer data modal:', error);
+        alert('Error opening import dialog: ' + error.message);
+      }
+    };
+
+    // Hide import customer data modal
+    window.hideImportCustomerDataModal = function() {
+      document.getElementById('importCustomerDataModal').classList.add('hidden');
+      document.getElementById('customerDataFileInput').value = '';
+      document.getElementById('importPreview').classList.add('hidden');
+    };
+
+    // Preview Excel file
+    function previewExcelFile(file) {
+      if (!file) return;
+      
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+          
+          if (jsonData.length === 0) {
+            alert('Excel file is empty');
+            return;
+          }
+          
+          // Show preview
+          const previewDiv = document.getElementById('importPreview');
+          const previewTable = document.getElementById('previewTable');
+          const thead = previewTable.querySelector('thead');
+          const tbody = previewTable.querySelector('tbody');
+          
+          // Clear previous content
+          thead.innerHTML = '';
+          tbody.innerHTML = '';
+          
+          // Add headers
+          const headerRow = document.createElement('tr');
+          if (jsonData[0]) {
+            jsonData[0].forEach(header => {
+              const th = document.createElement('th');
+              th.className = 'px-4 py-2 text-left border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300';
+              th.textContent = header || '';
+              headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+          }
+          
+          // Add first 5 data rows
+          const previewRows = jsonData.slice(1, 6);
+          previewRows.forEach(row => {
+            const tr = document.createElement('tr');
+            jsonData[0].forEach((_, colIndex) => {
+              const td = document.createElement('td');
+              td.className = 'px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400';
+              td.textContent = row[colIndex] || '';
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+          });
+          
+          previewDiv.classList.remove('hidden');
+        } catch (error) {
+          console.error('Error previewing file:', error);
+          alert('Error reading Excel file: ' + error.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // Import customer data from Excel
+    // Helper function to combine PremiseAddress, PremiseStreet, and PremiseApt
+    // Example: PremiseAddress="20120" + PremiseStreet="ANZA DR" = "20120 ANZA DR"
+    function combinePropertyAddress(rowData) {
+      const premiseAddress = String(rowData['PremiseAddress'] || '').trim();
+      const premiseStreet = String(rowData['PremiseStreet'] || '').trim();
+      const premiseApt = String(rowData['PremiseApt'] || '').trim();
+      
+      // Build address parts array
+      const addressParts = [];
+      
+      // Add PremiseAddress if it exists
+      if (premiseAddress) {
+        addressParts.push(premiseAddress);
+      }
+      
+      // Add PremiseStreet if it exists
+      if (premiseStreet) {
+        addressParts.push(premiseStreet);
+      }
+      
+      // Combine the parts
+      let address = addressParts.join(' ').trim();
+      
+      // Add apartment number if it exists (only if not blank)
+      if (premiseApt) {
+        address = `${address} ${premiseApt}`.trim();
+      }
+      
+      return address || '';
+    }
+
+    // Helper function to get the display address for a customer
+    // Uses importData if available, otherwise falls back to customer.address
+    function getCustomerDisplayAddress(customer) {
+      // If customer has importData, use combinePropertyAddress to build the address
+      if (customer.importData) {
+        const combinedAddress = combinePropertyAddress(customer.importData);
+        if (combinedAddress) {
+          return combinedAddress;
+        }
+      }
+      
+      // Fall back to customer.address if no importData or combined address is empty
+      return customer.address || 'N/A';
+    }
+
+    // Helper function to parse tax codes from "tax codes per person" field
+    function parseTaxCodesPerPerson(taxCodesStr) {
+      if (!taxCodesStr || typeof taxCodesStr !== 'string') {
+        return [];
+      }
+      // Split by comma and trim whitespace
+      return taxCodesStr.split(',').map(code => code.trim()).filter(code => code.length > 0);
+    }
+
+    // Helper function to ensure a code exists in the codes array, creating it if it doesn't
+    function ensureCodeExists(codeName) {
+      if (!codeName || typeof codeName !== 'string') {
+        return null;
+      }
+      
+      // Check if code already exists (case-insensitive)
+      let existingCode = codes.find(c => c.name.toLowerCase() === codeName.toLowerCase());
+      if (existingCode) {
+        return existingCode;
+      }
+      
+      // Create new code with just the name (percentage, description, requirements can be added later)
+      // Use timestamp + random number for unique ID
+      const uniqueId = `CODE-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const newCode = {
+        id: uniqueId,
+        name: codeName,
+        percentage: 0, // Default to 0, can be updated later
+        description: '', // Empty, can be added later
+        requirements: null // No requirements, can be added later
+      };
+      
+      codes.push(newCode);
+      return newCode;
+    }
+
+    // Helper function to populate customer codes from importData
+    function populateCustomerCodesFromImportData(customer) {
+      if (!customer.importData) {
+        return;
+      }
+      
+      // Try various possible column names for "tax codes per person"
+      const taxCodesStr = customer.importData['Tax Codes Per Person'] || 
+                         customer.importData['Tax Codes per Person'] ||
+                         customer.importData['Tax Codes'] ||
+                         customer.importData['Codes Per Person'] ||
+                         customer.importData['Codes per Person'] ||
+                         customer.importData['Codes'] ||
+                         '';
+      
+      if (!taxCodesStr) {
+        return;
+      }
+      
+      // Parse the tax codes
+      const codeNames = parseTaxCodesPerPerson(taxCodesStr);
+      
+      // Ensure all codes exist and populate customer.codes
+      customer.codes = codeNames.map(codeName => {
+        const code = ensureCodeExists(codeName);
+        if (code) {
+          return {
+            id: code.id,
+            name: code.name,
+            percentage: code.percentage
+          };
+        }
+        return null;
+      }).filter(code => code !== null);
+    }
+
+    window.importCustomerData = async function() {
+      console.log('importCustomerData called');
+      const fileInput = document.getElementById('customerDataFileInput');
+      const file = fileInput.files[0];
+      
+      if (!file) {
+        alert('Please select an Excel file');
+        return;
+      }
+      
+      console.log('File selected:', file.name);
+      
+      // Show loading indicator
+      const importButton = document.querySelector('button[onclick*="importCustomerData"]');
+      const originalText = importButton?.textContent || 'Import Customer Data';
+      if (importButton) {
+        importButton.disabled = true;
+        importButton.textContent = 'Importing...';
+      }
+      
+      const reader = new FileReader();
+      
+      reader.onerror = function(error) {
+        console.error('FileReader error:', error);
+        alert('Error reading file. Please try again.');
+        if (importButton) {
+          importButton.disabled = false;
+          importButton.textContent = originalText;
+        }
+      };
+      
+      reader.onload = async function(e) {
+        try {
+          console.log('File read successfully, parsing...');
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+          
+          console.log('Excel data rows:', jsonData.length);
+          
+          if (jsonData.length < 2) {
+            alert('Excel file must have at least a header row and one data row');
+            if (importButton) {
+              importButton.disabled = false;
+              importButton.textContent = originalText;
+            }
+            return;
+          }
+          
+          // Get headers (first row)
+          const headers = jsonData[0].map(h => String(h || '').trim());
+          console.log('Headers found:', headers);
+          
+          // Find account number column index (look for variations)
+          const accountColIndex = headers.findIndex(h => {
+            const header = String(h || '').toLowerCase().trim();
+            return /account/i.test(header) || 
+                   /acct/i.test(header) || 
+                   /^id$/i.test(header) || 
+                   /customer.*id/i.test(header) ||
+                   /account.*number/i.test(header) ||
+                   /account.*num/i.test(header);
+          });
+          
+          console.log('Account column index:', accountColIndex);
+          
+          if (accountColIndex === -1) {
+            alert('Could not find account number column. Please ensure your Excel file has a column for account numbers.');
+            if (importButton) {
+              importButton.disabled = false;
+              importButton.textContent = originalText;
+            }
+            return;
+          }
+          
+          // Show progress indicator
+          const progressDiv = document.getElementById('importProgress');
+          const progressText = document.getElementById('progressText');
+          const progressBar = document.getElementById('progressBar');
+          const progressStats = document.getElementById('progressStats');
+          const previewDiv = document.getElementById('importPreview');
+          
+          // Upload progress elements
+          const uploadProgressDiv = document.getElementById('uploadProgress');
+          const uploadProgressText = document.getElementById('uploadProgressText');
+          const uploadProgressBar = document.getElementById('uploadProgressBar');
+          const uploadProgressStats = document.getElementById('uploadProgressStats');
+          
+          if (previewDiv) previewDiv.classList.add('hidden');
+          if (progressDiv) progressDiv.classList.remove('hidden');
+          if (uploadProgressDiv) uploadProgressDiv.classList.add('hidden');
+          const locationsUploadProgressDiv = document.getElementById('locationsUploadProgress');
+          if (locationsUploadProgressDiv) locationsUploadProgressDiv.classList.add('hidden');
+          
+          const totalRows = jsonData.length - 1; // Exclude header row
+          
+          // Process each row
+          let imported = 0;
+          let updated = 0;
+          let errors = 0;
+          
+          // Process rows in batches to allow UI updates
+          const processBatch = async (startIndex, batchSize = 50) => {
+            const endIndex = Math.min(startIndex + batchSize, jsonData.length);
+            
+            for (let i = startIndex; i < endIndex; i++) {
+              const row = jsonData[i];
+              if (!row || row.length === 0) continue;
+              
+              try {
+                // Create object with all Excel data
+                const rowData = {};
+                headers.forEach((header, index) => {
+                  rowData[header] = row[index] || '';
+                });
+                
+                // Get account number
+                const accountNumber = String(row[accountColIndex] || '').trim();
+                if (!accountNumber) {
+                  errors++;
+                  continue;
+                }
+                
+                // Find existing customer or create new
+                let customer = customers.find(c => 
+                  c.accountNumber === accountNumber || c.id === accountNumber
+                );
+                
+                // Build full name from FirstName/LastName or Name/Full Name
+                let fullName = '';
+                if (rowData['FirstName'] && rowData['LastName']) {
+                  fullName = `${rowData['FirstName']} ${rowData['LastName']}`.trim();
+                } else if (rowData['Name']) {
+                  fullName = rowData['Name'];
+                } else if (rowData['Full Name']) {
+                  fullName = rowData['Full Name'];
+                }
+                
+                // Get phone number from various possible columns
+                const phone = rowData['HomePhone'] || rowData['WorkPhone'] || rowData['Phone'] || rowData['Phone Number'] || '';
+                
+                // Get address by combining PremiseAddress, PremiseStreet, and PremiseApt
+                const address = combinePropertyAddress(rowData) || rowData['Address'] || rowData['Service Address'] || '';
+                
+                // Get amounts
+                const totalDue = parseFloat(rowData['TotalDue'] || rowData['CurrDue'] || rowData['Current Bill'] || rowData['Amount Due'] || 0) || 0;
+                // Handle PrevBal first (actual amount), then Past Due (amount), then PastDue (flag - ignore if it's just 1/0)
+                // If PrevBal is empty/blank, treat as 0. Only use PastDue flag if it's actually a dollar amount
+                let pastDue = 0;
+                const prevBal = rowData['PrevBal'];
+                const pastDueAmount = rowData['Past Due'];
+                const pastDueFlag = rowData['PastDue'];
+                
+                // Prioritize PrevBal (actual dollar amount)
+                if (prevBal !== undefined && prevBal !== null && prevBal !== '') {
+                  const parsed = parseFloat(prevBal);
+                  if (!isNaN(parsed)) {
+                    pastDue = parsed;
+                  }
+                } else if (pastDueAmount !== undefined && pastDueAmount !== null && pastDueAmount !== '') {
+                  const parsed = parseFloat(pastDueAmount);
+                  if (!isNaN(parsed)) {
+                    pastDue = parsed;
+                  }
+                } else if (pastDueFlag !== undefined && pastDueFlag !== null && pastDueFlag !== '') {
+                  // Only use PastDue flag if it looks like a dollar amount (not just 1 or 0)
+                  const parsed = parseFloat(pastDueFlag);
+                  if (!isNaN(parsed) && parsed > 1) {
+                    pastDue = parsed;
+                  }
+                  // If it's 1 or 0, treat as flag and ignore (pastDue stays 0)
+                }
+                
+                if (customer) {
+                  // Update existing customer - preserve existing fields, add/update importData
+                  customer.importData = rowData;
+                  // Update standard fields if they exist in Excel
+                  if (fullName) {
+                    customer.name = fullName;
+                  }
+                  if (rowData['Email']) {
+                    customer.email = rowData['Email'] || customer.email;
+                  }
+                  if (phone) {
+                    customer.phone = phone;
+                  }
+                  // Always update address with combined address from importData
+                  if (address) {
+                    customer.address = address;
+                  }
+                  if (totalDue > 0) {
+                    customer.currentBill = totalDue;
+                  }
+                  // Always update pastDue (can be 0 to reset existing value)
+                  customer.pastDue = pastDue;
+                  // Populate codes from "tax codes per person" field
+                  populateCustomerCodesFromImportData(customer);
+                  updated++;
+                } else {
+                  // Create new customer
+                  const customerId = accountNumber.startsWith('CUS-') ? accountNumber : 'CUS-' + accountNumber;
+                  customer = {
+                    id: customerId,
+                    accountNumber: customerId,
+                    name: fullName,
+                    email: rowData['Email'] || '',
+                    phone: phone,
+                    address: address,
+                    currentBill: totalDue,
+                    pastDue: pastDue,
+                    lastPayment: rowData['Last Payment'] || 'Never',
+                    paymentHistory: [],
+                    needsPasswordChange: true,
+                    createdDate: new Date().toISOString(),
+                    entityType: rowData['Entity Type'] || rowData['Type'] || '',
+                    ssn: rowData['SSN'] || rowData['Social Security Number'] || '',
+                    idType: rowData['ID Type'] || '',
+                    idNumber: rowData['ID Number'] || '',
+                    secondaryContactName: rowData['Secondary Contact Name'] || '',
+                    secondaryContactPhone: rowData['Secondary Contact Number'] || '',
+                    mailingAddress: rowData['Mailing Address'] || '',
+                    mailingStreet: rowData['Mailing Street'] || '',
+                    mailingCity: rowData['Mailing City'] || '',
+                    mailingState: rowData['Mailing State'] || '',
+                    mailingZip: rowData['Mailing ZIP'] || rowData['Mailing Zip'] || '',
+                    codes: [],
+                    factor: parseFloat(rowData['Factor'] || 1) || 1,
+                    importData: rowData // Store all Excel data
+                  };
+                  
+                  // Populate codes from "tax codes per person" field
+                  populateCustomerCodesFromImportData(customer);
+                  
+                  updateCustomerPaymentStatus(customer);
+                  customers.push(customer);
+                  imported++;
+                }
+                
+                // Create or update location from customer data
+                if (address) {
+                  // Get Premise ID (handle formats like "P3000500" or just "3000500")
+                  let premiseId = rowData['Premise'] || rowData['PremiseId'] || rowData['Premise ID'] || '';
+                  if (premiseId) {
+                    premiseId = String(premiseId).trim();
+                    // Remove "P" prefix if present
+                    if (premiseId.startsWith('P') || premiseId.startsWith('p')) {
+                      premiseId = premiseId.substring(1);
+                    }
+                  }
+                  
+                  // Only create location if we have a premise ID
+                  if (premiseId) {
+                    // Check if location already exists by premiseId
+                    let existingLocation = locations.find(l => l.premiseId === premiseId);
+                    
+                    // Parse address into components (try to extract city, state, zip)
+                    // Format is typically: "Street Address, City, State ZIP"
+                    let street = address;
+                    let city = '';
+                    let state = '';
+                    let zip = '';
+                    
+                    // Try to parse address format: "123 Street, City, State ZIP"
+                    const addressMatch = address.match(/^(.+?),\s*(.+?),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$/i);
+                    if (addressMatch) {
+                      street = addressMatch[1].trim();
+                      city = addressMatch[2].trim();
+                      state = addressMatch[3].trim().toUpperCase();
+                      zip = addressMatch[4].trim();
+                    } else {
+                      // Try simpler format: "Street, City, State ZIP"
+                      const simpleMatch = address.match(/^(.+?),\s*(.+?),\s*(.+)$/);
+                      if (simpleMatch) {
+                        street = simpleMatch[1].trim();
+                        const stateZip = simpleMatch[3].trim();
+                        const stateZipMatch = stateZip.match(/^([A-Z]{2})\s+(.+)$/i);
+                        if (stateZipMatch) {
+                          city = simpleMatch[2].trim();
+                          state = stateZipMatch[1].trim().toUpperCase();
+                          zip = stateZipMatch[2].trim();
+                        } else {
+                          // Can't parse, use full address as street
+                          street = address;
+                        }
+                      }
+                    }
+                    
+                    // Get owner name from FirstName/LastName
+                    const ownerFirstName = rowData['FirstName'] || '';
+                    const ownerLastName = rowData['LastName'] || '';
+                    const ownerFullName = fullName || `${ownerFirstName} ${ownerLastName}`.trim() || 'No Owner';
+                    
+                    if (existingLocation) {
+                      // Update existing location
+                      existingLocation.address = address;
+                      existingLocation.street = street;
+                      existingLocation.city = city;
+                      existingLocation.state = state;
+                      existingLocation.zip = zip;
+                      existingLocation.ownerFirstName = ownerFirstName;
+                      existingLocation.ownerLastName = ownerLastName;
+                      existingLocation.ownerFullName = ownerFullName;
+                      // Don't change status if it's already set, but set to "active" if it's empty or "inactive"
+                      if (!existingLocation.status || existingLocation.status === 'inactive') {
+                        existingLocation.status = 'active';
+                      }
+                    } else {
+                      // Create new location
+                      const newLocation = {
+                        id: `LOC-${String(locations.length + 1).padStart(3, '0')}`,
+                        address: address,
+                        street: street,
+                        city: city,
+                        state: state,
+                        zip: zip,
+                        premiseId: premiseId,
+                        ownerFirstName: ownerFirstName,
+                        ownerLastName: ownerLastName,
+                        ownerFullName: ownerFullName,
+                        currentResident: null,
+                        status: 'active'
+                      };
+                      locations.push(newLocation);
+                    }
+                  }
+                }
+              } catch (error) {
+                console.error(`Error processing row ${i + 1}:`, error);
+                errors++;
+              }
+              
+              // Update progress every row (i is the current index, so processed = i - 1 to account for header)
+              const processed = i; // i is the current row index (1-based for data rows)
+              const percent = Math.min(Math.round((processed / totalRows) * 100), 100);
+              
+              if (progressText) {
+                progressText.textContent = `${processed} / ${totalRows}`;
+              }
+              if (progressBar) {
+                progressBar.style.width = percent + '%';
+              }
+              if (progressStats) {
+                progressStats.textContent = `Imported: ${imported} | Updated: ${updated} | Errors: ${errors}`;
+              }
+            }
+            
+            // If there are more rows to process, continue with next batch
+            if (endIndex < jsonData.length) {
+              // Use setTimeout to allow UI to update
+              await new Promise(resolve => setTimeout(resolve, 0));
+              return processBatch(endIndex, batchSize);
+            }
+            
+            // Final progress update to ensure 100%
+            if (progressText) {
+              progressText.textContent = `${totalRows} / ${totalRows}`;
+            }
+            if (progressBar) {
+              progressBar.style.width = '100%';
+            }
+          };
+          
+          // Start processing batches
+          console.log('[Import] Starting batch processing for', totalRows, 'rows...');
+          await processBatch(1, 50);
+          console.log('[Import] Batch processing complete');
+          
+          // Update filtered customers first to get accurate count
+          console.log('[Import] Updating filtered customers...');
+          filteredCustomers = [...customers];
+          
+          // Show upload progress bar with initial values
+          if (uploadProgressDiv) {
+            uploadProgressDiv.classList.remove('hidden');
+          }
+          const totalCustomers = customers.length;
+          if (uploadProgressText) {
+            uploadProgressText.textContent = `0 / ${totalCustomers}`;
+          }
+          if (uploadProgressBar) {
+            uploadProgressBar.style.width = '0%';
+          }
+          if (uploadProgressStats) {
+            uploadProgressStats.textContent = `Uploading... (0 of ${totalCustomers} customers)`;
+          }
+          
+          // Create progress callback for Firestore upload
+          const uploadProgressCallback = (saved, total, percent) => {
+            if (uploadProgressText) {
+              uploadProgressText.textContent = `${saved} / ${total}`;
+            }
+            if (uploadProgressBar) {
+              uploadProgressBar.style.width = percent + '%';
+            }
+            if (uploadProgressStats) {
+              uploadProgressStats.textContent = `Uploaded: ${saved} of ${total} customers`;
+            }
+          };
+          
+          console.log('[Import] Saving to Firestore...');
+          await saveCustomersToFirestore(uploadProgressCallback);
+          console.log('[Import] Firestore save complete');
+          
+          // Save codes to Firestore if any new codes were added
+          if (codes.length > 0) {
+            console.log('[Import] Saving codes to Firestore...');
+            await saveCodesToFirestore();
+            console.log('[Import] Codes saved to Firestore');
+          }
+          
+          // Save locations to Firestore if any locations were created/updated
+          if (locations.length > 0) {
+            console.log('[Import] Saving locations to Firestore...');
+            
+            // Show locations upload progress
+            const locationsProgressDiv = document.getElementById('locationsUploadProgress');
+            const locationsUploadProgressText = document.getElementById('locationsUploadProgressText');
+            const locationsUploadProgressBar = document.getElementById('locationsUploadProgressBar');
+            const locationsUploadProgressStats = document.getElementById('locationsUploadProgressStats');
+            
+            if (locationsProgressDiv) {
+              locationsProgressDiv.classList.remove('hidden');
+            }
+            
+            const totalLocations = locations.length;
+            if (locationsUploadProgressText) {
+              locationsUploadProgressText.textContent = `0 / ${totalLocations}`;
+            }
+            if (locationsUploadProgressBar) {
+              locationsUploadProgressBar.style.width = '0%';
+            }
+            if (locationsUploadProgressStats) {
+              locationsUploadProgressStats.textContent = `Uploading... (0 of ${totalLocations} locations)`;
+            }
+            
+            // Create progress callback for locations upload
+            const locationsUploadProgressCallback = (saved, total, percent) => {
+              if (locationsUploadProgressText) {
+                locationsUploadProgressText.textContent = `${saved} / ${total}`;
+              }
+              if (locationsUploadProgressBar) {
+                locationsUploadProgressBar.style.width = percent + '%';
+              }
+              if (locationsUploadProgressStats) {
+                locationsUploadProgressStats.textContent = `Uploaded: ${saved} of ${total} locations`;
+              }
+            };
+            
+            filteredLocations = [...locations];
+            updateLocationsTable();
+            updateSettingsLocationsTable();
+            await saveLocationsToFirestore(locationsUploadProgressCallback);
+            console.log('[Import] Locations saved to Firestore');
+            
+            // Update progress to 100%
+            if (locationsUploadProgressText) {
+              locationsUploadProgressText.textContent = `${totalLocations} / ${totalLocations}`;
+            }
+            if (locationsUploadProgressBar) {
+              locationsUploadProgressBar.style.width = '100%';
+            }
+            if (locationsUploadProgressStats) {
+              locationsUploadProgressStats.textContent = `Uploaded: ${totalLocations} of ${totalLocations} locations`;
+            }
+          }
+          
+          console.log('[Import] Updating UI...');
+          updateCustomerTable();
+          updateSettingsCustomerTable();
+          updateCodesTable();
+          updateDashboard();
+          
+          // Hide progress indicators
+          if (progressDiv) progressDiv.classList.add('hidden');
+          if (uploadProgressDiv) uploadProgressDiv.classList.add('hidden');
+          const locationsUploadProgressDivHide = document.getElementById('locationsUploadProgress');
+          if (locationsUploadProgressDivHide) locationsUploadProgressDivHide.classList.add('hidden');
+          
+          // Show success message
+          const totalProcessed = imported + updated;
+          console.log(`[Import] Import completed: ${imported} imported, ${updated} updated, ${errors} errors`);
+          
+          // Re-enable button
+          if (importButton) {
+            importButton.disabled = false;
+            importButton.textContent = originalText;
+          }
+          
+          // Close modal first
+          hideImportCustomerDataModal();
+          
+          // Show completion alert
+          alert('Import is all done');
+        } catch (error) {
+          console.error('Error importing file:', error);
+          alert('Error importing Excel file: ' + error.message);
+          
+          // Hide progress indicators on error
+          const progressDiv = document.getElementById('importProgress');
+          const uploadProgressDiv = document.getElementById('uploadProgress');
+          if (progressDiv) progressDiv.classList.add('hidden');
+          if (uploadProgressDiv) uploadProgressDiv.classList.add('hidden');
+          
+          // Re-enable button on error
+          if (importButton) {
+            importButton.disabled = false;
+            importButton.textContent = originalText;
+          }
+        }
+      };
+      
+      try {
+        reader.readAsArrayBuffer(file);
+      } catch (error) {
+        console.error('Error starting file read:', error);
+        alert('Error reading file: ' + error.message);
+        if (importButton) {
+          importButton.disabled = false;
+          importButton.textContent = originalText;
+        }
+      }
+    };
+
     // Show payment details modal
     window.showPaymentDetailsModal = function() {
       const selectedCustomerId = document.getElementById('paymentCustomerSelect').value;
@@ -4417,17 +5380,18 @@
       if (!customer) return;
 
       const serviceCost = calculateProratedServiceCost(customer);
-      const lateFee = customer.pastDue > 0 ? 20 : 0; // $20 late fee
-      const subtotal = serviceCost + lateFee;
+      const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
+      const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
+      const subtotal = serviceCost + pastDue + lateFee;
 
-      // Calculate code surcharges (based on subtotal)
+      // Calculate code surcharges (applied only to service cost, not subtotal)
       let totalSurcharge = 0;
       const codesContainer = document.getElementById('amountDetailsCodesContainer');
       codesContainer.innerHTML = '';
       
       if (customer.codes && customer.codes.length > 0) {
         customer.codes.forEach(code => {
-          const surchargeAmount = subtotal * (code.percentage / 100);
+          const surchargeAmount = serviceCost * (code.percentage / 100);
           totalSurcharge += surchargeAmount;
           
           const codeRow = document.createElement('div');
@@ -4443,7 +5407,7 @@
       // Calculate factor adjustment (based on service cost only)
       const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
       const factorAdjustment = serviceCost * (factor - 1);
-      const total = serviceCost + lateFee + totalSurcharge + factorAdjustment;
+      const total = serviceCost + pastDue + lateFee + totalSurcharge + factorAdjustment;
 
       // Calculate due date as last day of current month
       const now = new Date();
@@ -4482,6 +5446,7 @@
 
       document.getElementById('amountDetailsCustomer').textContent = customer.name;
       document.getElementById('amountDetailsService').textContent = `$${serviceCost.toFixed(2)}`;
+      document.getElementById('amountDetailsPastDue').textContent = `$${pastDue.toFixed(2)}`;
       document.getElementById('amountDetailsLateFee').textContent = `$${lateFee.toFixed(2)}`;
       document.getElementById('amountDetailsTotal').textContent = `$${total.toFixed(2)}`;
       document.getElementById('amountDetailsDueDate').textContent = dueDateStr;
@@ -4647,6 +5612,65 @@
     // Hide customer full info modal
     window.hideCustomerFullInfo = function() {
       document.getElementById('customerFullInfoModal').classList.add('hidden');
+    };
+
+    // Show customer data profile modal (Excel preview)
+    window.showCustomerDataProfile = function(customerId) {
+      const customer = customers.find(c => c.id === customerId);
+      if (!customer) {
+        alert('Customer not found');
+        return;
+      }
+
+      // Check if customer has importData
+      if (!customer.importData) {
+        alert('No imported data available for this customer. Please import customer data first.');
+        return;
+      }
+
+      const modalContent = document.getElementById('customerDataProfileContent');
+      const headers = Object.keys(customer.importData);
+      
+      // Build Excel-like table
+      let tableHTML = `
+        <div class="overflow-x-auto border border-slate-300 dark:border-slate-600 rounded-lg">
+          <table class="min-w-full text-sm border-collapse">
+            <thead>
+              <tr class="bg-slate-100 dark:bg-slate-700">
+      `;
+      
+      // Add header row
+      headers.forEach(header => {
+        tableHTML += `<th class="px-4 py-2 text-left border border-slate-300 dark:border-slate-600 font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap">${header || ''}</th>`;
+      });
+      
+      tableHTML += `
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="bg-white dark:bg-slate-800">
+      `;
+      
+      // Add data row
+      headers.forEach(header => {
+        const value = customer.importData[header];
+        tableHTML += `<td class="px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400">${value || ''}</td>`;
+      });
+      
+      tableHTML += `
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      `;
+      
+      modalContent.innerHTML = tableHTML;
+      document.getElementById('customerDataProfileModal').classList.remove('hidden');
+    };
+
+    // Hide customer data profile modal
+    window.hideCustomerDataProfile = function() {
+      document.getElementById('customerDataProfileModal').classList.add('hidden');
     };
 
     // Show payment modal
@@ -5569,12 +6593,26 @@
           <div id="settingsAccountsContent">
             <div class="flex justify-between items-center mb-6">
               <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">Customer Accounts</h4>
-              <button 
-                onclick="showAddCustomerModal()" 
-                class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                Add New Customer
-              </button>
+              <div class="flex flex-col gap-2">
+                <button 
+                  onclick="showAddCustomerModal()" 
+                  class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  Add New Customer
+                </button>
+                <button 
+                  onclick="showImportCustomerDataModal()" 
+                  class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm"
+                >
+                  Import Customer Data
+                </button>
+                <button 
+                  onclick="deleteAllUserData()" 
+                  class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors text-sm"
+                >
+                  Delete User Data
+                </button>
+              </div>
             </div>
 
             <!-- Search and Filter -->
@@ -5606,8 +6644,8 @@
                 <thead class="bg-slate-50 dark:bg-slate-700">
                   <tr>
                     <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Account</th>
-                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Customer</th>
-                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
+                    <th class="px-0 py-3 pr-0 -mr-4 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider max-w-[180px]">Customer</th>
+                    <th class="px-0 py-3 pl-0 -ml-4 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider max-w-[180px]">Property</th>
                     <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
                     <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Due</th>
                     <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Codes</th>
@@ -5831,12 +6869,26 @@
       <div id="accountsContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
         <div class="flex justify-between items-center mb-6">
           <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Customer Accounts</h2>
-          <button 
-            onclick="showAddCustomerModal()" 
-            class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            Add New Customer
-          </button>
+          <div class="flex flex-col gap-2">
+            <button 
+              onclick="showAddCustomerModal()" 
+              class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Add New Customer
+            </button>
+            <button 
+              onclick="showImportCustomerDataModal()" 
+              class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm"
+            >
+              Import Customer Data
+            </button>
+            <button 
+              onclick="deleteAllUserData()" 
+              class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors text-sm"
+            >
+              Delete User Data
+            </button>
+          </div>
         </div>
 
         <!-- Search and Filter -->
@@ -5868,8 +6920,8 @@
             <thead class="bg-slate-50 dark:bg-slate-700">
               <tr>
                 <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Account</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Customer</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
+                <th class="px-0 py-3 pr-0 -mr-2 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider max-w-[180px]">Customer</th>
+                <th class="px-0 py-3 pl-0 -ml-2 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider max-w-[180px]">Property</th>
                 <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
                 <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Due</th>
                 <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Due Date</th>
@@ -5949,7 +7001,7 @@
 
     <!-- Add Customer Modal -->
     <div id="addCustomerModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
         <div class="flex justify-between items-center mb-6">
           <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add New Customer</h3>
           <button 
@@ -6522,6 +7574,10 @@
               <span class="font-medium" id="amountDetailsService">$150.00</span>
             </div>
             <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
+              <span class="text-slate-600 dark:text-slate-400">Past Due</span>
+              <span class="font-medium" id="amountDetailsPastDue">$0.00</span>
+            </div>
+            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
               <span class="text-slate-600 dark:text-slate-400">Late Fee</span>
               <span class="font-medium" id="amountDetailsLateFee">$0.00</span>
             </div>
@@ -6655,6 +7711,138 @@
               class="flex-1 bg-green-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-green-700 transition-colors duration-200"
             >
               Import Locations
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Import Customer Data Modal -->
+    <div id="importCustomerDataModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Import Customer Data</h3>
+          <button 
+            onclick="hideImportCustomerDataModal()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Excel File (ImportData.xlsx)</label>
+            <input 
+              id="customerDataFileInput" 
+              type="file" 
+              accept=".xlsx,.xls"
+              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          
+          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
+            <p class="text-sm text-blue-800 dark:text-blue-200">
+              <strong>Note:</strong> All data from the Excel file will be imported and saved to Firebase. The first row should contain column headers. The system will match customers by account number if they already exist, or create new ones.
+            </p>
+          </div>
+
+          <div id="importPreview" class="hidden">
+            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Preview (first 5 rows)</h4>
+            <div class="overflow-x-auto border border-slate-300 dark:border-slate-600 rounded-lg">
+              <table id="previewTable" class="min-w-full text-sm">
+                <thead class="bg-slate-100 dark:bg-slate-700">
+                  <!-- Headers will be populated by JavaScript -->
+                </thead>
+                <tbody class="bg-white dark:bg-slate-800">
+                  <!-- Rows will be populated by JavaScript -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Import Progress Indicator -->
+          <div id="importProgress" class="hidden">
+            <div class="bg-blue-50 dark:bg-blue-900/20 p-6 rounded-xl border-2 border-blue-500 mb-4">
+              <div class="flex items-center justify-between mb-4">
+                <h4 class="text-lg font-semibold text-blue-800 dark:text-blue-200">Importing Customer Data...</h4>
+                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+              </div>
+              <div class="space-y-2">
+                <div class="flex justify-between text-sm text-blue-700 dark:text-blue-300">
+                  <span>Progress:</span>
+                  <span id="progressText" class="font-semibold">0 / 0</span>
+                </div>
+                <div class="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-3">
+                  <div id="progressBar" class="bg-blue-600 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+                <div class="text-xs text-blue-600 dark:text-blue-400 mt-2">
+                  <span id="progressStats">Processing...</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Firestore Upload Progress Indicator -->
+            <div id="uploadProgress" class="hidden">
+              <div class="bg-green-50 dark:bg-green-900/20 p-6 rounded-xl border-2 border-green-500 mb-4">
+                <div class="flex items-center justify-between mb-4">
+                  <h4 class="text-lg font-semibold text-green-800 dark:text-green-200">Uploading customers to database</h4>
+                  <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-green-600"></div>
+                </div>
+                <div class="space-y-2">
+                  <div class="flex justify-between text-sm text-green-700 dark:text-green-300">
+                    <span>Progress:</span>
+                    <span id="uploadProgressText" class="font-semibold">0 / 0</span>
+                  </div>
+                  <div class="w-full bg-green-200 dark:bg-green-800 rounded-full h-3">
+                    <div id="uploadProgressBar" class="bg-green-600 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
+                  </div>
+                  <div class="text-xs text-green-600 dark:text-green-400 mt-2">
+                    <span id="uploadProgressStats">Uploading...</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Locations Upload Progress Indicator -->
+            <div id="locationsUploadProgress" class="hidden">
+              <div class="bg-purple-50 dark:bg-purple-900/20 p-6 rounded-xl border-2 border-purple-500">
+                <div class="flex items-center justify-between mb-4">
+                  <h4 class="text-lg font-semibold text-purple-800 dark:text-purple-200">Uploading locations to database</h4>
+                  <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-600"></div>
+                </div>
+                <div class="space-y-2">
+                  <div class="flex justify-between text-sm text-purple-700 dark:text-purple-300">
+                    <span>Progress:</span>
+                    <span id="locationsUploadProgressText" class="font-semibold">0 / 0</span>
+                  </div>
+                  <div class="w-full bg-purple-200 dark:bg-purple-800 rounded-full h-3">
+                    <div id="locationsUploadProgressBar" class="bg-purple-600 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
+                  </div>
+                  <div class="text-xs text-purple-600 dark:text-purple-400 mt-2">
+                    <span id="locationsUploadProgressStats">Uploading...</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="flex gap-3">
+            <button 
+              type="button"
+              onclick="hideImportCustomerDataModal()" 
+              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="button"
+              onclick="importCustomerData()" 
+              class="flex-1 bg-green-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-green-700 transition-colors duration-200"
+            >
+              Import Customer Data
             </button>
           </div>
         </div>
@@ -6991,6 +8179,67 @@
           >
             Close
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Customer Data Profile Modal (Excel Preview) -->
+    <div id="customerDataProfileModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden" onclick="if(event.target === this) hideCustomerDataProfile()">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-6xl w-full mx-4 max-h-[90vh] overflow-y-auto" onclick="event.stopPropagation()">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Customer Data Profile (Excel Preview)</h3>
+          <button 
+            onclick="hideCustomerDataProfile()" 
+            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+          >
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div id="customerDataProfileContent" class="space-y-4">
+          <!-- Excel-like table will be populated by JavaScript -->
+        </div>
+
+        <div class="mt-6">
+          <button 
+            type="button"
+            onclick="hideCustomerDataProfile()" 
+            class="w-full bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Customer Data Progress Modal -->
+    <div id="deleteProgressModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Deleting Customer Data</h3>
+        </div>
+        
+        <div id="deleteProgress" class="hidden">
+          <div class="bg-red-50 dark:bg-red-900/20 p-6 rounded-xl border-2 border-red-500 mb-4">
+            <div class="flex items-center justify-between mb-4">
+              <h4 class="text-lg font-semibold text-red-800 dark:text-red-200">Deleting Customers...</h4>
+              <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-red-600"></div>
+            </div>
+            <div class="space-y-2">
+              <div class="flex justify-between text-sm text-red-700 dark:text-red-300">
+                <span>Progress:</span>
+                <span id="deleteProgressText" class="font-semibold">0 / 0</span>
+              </div>
+              <div class="w-full bg-red-200 dark:bg-red-800 rounded-full h-3">
+                <div id="deleteProgressBar" class="bg-red-600 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
+              </div>
+              <div class="text-xs text-red-600 dark:text-red-400 mt-2">
+                <span id="deleteProgressStats">Deleting...</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
