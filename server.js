@@ -118,6 +118,40 @@ app.post('/api/admin-login', (req, res) => {
   }
 });
 
+// Password verification endpoint for site-wide protection
+app.post('/api/verify-password', (req, res) => {
+  try {
+    const { password } = req.body;
+    
+    if (!password) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Password is required' 
+      });
+    }
+
+    // Compare with stored password from environment variable
+    if (password === ADMIN_PASSWORD) {
+      res.json({ 
+        success: true, 
+        message: 'Authentication successful' 
+      });
+    } else {
+      res.status(401).json({ 
+        success: false, 
+        error: 'Invalid password' 
+      });
+    }
+
+  } catch (error) {
+    console.error('Password verification error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Server error during authentication' 
+    });
+  }
+});
+
 // Admin forms data endpoint
 app.get('/api/admin-forms', async (req, res) => {
   try {
