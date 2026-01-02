@@ -149,6 +149,8 @@
             const loginButton = document.getElementById('loginButton');
             const loading = document.getElementById('loading');
             
+            // Note: Firebase Auth credentials are now entered on the main page after ENV password check
+            
             // Check if already authenticated (user might have navigated here directly)
             if (window.auth && typeof window.auth.checkPassword === 'function') {
                 const token = localStorage.getItem('formstar_auth_token');
@@ -162,7 +164,7 @@
             }
             
             // Handle form submission
-            form.addEventListener('submit', function(e) {
+            form.addEventListener('submit', async function(e) {
                 e.preventDefault();
                 
                 const password = passwordInput.value.trim();
@@ -175,11 +177,14 @@
                 loginButton.disabled = true;
                 loading.style.display = 'block';
                 
-                // Check password with server (async)
-                if (window.auth && window.auth.checkPassword) {
-                    window.auth.checkPassword(password).then(function(isValid) {
+                try {
+                    // Check password with server (async)
+                    if (window.auth && window.auth.checkPassword) {
+                        const isValid = await window.auth.checkPassword(password);
+                        
                         if (isValid) {
-                            // Password correct - set authentication
+                            // ENV password correct - set authentication and redirect to main page
+                            // Firebase Auth will be handled on the main page
                             window.auth.setAuthenticated();
                             
                             // Get redirect URL (from query parameter or default)
@@ -196,16 +201,16 @@
                             loginButton.disabled = false;
                             loading.style.display = 'none';
                         }
-                    }).catch(function(error) {
-                        console.error('Password verification error:', error);
-                        errorMessage.textContent = 'Error verifying password. Please try again.';
+                    } else {
+                        // Fallback if auth object not available
+                        errorMessage.textContent = 'Authentication system not available. Please refresh the page.';
                         errorMessage.classList.add('show');
                         loginButton.disabled = false;
                         loading.style.display = 'none';
-                    });
-                } else {
-                    // Fallback if auth object not available
-                    errorMessage.textContent = 'Authentication system not available. Please refresh the page.';
+                    }
+                } catch (error) {
+                    console.error('Login error:', error);
+                    errorMessage.textContent = 'Error during login. Please try again.';
                     errorMessage.classList.add('show');
                     loginButton.disabled = false;
                     loading.style.display = 'none';

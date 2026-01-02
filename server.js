@@ -9,11 +9,8 @@ dotenv.config();
 
 // Stripe functionality removed - no longer needed
 
-// AI Configuration
+// AI Configuration (optional - only needed if using chat feature)
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-if (!OPENAI_API_KEY) {
-  throw new Error('OPENAI_API_KEY is not set in the environment. Please add it to your .env file.');
-}
 
 // Admin Configuration
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -458,6 +455,13 @@ app.post('/api/chat', async (req, res) => {
     
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
+    }
+
+    // Check if OpenAI API key is configured
+    if (!OPENAI_API_KEY) {
+      return res.status(503).json({ 
+        error: 'AI chat feature is not configured. Please set OPENAI_API_KEY in your .env file to use this feature.' 
+      });
     }
 
     // Prepare messages for OpenAI API

@@ -151,8 +151,19 @@
     };
     
     // Expose logout function globally
-    window.logout = function() {
+    window.logout = async function() {
         clearAuthentication();
+        
+        // Also sign out from Firebase Auth if available
+        if (window.firebaseAuth && window.firebaseAuth.signOut) {
+            try {
+                await window.firebaseAuth.signOut();
+                console.log('[LOGOUT] Signed out from Firebase Auth');
+            } catch (error) {
+                console.error('[LOGOUT] Error signing out from Firebase Auth:', error);
+            }
+        }
+        
         window.location.href = getLoginPagePath();
     };
     
