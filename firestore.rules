@@ -24,6 +24,11 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // Settings collection - only admin user
+    match /settings/{settingId} {
+      allow read, write: if isAdmin();
+    }
+
     // Payment batches - only admin user
     match /paymentBatches/{batchId} {
       allow read, write: if isAdmin();

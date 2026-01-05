@@ -88,6 +88,15 @@
     // Tax codes data (starts empty, codes added through admin interface)
     let codes = [];
 
+    // Track deleted code names to prevent them from being recreated
+    let deletedCodeNames = new Set();
+
+    // Sewer charge setting (defaults to 170, loaded from Firebase)
+    let sewerCharge = 170;
+
+    // Late fee setting (defaults to 20, loaded from Firebase)
+    let lateFee = 20;
+
     // Payment batch tracking
     window.paymentBatches = [];
     window.currentPaymentBatch = null;
@@ -99,8 +108,16 @@
 
     // Format phone number as (xxx)-xxx-xxxx
     function formatPhoneNumber(phone) {
+      // Handle null, undefined, or non-string values
+      if (!phone) {
+        return 'N/A';
+      }
+      
+      // Convert to string if it's a number
+      const phoneStr = String(phone);
+      
       // Remove all non-digit characters
-      const cleaned = phone.replace(/\D/g, '');
+      const cleaned = phoneStr.replace(/\D/g, '');
 
       // Format as (xxx)-xxx-xxxx
       if (cleaned.length === 10) {
@@ -351,8 +368,9 @@
         customers = [];
         snapshot.forEach(doc => {
           const customer = { id: doc.id, ...doc.data() };
-          // Populate codes from importData if available
-          if (customer.importData) {
+          // Only populate codes from importData if customer doesn't already have codes saved
+          // This preserves codes that were added via "Apply to All" or manually
+          if (customer.importData && (!customer.codes || customer.codes.length === 0)) {
             populateCustomerCodesFromImportData(customer);
           }
           customers.push(customer);
@@ -431,6 +449,21 @@
 
     async function loadCodesFromFirestore() {
       try {
+        // First, load deleted code names to prevent recreation
+        try {
+          const deletedCodesRef = doc(db, 'settings', 'deletedCodeNames');
+          const deletedCodesDoc = await getDoc(deletedCodesRef);
+          if (deletedCodesDoc.exists()) {
+            const data = deletedCodesDoc.data();
+            if (data.names && Array.isArray(data.names)) {
+              deletedCodeNames = new Set(data.names);
+              console.log('[LOAD CODES] Loaded deleted code names:', Array.from(deletedCodeNames));
+            }
+          }
+        } catch (error) {
+          console.error('[LOAD CODES] Error loading deleted code names:', error);
+        }
+
         const codesRef = collection(db, 'codes');
         const snapshot = await getDocs(codesRef);
         codes = [];
@@ -487,6 +520,76 @@
       }
     }
 
+    // Load sewer charge from Firestore
+    async function loadSewerChargeFromFirestore() {
+      try {
+        const settingsRef = doc(db, 'settings', 'sewerCharge');
+        const settingsDoc = await getDoc(settingsRef);
+        
+        if (settingsDoc.exists()) {
+          const data = settingsDoc.data();
+          sewerCharge = data.value !== undefined ? data.value : 170;
+        } else {
+          // If setting doesn't exist, create it with default value
+          await setDoc(settingsRef, { value: 170 });
+          sewerCharge = 170;
+        }
+        
+        // Update UI if Codes screen is visible
+        updateSewerChargeDisplay();
+      } catch (error) {
+        console.error('[LOAD SEWER CHARGE] Error loading sewer charge:', error);
+        // Keep default value on error
+        sewerCharge = 170;
+      }
+    }
+
+    // Save sewer charge to Firestore
+    async function saveSewerChargeToFirestore() {
+      try {
+        const settingsRef = doc(db, 'settings', 'sewerCharge');
+        await setDoc(settingsRef, { value: sewerCharge });
+      } catch (error) {
+        console.error('[SAVE SEWER CHARGE] Error saving sewer charge:', error);
+        throw error;
+      }
+    }
+
+    // Load late fee from Firestore
+    async function loadLateFeeFromFirestore() {
+      try {
+        const settingsRef = doc(db, 'settings', 'lateFee');
+        const settingsDoc = await getDoc(settingsRef);
+        
+        if (settingsDoc.exists()) {
+          const data = settingsDoc.data();
+          lateFee = data.value !== undefined ? data.value : 20;
+        } else {
+          // If setting doesn't exist, create it with default value
+          await setDoc(settingsRef, { value: 20 });
+          lateFee = 20;
+        }
+        
+        // Update UI if Codes screen is visible
+        updateLateFeeDisplay();
+      } catch (error) {
+        console.error('[LOAD LATE FEE] Error loading late fee:', error);
+        // Keep default value on error
+        lateFee = 20;
+      }
+    }
+
+    // Save late fee to Firestore
+    async function saveLateFeeToFirestore() {
+      try {
+        const settingsRef = doc(db, 'settings', 'lateFee');
+        await setDoc(settingsRef, { value: lateFee });
+      } catch (error) {
+        console.error('[SAVE LATE FEE] Error saving late fee:', error);
+        throw error;
+      }
+    }
+
     async function saveBatchToFirestore(batch) {
       try {
         const batchesRef = collection(db, 'paymentBatches');
@@ -540,11 +643,11 @@
           let needsSave = false;
           
           customers.forEach(customer => {
-            // Only reset if currentBill is not already 170 (avoid unnecessary saves)
-            if (customer.currentBill !== 170) {
+            // Only reset if currentBill is not already equal to sewer charge (avoid unnecessary saves)
+            if (customer.currentBill !== sewerCharge) {
               // Reset current bill to full amount on first of month
               // Note: pastDue should NOT be reset - it carries over from previous months
-              customer.currentBill = 170;
+              customer.currentBill = sewerCharge;
               // Update payment status based on past due amount
               updateCustomerPaymentStatus(customer);
               needsSave = true;
@@ -711,6 +814,8 @@
       // it will find existing codes in the array instead of creating new ones with default values
 
       await loadCodesFromFirestore();
+      await loadSewerChargeFromFirestore();
+      await loadLateFeeFromFirestore();
 
       // Now load other data
       await loadLocationsFromFirestore();
@@ -817,6 +922,9 @@
         codesTab.classList.remove('bg-slate-200', 'text-slate-700');
         codesContent.classList.remove('hidden');
         updateCodesTable();
+        updateSewerChargeDisplay();
+        updateLateFeeDisplay();
+        updateLateFeeDisplay();
       } else if (view === 'users') {
         usersTab.classList.add('bg-blue-600', 'text-white');
         usersTab.classList.remove('bg-slate-200', 'text-slate-700');
@@ -961,12 +1069,15 @@
                             new Date(customer.lastPayment) < new Date(dueDateStr);
 
         // Calculate actual amount based on breakdown logic
-        const serviceCost = calculateProratedServiceCost(customer);
+        const baseServiceCost = calculateProratedServiceCost(customer);
         const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
-        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
-        const subtotal = serviceCost + pastDue + lateFee;
+        const lateFeeAmount = pastDue > 0 ? lateFee : 0; // Late fee if there's past due
+        
+        // Apply factor FIRST to get adjusted service cost
+        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+        const adjustedServiceCost = baseServiceCost * factor;
 
-        // Calculate code surcharges (applied only to service cost, not subtotal)
+        // Calculate code surcharges (applied to adjusted service cost after factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
@@ -975,15 +1086,12 @@
             if (codeType === 'flat') {
               totalSurcharge += codeAmount;
             } else {
-              totalSurcharge += serviceCost * (codeAmount / 100);
+              totalSurcharge += adjustedServiceCost * (codeAmount / 100);
             }
           });
         }
 
-        // Calculate factor adjustment (based on service cost only)
-        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
-        const factorAdjustment = serviceCost * (factor - 1);
-        const totalAmount = hasPaidEarly ? 0 : (serviceCost + pastDue + lateFee + totalSurcharge + factorAdjustment);
+        const totalAmount = hasPaidEarly ? 0 : (adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge);
 
         row.innerHTML = `
           <td class="px-6 py-4 whitespace-nowrap text-center">
@@ -1212,12 +1320,15 @@
       const customer = customers.find(c => c.id === customerId);
       if (customer) {
         // Calculate prorated service cost based on when customer was added
-        const serviceCost = calculateProratedServiceCost(customer);
+        const baseServiceCost = calculateProratedServiceCost(customer);
         const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
-        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
-        const subtotal = serviceCost + pastDue + lateFee;
+        const lateFeeAmount = pastDue > 0 ? lateFee : 0; // Late fee if there's past due
+        
+        // Apply factor FIRST to get adjusted service cost
+        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+        const adjustedServiceCost = baseServiceCost * factor;
 
-        // Calculate code surcharges (applied only to service cost, not subtotal)
+        // Calculate code surcharges (applied to adjusted service cost after factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
@@ -1226,12 +1337,12 @@
             if (codeType === 'flat') {
               totalSurcharge += codeAmount;
             } else {
-              totalSurcharge += serviceCost * (codeAmount / 100);
+              totalSurcharge += adjustedServiceCost * (codeAmount / 100);
             }
           });
         }
 
-        const totalAmount = subtotal + totalSurcharge;
+        const totalAmount = adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge;
 
         // Calculate due date as last day of current month
         const now = new Date();
@@ -1252,7 +1363,7 @@
         document.getElementById('paymentAmountDue').textContent = `$${totalAmount.toFixed(2)}`;
         document.getElementById('paymentPastDue').textContent = `$${customer.pastDue.toFixed(2)}`;
         document.getElementById('paymentDueDate').textContent = dueDateStr;
-        document.getElementById('paymentLateFee').textContent = `$${lateFee.toFixed(2)}`;
+        document.getElementById('paymentLateFee').textContent = `$${lateFeeAmount.toFixed(2)}`;
         document.getElementById('paymentAmount').value = (totalAmount + customer.pastDue).toFixed(2);
 
         // Update status indicator
@@ -1269,7 +1380,7 @@
 
     // Calculate prorated service cost based on when customer was added
     function calculateProratedServiceCost(customer) {
-      const baseServiceCost = 170;
+      const baseServiceCost = sewerCharge;
 
       // Imported customers should not be prorated - always charge full amount
       if (customer.importData) {
@@ -1333,12 +1444,15 @@
       const customer = customers.find(c => c.id === customerId);
       if (customer) {
         // Calculate prorated service cost based on when customer was added
-        const serviceCost = calculateProratedServiceCost(customer);
+        const baseServiceCost = calculateProratedServiceCost(customer);
         const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
-        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
-        const subtotal = serviceCost + pastDue + lateFee;
+        const lateFeeAmount = pastDue > 0 ? lateFee : 0; // Late fee if there's past due
+        
+        // Apply factor FIRST to get adjusted service cost
+        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+        const adjustedServiceCost = baseServiceCost * factor;
 
-        // Calculate code surcharges (applied only to service cost, not subtotal)
+        // Calculate code surcharges (applied to adjusted service cost after factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
@@ -1347,15 +1461,12 @@
             if (codeType === 'flat') {
               totalSurcharge += codeAmount;
             } else {
-              totalSurcharge += serviceCost * (codeAmount / 100);
+              totalSurcharge += adjustedServiceCost * (codeAmount / 100);
             }
           });
         }
 
-        // Calculate factor adjustment (based on service cost only)
-        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
-        const factorAdjustment = serviceCost * (factor - 1);
-        const totalAmount = serviceCost + pastDue + lateFee + totalSurcharge + factorAdjustment;
+        const totalAmount = adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge;
 
         // Calculate due date as last day of current month
         const now = new Date();
@@ -1376,7 +1487,7 @@
         document.getElementById('billAmountDue').textContent = `$${totalAmount.toFixed(2)}`;
         document.getElementById('billPastDue').textContent = `$${customer.pastDue.toFixed(2)}`;
         document.getElementById('billDueDate').textContent = dueDateStr;
-        document.getElementById('billLateFee').textContent = `$${lateFee.toFixed(2)}`;
+        document.getElementById('billLateFee').textContent = `$${lateFeeAmount.toFixed(2)}`;
 
         // Update status indicator
         const statusIndicator = document.getElementById('billStatusIndicator');
@@ -1487,12 +1598,15 @@
 
       try {
         // Calculate all the amounts (same logic as showCustomerBillInfo)
-        const serviceCost = calculateProratedServiceCost(customer);
+        const baseServiceCost = calculateProratedServiceCost(customer);
         const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
-        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
-        const subtotal = serviceCost + pastDue + lateFee;
+        const lateFeeAmount = pastDue > 0 ? lateFee : 0; // Late fee if there's past due
+        
+        // Apply factor FIRST to get adjusted service cost
+        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+        const adjustedServiceCost = baseServiceCost * factor;
 
-        // Calculate code surcharges (applied only to service cost, not subtotal)
+        // Calculate code surcharges (applied to adjusted service cost after factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
@@ -1501,15 +1615,12 @@
             if (codeType === 'flat') {
               totalSurcharge += codeAmount;
             } else {
-              totalSurcharge += serviceCost * (codeAmount / 100);
+              totalSurcharge += adjustedServiceCost * (codeAmount / 100);
             }
           });
         }
 
-        // Calculate factor adjustment (based on service cost only)
-        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
-        const factorAdjustment = serviceCost * (factor - 1);
-        const totalAmount = serviceCost + pastDue + lateFee + totalSurcharge + factorAdjustment;
+        const totalAmount = adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge;
 
         // Calculate dates
         const now = new Date();
@@ -2564,7 +2675,7 @@
         phone: phone,
         address: selectedLocation.address,
         accountNumber: 'CUS-' + String(Date.now()).slice(-6),
-        currentBill: 170,
+        currentBill: sewerCharge,
         pastDue: 0,
         lastPayment: 'Never',
         paymentHistory: [],
@@ -3162,8 +3273,8 @@
       let html = '<div class="space-y-4">';
       results.forEach(customer => {
         const serviceCost = calculateProratedServiceCost(customer);
-        const lateFee = customer.pastDue > 0 ? 20 : 0;
-        const totalAmount = serviceCost + lateFee;
+        const lateFeeAmount = customer.pastDue > 0 ? lateFee : 0;
+        const totalAmount = serviceCost + lateFeeAmount;
 
         const statusClass = customer.paymentStatus === 'overdue' ? 
           'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' : 
@@ -3310,7 +3421,7 @@
         locationId: locationId,
         address: selectedLocation.address,
         accountNumber: `CUS-${String(customers.length + 1).padStart(6, '0')}`,
-        currentBill: isNewMonth ? 170 : 0, // New bill on 1st of month, otherwise 0
+        currentBill: isNewMonth ? sewerCharge : 0, // New bill on 1st of month, otherwise 0
         pastDue: 0,
         lastPayment: 'Never',
         needsPasswordChange: true,
@@ -3537,9 +3648,19 @@
           deleteProgressStats.textContent = `Deleted: ${totalCustomers} of ${totalCustomers} customers`;
         }
 
+        // Allow UI to update
+        await new Promise(resolve => setTimeout(resolve, 100));
+
         // Clear local arrays
         customers = [];
         filteredCustomers = [];
+
+        // Update status: Updating locations
+        if (deleteProgressStats) {
+          deleteProgressStats.textContent = 'Updating locations...';
+        }
+        // Allow UI to update
+        await new Promise(resolve => setTimeout(resolve, 50));
 
         // Update all locations to be available
         locations.forEach(location => {
@@ -3553,6 +3674,13 @@
 
         // Save location changes
         await saveLocationsToFirestore();
+
+        // Update status: Finalizing
+        if (deleteProgressStats) {
+          deleteProgressStats.textContent = 'Finalizing...';
+        }
+        // Allow UI to update
+        await new Promise(resolve => setTimeout(resolve, 50));
 
         // Reload data from Firestore to ensure UI is in sync
         await loadCustomersFromFirestore();
@@ -3728,12 +3856,15 @@
                             new Date(customer.lastPayment) < new Date(dueDateStr);
 
         // Calculate actual amount based on breakdown logic
-        const serviceCost = calculateProratedServiceCost(customer);
+        const baseServiceCost = calculateProratedServiceCost(customer);
         const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
-        const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
-        const subtotal = serviceCost + pastDue + lateFee;
+        const lateFeeAmount = pastDue > 0 ? lateFee : 0; // Late fee if there's past due
+        
+        // Apply factor FIRST to get adjusted service cost
+        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+        const adjustedServiceCost = baseServiceCost * factor;
 
-        // Calculate code surcharges (applied only to service cost, not subtotal)
+        // Calculate code surcharges (applied to adjusted service cost after factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
@@ -3742,15 +3873,12 @@
             if (codeType === 'flat') {
               totalSurcharge += codeAmount;
             } else {
-              totalSurcharge += serviceCost * (codeAmount / 100);
+              totalSurcharge += adjustedServiceCost * (codeAmount / 100);
             }
           });
         }
 
-        // Calculate factor adjustment (based on service cost only)
-        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
-        const factorAdjustment = serviceCost * (factor - 1);
-        const totalAmount = hasPaidEarly ? 0 : (serviceCost + pastDue + lateFee + totalSurcharge + factorAdjustment);
+        const totalAmount = hasPaidEarly ? 0 : (adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge);
 
         row.innerHTML = `
           <td class="px-6 py-4 whitespace-nowrap text-center">
@@ -3905,9 +4033,14 @@
             </div>
           </td>
           <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-            <button onclick="deleteCode('${code.id}')" class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
-              Delete
-            </button>
+            <div class="flex flex-col space-y-2 items-end">
+              <button onclick="applyCodeToAll('${code.id}')" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">
+                Apply to All
+              </button>
+              <button onclick="deleteCode('${code.id}')" class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
+                Delete
+              </button>
+            </div>
           </td>
         `;
 
@@ -4129,9 +4262,11 @@
                           new Date(currentResident.lastPayment) < new Date(dueDateStr);
 
       // Calculate actual amount based on breakdown logic
-      const serviceCost = calculateProratedServiceCost(currentResident);
-      const lateFee = currentResident.pastDue > 0 ? 20 : 0; // $20 late fee
-      const totalAmount = hasPaidEarly ? 0 : (serviceCost + lateFee);
+      const baseServiceCost = calculateProratedServiceCost(currentResident);
+      const factor = currentResident.factor ? parseFloat(currentResident.factor) : 1.0;
+      const adjustedServiceCost = baseServiceCost * factor;
+      const lateFeeAmount = currentResident.pastDue > 0 ? lateFee : 0; // Late fee
+      const totalAmount = hasPaidEarly ? 0 : (adjustedServiceCost + lateFeeAmount);
 
       // Populate the modal
       document.getElementById('transferWarningName').textContent = currentResident.name;
@@ -4189,9 +4324,11 @@
                             new Date(currentResident.lastPayment) < new Date(dueDateStr);
 
         // Calculate actual amount due
-        const serviceCost = calculateProratedServiceCost(currentResident);
-        const lateFee = currentResident.pastDue > 0 ? 20 : 0;
-        const totalAmount = hasPaidEarly ? 0 : (serviceCost + lateFee);
+        const baseServiceCost = calculateProratedServiceCost(currentResident);
+        const factor = currentResident.factor ? parseFloat(currentResident.factor) : 1.0;
+        const adjustedServiceCost = baseServiceCost * factor;
+        const lateFeeAmount = currentResident.pastDue > 0 ? lateFee : 0;
+        const totalAmount = hasPaidEarly ? 0 : (adjustedServiceCost + lateFeeAmount);
 
         // Set status based on balance: inactive if balance is 0, pending closing if they owe money
         if (totalAmount === 0) {
@@ -4215,7 +4352,7 @@
           phone: newClientData.phone,
           address: location.address,
           accountNumber: 'CUS-' + String(Date.now()).slice(-6),
-          currentBill: 170,
+          currentBill: sewerCharge,
           pastDue: 0,
           lastPayment: 'Never',
           paymentHistory: [],
@@ -4479,13 +4616,306 @@
       document.getElementById('editCodeFieldInputContainer').innerHTML = '';
     };
 
+    // Apply code to all customers
+    window.applyCodeToAll = async function(codeId) {
+      const code = codes.find(c => c.id === codeId);
+      if (!code) {
+        alert('Code not found');
+        return;
+      }
+
+      const codeType = code.type || 'percentage';
+      const codeAmount = code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0);
+      const codeDisplay = codeType === 'flat' 
+        ? `${code.name} ($${parseFloat(codeAmount).toFixed(2)})` 
+        : `${code.name} (${parseFloat(codeAmount).toFixed(2)}%)`;
+
+      if (!confirm(`Are you sure you want to apply "${codeDisplay}" to ALL ${customers.length} customer accounts?\n\nThis will add this code to all customers who don't already have it.`)) {
+        return;
+      }
+
+      try {
+        let updatedCount = 0;
+        let skippedCount = 0;
+
+        // Apply code to all customers
+        customers.forEach(customer => {
+          // Initialize codes array if it doesn't exist
+          if (!customer.codes) {
+            customer.codes = [];
+          }
+
+          // Check if customer already has this code
+          const hasCode = customer.codes.some(c => c.id === codeId);
+          
+          if (!hasCode) {
+            // Add the code to the customer
+            customer.codes.push({
+              id: code.id,
+              name: code.name,
+              type: code.type || 'percentage',
+              amount: code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0),
+              percentage: codeType === 'percentage' && code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0)
+            });
+            updatedCount++;
+          } else {
+            skippedCount++;
+          }
+        });
+
+        // Save all customers to Firestore
+        await saveCustomersToFirestore();
+        
+        // Update tables
+        updateCustomerTable();
+        updateSettingsCustomerTable();
+
+        alert(`Successfully applied "${codeDisplay}" to ${updatedCount} customer(s).\n${skippedCount} customer(s) already had this code.`);
+      } catch (error) {
+        console.error('[APPLY CODE TO ALL] Error:', error);
+        alert('Error applying code to all customers: ' + error.message);
+      }
+    };
+
     // Delete code
     window.deleteCode = async function(codeId) {
-      if (confirm('Are you sure you want to delete this code?')) {
-        codes = codes.filter(c => c.id !== codeId);
-        await saveCodesToFirestore();
-        updateCodesTable();
-        alert('Code deleted successfully!');
+      const code = codes.find(c => c.id === codeId);
+      if (!code) {
+        alert('Code not found');
+        return;
+      }
+
+      const codeType = code.type || 'percentage';
+      const codeAmount = code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0);
+      const codeDisplay = codeType === 'flat' 
+        ? `${code.name} ($${parseFloat(codeAmount).toFixed(2)})` 
+        : `${code.name} (${parseFloat(codeAmount).toFixed(2)}%)`;
+
+      // Count how many customers have this code
+      let customersWithCode = 0;
+      customers.forEach(customer => {
+        if (customer.codes && customer.codes.some(c => c.id === codeId)) {
+          customersWithCode++;
+        }
+      });
+
+      const confirmMessage = customersWithCode > 0
+        ? `Are you sure you want to delete "${codeDisplay}"?\n\nThis will remove it from ${customersWithCode} customer account(s) as well.`
+        : `Are you sure you want to delete "${codeDisplay}"?`;
+
+      if (confirm(confirmMessage)) {
+        try {
+          // First, explicitly delete the document from Firestore
+          const codesRef = collection(db, 'codes');
+          const codeRef = doc(codesRef, codeId);
+          await deleteDoc(codeRef);
+          
+          // Add code name to deleted set to prevent recreation
+          deletedCodeNames.add(code.name.toLowerCase());
+          
+          // Save deleted code names to Firestore for persistence across reloads
+          const deletedCodesRef = doc(db, 'settings', 'deletedCodeNames');
+          await setDoc(deletedCodesRef, { 
+            names: Array.from(deletedCodeNames),
+            lastUpdated: new Date().toISOString()
+          });
+          
+          // Then remove it from the local array
+          codes = codes.filter(c => c.id !== codeId);
+          
+          // Remove the code from all customers who have it
+          let updatedCustomers = 0;
+          customers.forEach(customer => {
+            let customerUpdated = false;
+            
+            // Remove from customer.codes array
+            if (customer.codes && customer.codes.length > 0) {
+              const originalLength = customer.codes.length;
+              customer.codes = customer.codes.filter(c => c.id !== codeId);
+              if (customer.codes.length < originalLength) {
+                customerUpdated = true;
+              }
+            }
+            
+            // Also remove from importData to prevent code from being recreated on reload
+            if (customer.importData) {
+              const codeName = code.name;
+              // Check all possible tax code fields in importData
+              const taxCodeFields = [
+                'Tax Codes Per Person',
+                'Tax Codes per Person',
+                'Tax Codes',
+                'Codes Per Person',
+                'Codes per Person',
+                'Codes'
+              ];
+              
+              taxCodeFields.forEach(field => {
+                if (customer.importData[field]) {
+                  const codesStr = customer.importData[field];
+                  // Parse codes (comma-separated)
+                  const codeNames = codesStr.split(',').map(c => c.trim());
+                  // Remove the deleted code name (case-insensitive)
+                  const filteredCodes = codeNames.filter(c => c.toLowerCase() !== codeName.toLowerCase());
+                  // Update the field if codes were removed
+                  if (filteredCodes.length < codeNames.length) {
+                    customer.importData[field] = filteredCodes.join(', ');
+                    customerUpdated = true;
+                  }
+                }
+              });
+            }
+            
+            if (customerUpdated) {
+              updatedCustomers++;
+            }
+          });
+
+          // Save all updated customers to Firestore
+          if (updatedCustomers > 0) {
+            console.log(`[DELETE CODE] Saving ${updatedCustomers} customers with updated importData`);
+            await saveCustomersToFirestore();
+            console.log(`[DELETE CODE] Successfully saved ${updatedCustomers} customers to Firestore`);
+          }
+          
+          // Update the UI
+          updateCodesTable();
+          updateCustomerTable();
+          updateSettingsCustomerTable();
+          
+          const successMessage = updatedCustomers > 0
+            ? `Code deleted successfully! Removed from ${updatedCustomers} customer account(s).`
+            : 'Code deleted successfully!';
+          alert(successMessage);
+        } catch (error) {
+          console.error('[DELETE CODE] Error deleting code:', error);
+          alert('Error deleting code: ' + error.message);
+        }
+      }
+    };
+
+    // Update sewer charge display
+    function updateSewerChargeDisplay() {
+      const input = document.getElementById('sewerChargeInput');
+      const status = document.getElementById('sewerChargeStatus');
+      if (input) {
+        input.value = sewerCharge.toFixed(2);
+      }
+      if (status) {
+        status.textContent = `Current value: $${sewerCharge.toFixed(2)}`;
+      }
+    }
+
+    // Update late fee display
+    function updateLateFeeDisplay() {
+      const input = document.getElementById('lateFeeInput');
+      const status = document.getElementById('lateFeeStatus');
+      if (input) {
+        input.value = lateFee.toFixed(2);
+      }
+      if (status) {
+        status.textContent = `Current value: $${lateFee.toFixed(2)}`;
+      }
+    }
+
+    // Save late fee
+    window.saveLateFee = async function() {
+      const input = document.getElementById('lateFeeInput');
+      const status = document.getElementById('lateFeeStatus');
+      
+      if (!input) return;
+      
+      const newValue = parseFloat(input.value);
+      
+      if (isNaN(newValue) || newValue < 0) {
+        if (status) {
+          status.textContent = 'Please enter a valid amount (must be 0 or greater)';
+          status.className = 'text-xs text-red-500 dark:text-red-400';
+        }
+        return;
+      }
+      
+      const oldValue = lateFee;
+      lateFee = newValue;
+      
+      try {
+        await saveLateFeeToFirestore();
+        if (status) {
+          status.textContent = 'Late fee saved successfully!';
+          status.className = 'text-xs text-green-500 dark:text-green-400';
+        }
+        
+        // Clear status message after 3 seconds
+        setTimeout(() => {
+          if (status) {
+            status.textContent = `Current value: $${lateFee.toFixed(2)}`;
+            status.className = 'text-xs text-slate-500 dark:text-slate-400';
+          }
+        }, 3000);
+      } catch (error) {
+        console.error('[SAVE LATE FEE] Error:', error);
+        lateFee = oldValue; // Revert on error
+        if (status) {
+          status.textContent = 'Error saving late fee. Please try again.';
+          status.className = 'text-xs text-red-500 dark:text-red-400';
+        }
+      }
+    };
+
+    // Save sewer charge
+    window.saveSewerCharge = async function() {
+      const input = document.getElementById('sewerChargeInput');
+      const status = document.getElementById('sewerChargeStatus');
+      
+      if (!input) return;
+      
+      const newValue = parseFloat(input.value);
+      
+      if (isNaN(newValue) || newValue < 0) {
+        if (status) {
+          status.textContent = 'Please enter a valid amount (must be 0 or greater)';
+          status.className = 'text-xs text-red-500 dark:text-red-400';
+        }
+        return;
+      }
+      
+      const oldValue = sewerCharge;
+      sewerCharge = newValue;
+      
+      try {
+        await saveSewerChargeToFirestore();
+        if (status) {
+          status.textContent = 'Sewer charge saved successfully!';
+          status.className = 'text-xs text-green-500 dark:text-green-400';
+        }
+        
+        // Update all customers' currentBill if it was set to the old value
+        let needsSave = false;
+        customers.forEach(customer => {
+          if (customer.currentBill === oldValue) {
+            customer.currentBill = sewerCharge;
+            needsSave = true;
+          }
+        });
+        
+        if (needsSave) {
+          await saveCustomersToFirestore();
+        }
+        
+        // Clear status message after 3 seconds
+        setTimeout(() => {
+          if (status) {
+            status.textContent = `Current value: $${sewerCharge.toFixed(2)}`;
+            status.className = 'text-xs text-slate-500 dark:text-slate-400';
+          }
+        }, 3000);
+      } catch (error) {
+        console.error('[SAVE SEWER CHARGE] Error:', error);
+        sewerCharge = oldValue; // Revert on error
+        if (status) {
+          status.textContent = 'Error saving sewer charge. Please try again.';
+          status.className = 'text-xs text-red-500 dark:text-red-400';
+        }
       }
     };
 
@@ -4900,6 +5330,12 @@
     // Helper function to ensure a code exists in the codes array, creating it if it doesn't
     function ensureCodeExists(codeName) {
       if (!codeName || typeof codeName !== 'string') {
+        return null;
+      }
+
+      // Check if this code name was intentionally deleted - if so, don't recreate it
+      if (deletedCodeNames.has(codeName.toLowerCase())) {
+        console.log(`[ENSURE CODE EXISTS] Skipping deleted code: ${codeName}`);
         return null;
       }
 
@@ -5550,14 +5986,16 @@
 
       if (customer) {
         // Calculate amounts (same logic as in showCustomerPaymentInfo)
-        const serviceCost = calculateProratedServiceCost(customer);
-        const lateFee = customer.pastDue > 0 ? 20 : 0;
-        const totalAmount = serviceCost + lateFee;
+        const baseServiceCost = calculateProratedServiceCost(customer);
+        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+        const adjustedServiceCost = baseServiceCost * factor;
+        const lateFeeAmount = customer.pastDue > 0 ? lateFee : 0;
+        const totalAmount = adjustedServiceCost + lateFeeAmount;
 
         // Populate the modal
         document.getElementById('paymentDetailsCustomer').textContent = customer.name;
-        document.getElementById('paymentDetailsService').textContent = `$${serviceCost.toFixed(2)}`;
-        document.getElementById('paymentDetailsLateFee').textContent = `$${lateFee.toFixed(2)}`;
+        document.getElementById('paymentDetailsService').textContent = `$${adjustedServiceCost.toFixed(2)}`;
+        document.getElementById('paymentDetailsLateFee').textContent = `$${lateFeeAmount.toFixed(2)}`;
         document.getElementById('paymentDetailsTotal').textContent = `$${totalAmount.toFixed(2)}`;
 
         // Show the modal
@@ -5788,12 +6226,15 @@
       const customer = customers.find(c => c.id === customerId);
       if (!customer) return;
 
-      const serviceCost = calculateProratedServiceCost(customer);
+      const baseServiceCost = calculateProratedServiceCost(customer);
       const pastDue = parseFloat(customer.pastDue || 0); // Previous unpaid balance
-      const lateFee = pastDue > 0 ? 20 : 0; // $20 late fee if there's past due
-      const subtotal = serviceCost + pastDue + lateFee;
+      const lateFeeAmount = pastDue > 0 ? lateFee : 0; // Late fee if there's past due
+      
+      // Apply factor FIRST to get adjusted service cost
+      const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+      const adjustedServiceCost = baseServiceCost * factor;
 
-      // Calculate code surcharges (applied only to service cost, not subtotal)
+      // Calculate code surcharges (applied to adjusted service cost after factor)
       // IMPORTANT: Refresh customer codes from the global codes array to get latest amounts
       let totalSurcharge = 0;
       const codesContainer = document.getElementById('amountDetailsCodesContainer');
@@ -5817,7 +6258,7 @@
           if (codeType === 'flat') {
             surchargeAmount = codeAmount;
           } else {
-            surchargeAmount = serviceCost * (codeAmount / 100);
+            surchargeAmount = adjustedServiceCost * (codeAmount / 100);
           }
           totalSurcharge += surchargeAmount;
 
@@ -5834,10 +6275,7 @@
         });
       }
 
-      // Calculate factor adjustment (based on service cost only)
-      const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
-      const factorAdjustment = serviceCost * (factor - 1);
-      const total = serviceCost + pastDue + lateFee + totalSurcharge + factorAdjustment;
+      const total = adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge;
 
       // Calculate due date as last day of current month
       const now = new Date();
@@ -5863,7 +6301,8 @@
       const factorContainer = document.getElementById('amountDetailsFactorContainer');
       if (factorContainer) {
         factorContainer.innerHTML = '';
-        if (factor !== 1.0 && factorAdjustment > 0) {
+        if (factor !== 1.0) {
+          const factorAdjustment = adjustedServiceCost - baseServiceCost;
           const factorRow = document.createElement('div');
           factorRow.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600';
           factorRow.innerHTML = `
@@ -5875,12 +6314,13 @@
       }
 
       document.getElementById('amountDetailsCustomer').textContent = customer.name;
-      document.getElementById('amountDetailsService').textContent = `$${serviceCost.toFixed(2)}`;
+      // Show base service cost (before factor)
+      document.getElementById('amountDetailsService').textContent = `$${baseServiceCost.toFixed(2)}`;
       const pastDueElement = document.getElementById('amountDetailsPastDue');
       pastDueElement.textContent = `$${pastDue.toFixed(2)}`;
       pastDueElement.setAttribute('data-customer-id', customerId);
       pastDueElement.setAttribute('data-past-due', pastDue.toFixed(2));
-      document.getElementById('amountDetailsLateFee').textContent = `$${lateFee.toFixed(2)}`;
+      document.getElementById('amountDetailsLateFee').textContent = `$${lateFeeAmount.toFixed(2)}`;
       document.getElementById('amountDetailsTotal').textContent = `$${total.toFixed(2)}`;
       document.getElementById('amountDetailsDueDate').textContent = dueDateStr;
       document.getElementById('amountDetailsBillingCycle').textContent = billingCycleStr;
@@ -6029,12 +6469,22 @@
           <div class="space-y-4">
             <div>
               <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Factor</label>
-              <div 
-                class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 text-slate-800 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-600" 
-                ondblclick="editCustomerField('${customer.id}', 'factor', '${customer.factor || ''}')" 
-                title="Double-click to edit"
-              >
-                ${customer.factor || 'N/A'}
+              <div class="flex items-center gap-2">
+                <input 
+                  type="number" 
+                  id="customerFactorInput_${customer.id}" 
+                  value="${customer.factor || '1'}" 
+                  step="0.01" 
+                  min="0"
+                  class="flex-1 px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="1.00"
+                />
+                <button 
+                  onclick="saveCustomerFactor('${customer.id}')" 
+                  class="bg-blue-600 text-white px-4 py-3 rounded-xl hover:bg-blue-700 transition-colors font-medium"
+                >
+                  Save
+                </button>
               </div>
             </div>
 
@@ -6062,6 +6512,62 @@
     // Hide customer full info modal
     window.hideCustomerFullInfo = function() {
       document.getElementById('customerFullInfoModal').classList.add('hidden');
+    };
+
+    // Save customer factor (only saves that one customer)
+    window.saveCustomerFactor = async function(customerId) {
+      const customer = customers.find(c => c.id === customerId);
+      if (!customer) {
+        alert('Customer not found');
+        return;
+      }
+
+      const input = document.getElementById(`customerFactorInput_${customerId}`);
+      if (!input) {
+        alert('Factor input not found');
+        return;
+      }
+
+      const newFactor = parseFloat(input.value);
+      
+      if (isNaN(newFactor) || newFactor < 0) {
+        alert('Please enter a valid factor (must be 0 or greater)');
+        input.value = customer.factor || '1';
+        return;
+      }
+
+      try {
+        // Update the customer's factor
+        customer.factor = newFactor;
+
+        // Save only this customer to Firestore
+        const customersRef = collection(db, 'customers');
+        const customerRef = doc(customersRef, customerId);
+        await setDoc(customerRef, customer);
+
+        // Update the UI
+        updateCustomerTable();
+        updateSettingsCustomerTable();
+
+        // Show success message
+        const button = input.nextElementSibling;
+        const originalText = button.textContent;
+        button.textContent = 'Saved!';
+        button.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+        button.classList.add('bg-green-600');
+        
+        setTimeout(() => {
+          button.textContent = originalText;
+          button.classList.remove('bg-green-600');
+          button.classList.add('bg-blue-600', 'hover:bg-blue-700');
+        }, 2000);
+
+      } catch (error) {
+        console.error('[SAVE CUSTOMER FACTOR] Error:', error);
+        alert('Error saving factor: ' + error.message);
+        // Revert input value on error
+        input.value = customer.factor || '1';
+      }
     };
 
     // Show customer data profile modal (Excel preview)
@@ -7272,6 +7778,74 @@
 
           <!-- Codes Section -->
           <div id="settingsCodesContent" class="hidden">
+            <!-- Sewer Charge Setting -->
+            <div class="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6 mb-6">
+              <div class="flex justify-between items-center mb-4">
+                <div>
+                  <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Sewer Charge</h4>
+                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Set the default sewer service charge amount</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-4">
+                <div class="flex-1">
+                  <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Amount ($)</label>
+                  <input 
+                    type="number" 
+                    id="sewerChargeInput" 
+                    min="0" 
+                    step="0.01"
+                    class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="170.00"
+                  />
+                </div>
+                <div class="flex items-end">
+                  <button 
+                    onclick="saveSewerCharge()" 
+                    class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+              <div class="mt-2">
+                <p class="text-xs text-slate-500 dark:text-slate-400" id="sewerChargeStatus"></p>
+              </div>
+            </div>
+
+            <!-- Late Fee Setting -->
+            <div class="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6 mb-6">
+              <div class="flex justify-between items-center mb-4">
+                <div>
+                  <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Late Fee</h4>
+                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Set the default late fee charge amount</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-4">
+                <div class="flex-1">
+                  <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Amount ($)</label>
+                  <input 
+                    type="number" 
+                    id="lateFeeInput" 
+                    min="0" 
+                    step="0.01"
+                    class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="20.00"
+                  />
+                </div>
+                <div class="flex items-end">
+                  <button 
+                    onclick="saveLateFee()" 
+                    class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+              <div class="mt-2">
+                <p class="text-xs text-slate-500 dark:text-slate-400" id="lateFeeStatus"></p>
+              </div>
+            </div>
+
             <div class="flex justify-between items-center mb-6">
               <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">Tax Codes</h4>
               <button 
@@ -8131,6 +8705,7 @@
               <span class="text-slate-600 dark:text-slate-400">Sewage Service</span>
               <span class="font-medium" id="amountDetailsService">$150.00</span>
             </div>
+            <div id="amountDetailsFactorContainer"></div>
             <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
               <span class="text-slate-600 dark:text-slate-400">Past Due</span>
               <span class="font-medium cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 p-2 rounded" 
@@ -8143,10 +8718,9 @@
               <span class="font-medium" id="amountDetailsLateFee">$0.00</span>
             </div>
             <div id="amountDetailsCodesContainer"></div>
-            <div id="amountDetailsFactorContainer"></div>
             <div class="flex justify-between items-center py-3 bg-slate-50 dark:bg-slate-700 rounded-lg px-4">
               <span class="font-semibold text-slate-800 dark:text-slate-200">Total Due</span>
-              <span class="font-bold text-lg" id="amountDetailsTotal">$170.00</span>
+              <span class="font-bold text-lg" id="amountDetailsTotal">$0.00</span>
             </div>
           </div>
 
@@ -8441,7 +9015,7 @@
             </div>
             <div class="flex justify-between items-center py-3 bg-slate-50 dark:bg-slate-700 rounded-lg px-4">
               <span class="font-semibold text-slate-800 dark:text-slate-200">Total Due</span>
-              <span class="font-bold text-lg" id="paymentDetailsTotal">$170.00</span>
+              <span class="font-bold text-lg" id="paymentDetailsTotal">$0.00</span>
             </div>
           </div>
 
