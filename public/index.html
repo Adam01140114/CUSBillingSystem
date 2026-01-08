@@ -97,6 +97,9 @@
     // Late fee setting (defaults to 20, loaded from Firebase)
     let lateFee = 20;
 
+    // PUC Surcharge setting (defaults to 0, loaded from Firebase, applied as percentage to all customers)
+    let pucSurcharge = 0;
+
     // Payment batch tracking
     window.paymentBatches = [];
     window.currentPaymentBatch = null;
@@ -590,6 +593,41 @@
       }
     }
 
+    // Load PUC Surcharge from Firestore
+    async function loadPucSurchargeFromFirestore() {
+      try {
+        const settingsRef = doc(db, 'settings', 'pucSurcharge');
+        const settingsDoc = await getDoc(settingsRef);
+        
+        if (settingsDoc.exists()) {
+          const data = settingsDoc.data();
+          pucSurcharge = data.value !== undefined ? data.value : 0;
+        } else {
+          // If setting doesn't exist, create it with default value
+          await setDoc(settingsRef, { value: 0 });
+          pucSurcharge = 0;
+        }
+        
+        // Update UI if Codes screen is visible
+        updatePucSurchargeDisplay();
+      } catch (error) {
+        console.error('[LOAD PUC SURCHARGE] Error loading PUC surcharge:', error);
+        // Keep default value on error
+        pucSurcharge = 0;
+      }
+    }
+
+    // Save PUC Surcharge to Firestore
+    async function savePucSurchargeToFirestore() {
+      try {
+        const settingsRef = doc(db, 'settings', 'pucSurcharge');
+        await setDoc(settingsRef, { value: pucSurcharge });
+      } catch (error) {
+        console.error('[SAVE PUC SURCHARGE] Error saving PUC surcharge:', error);
+        throw error;
+      }
+    }
+
     async function saveBatchToFirestore(batch) {
       try {
         const batchesRef = collection(db, 'paymentBatches');
@@ -816,6 +854,7 @@
       await loadCodesFromFirestore();
       await loadSewerChargeFromFirestore();
       await loadLateFeeFromFirestore();
+      await loadPucSurchargeFromFirestore();
 
       // Now load other data
       await loadLocationsFromFirestore();
@@ -891,13 +930,15 @@
       const locationsTab = document.getElementById('settingsLocationsTab');
       const codesTab = document.getElementById('settingsCodesTab');
       const usersTab = document.getElementById('settingsUsersTab');
+      const cleanupTab = document.getElementById('settingsCleanupTab');
       const accountsContent = document.getElementById('settingsAccountsContent');
       const locationsContent = document.getElementById('settingsLocationsContent');
       const codesContent = document.getElementById('settingsCodesContent');
       const usersContent = document.getElementById('settingsUsersContent');
+      const cleanupContent = document.getElementById('settingsCleanupContent');
 
       // Reset all tabs and content
-      [accountsTab, locationsTab, codesTab, usersTab].forEach(tab => {
+      [accountsTab, locationsTab, codesTab, usersTab, cleanupTab].forEach(tab => {
         if (!tab) return;
         tab.classList.remove('bg-blue-600', 'text-white');
         tab.classList.add('bg-slate-200', 'text-slate-700');
@@ -906,6 +947,7 @@
       locationsContent.classList.add('hidden');
       codesContent.classList.add('hidden');
       usersContent.classList.add('hidden');
+      if (cleanupContent) cleanupContent.classList.add('hidden');
 
       if (view === 'accounts') {
         accountsTab.classList.add('bg-blue-600', 'text-white');
@@ -924,12 +966,19 @@
         updateCodesTable();
         updateSewerChargeDisplay();
         updateLateFeeDisplay();
+        updatePucSurchargeDisplay();
         updateLateFeeDisplay();
       } else if (view === 'users') {
         usersTab.classList.add('bg-blue-600', 'text-white');
         usersTab.classList.remove('bg-slate-200', 'text-slate-700');
         usersContent.classList.remove('hidden');
         updateSettingsUsersTable();
+      } else if (view === 'cleanup') {
+        if (cleanupTab) {
+          cleanupTab.classList.add('bg-blue-600', 'text-white');
+          cleanupTab.classList.remove('bg-slate-200', 'text-slate-700');
+        }
+        if (cleanupContent) cleanupContent.classList.remove('hidden');
       }
     };
 
@@ -1077,21 +1126,33 @@
         const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
         const adjustedServiceCost = baseServiceCost * factor;
 
-        // Calculate code surcharges (applied to adjusted service cost after factor)
+        // Calculate code surcharges (applied to adjusted service cost after factor, affected by factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
             const codeType = code.type || 'percentage';
             const codeAmount = code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0);
+            let baseSurcharge;
             if (codeType === 'flat') {
-              totalSurcharge += codeAmount;
+              baseSurcharge = codeAmount;
             } else {
-              totalSurcharge += adjustedServiceCost * (codeAmount / 100);
+              baseSurcharge = adjustedServiceCost * (codeAmount / 100);
             }
+            // Apply factor to tax codes
+            totalSurcharge += baseSurcharge * factor;
           });
         }
 
-        const totalAmount = hasPaidEarly ? 0 : (adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge);
+        // Calculate subtotal: adjusted service cost + tax codes (both affected by factor)
+        const subtotalBeforePuc = adjustedServiceCost + totalSurcharge;
+
+        // Calculate PUC Surcharge (applied to subtotal, NOT affected by factor)
+        let pucSurchargeAmount = 0;
+        if (pucSurcharge > 0) {
+          pucSurchargeAmount = subtotalBeforePuc * (pucSurcharge / 100);
+        }
+
+        const totalAmount = hasPaidEarly ? 0 : (subtotalBeforePuc + pastDue + lateFeeAmount + pucSurchargeAmount);
 
         row.innerHTML = `
           <td class="px-6 py-4 whitespace-nowrap text-center">
@@ -1152,9 +1213,10 @@
           </td>
           <td class="px-6 py-4 whitespace-nowrap text-center text-sm text-slate-600 dark:text-slate-400">
             <div class="flex flex-wrap gap-1 justify-center">
+              ${pucSurcharge > 0 ? `<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200">PUC SCHG SW (${pucSurcharge.toFixed(2)}%)</span>` : ''}
               ${customer.codes && customer.codes.length > 0 
                 ? customer.codes.map(code => `<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">${code.name}</span>`).join('')
-                : '<span class="text-slate-400 dark:text-slate-500">—</span>'
+                : (pucSurcharge > 0 ? '' : '<span class="text-slate-400 dark:text-slate-500">—</span>')
               }
             </div>
           </td>
@@ -1328,6 +1390,12 @@
         const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
         const adjustedServiceCost = baseServiceCost * factor;
 
+        // Calculate PUC Surcharge first (applied to adjusted service cost after factor, before other codes)
+        let pucSurchargeAmount = 0;
+        if (pucSurcharge > 0) {
+          pucSurchargeAmount = adjustedServiceCost * (pucSurcharge / 100);
+        }
+
         // Calculate code surcharges (applied to adjusted service cost after factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
@@ -1342,7 +1410,7 @@
           });
         }
 
-        const totalAmount = adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge;
+        const totalAmount = adjustedServiceCost + pastDue + lateFeeAmount + pucSurchargeAmount + totalSurcharge;
 
         // Calculate due date as last day of current month
         const now = new Date();
@@ -1452,6 +1520,12 @@
         const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
         const adjustedServiceCost = baseServiceCost * factor;
 
+        // Calculate PUC Surcharge first (applied to adjusted service cost after factor, before other codes)
+        let pucSurchargeAmount = 0;
+        if (pucSurcharge > 0) {
+          pucSurchargeAmount = adjustedServiceCost * (pucSurcharge / 100);
+        }
+
         // Calculate code surcharges (applied to adjusted service cost after factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
@@ -1466,7 +1540,7 @@
           });
         }
 
-        const totalAmount = adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge;
+        const totalAmount = adjustedServiceCost + pastDue + lateFeeAmount + pucSurchargeAmount + totalSurcharge;
 
         // Calculate due date as last day of current month
         const now = new Date();
@@ -1606,6 +1680,12 @@
         const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
         const adjustedServiceCost = baseServiceCost * factor;
 
+        // Calculate PUC Surcharge first (applied to adjusted service cost after factor, before other codes)
+        let pucSurchargeAmount = 0;
+        if (pucSurcharge > 0) {
+          pucSurchargeAmount = adjustedServiceCost * (pucSurcharge / 100);
+        }
+
         // Calculate code surcharges (applied to adjusted service cost after factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
@@ -1620,7 +1700,7 @@
           });
         }
 
-        const totalAmount = adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge;
+        const totalAmount = adjustedServiceCost + pastDue + lateFeeAmount + pucSurchargeAmount + totalSurcharge;
 
         // Calculate dates
         const now = new Date();
@@ -3864,21 +3944,33 @@
         const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
         const adjustedServiceCost = baseServiceCost * factor;
 
-        // Calculate code surcharges (applied to adjusted service cost after factor)
+        // Calculate code surcharges (applied to adjusted service cost after factor, affected by factor)
         let totalSurcharge = 0;
         if (customer.codes && customer.codes.length > 0) {
           customer.codes.forEach(code => {
             const codeType = code.type || 'percentage';
             const codeAmount = code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0);
+            let baseSurcharge;
             if (codeType === 'flat') {
-              totalSurcharge += codeAmount;
+              baseSurcharge = codeAmount;
             } else {
-              totalSurcharge += adjustedServiceCost * (codeAmount / 100);
+              baseSurcharge = adjustedServiceCost * (codeAmount / 100);
             }
+            // Apply factor to tax codes
+            totalSurcharge += baseSurcharge * factor;
           });
         }
 
-        const totalAmount = hasPaidEarly ? 0 : (adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge);
+        // Calculate subtotal: adjusted service cost + tax codes (both affected by factor)
+        const subtotalBeforePuc = adjustedServiceCost + totalSurcharge;
+
+        // Calculate PUC Surcharge (applied to subtotal, NOT affected by factor)
+        let pucSurchargeAmount = 0;
+        if (pucSurcharge > 0) {
+          pucSurchargeAmount = subtotalBeforePuc * (pucSurcharge / 100);
+        }
+
+        const totalAmount = hasPaidEarly ? 0 : (subtotalBeforePuc + pastDue + lateFeeAmount + pucSurchargeAmount);
 
         row.innerHTML = `
           <td class="px-6 py-4 whitespace-nowrap text-center">
@@ -3939,9 +4031,10 @@
           </td>
           <td class="px-6 py-4 whitespace-nowrap text-center text-sm text-slate-600 dark:text-slate-400">
             <div class="flex flex-wrap gap-1 justify-center">
+              ${pucSurcharge > 0 ? `<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200">PUC SCHG SW (${pucSurcharge.toFixed(2)}%)</span>` : ''}
               ${customer.codes && customer.codes.length > 0 
                 ? customer.codes.map(code => `<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">${code.name}</span>`).join('')
-                : '<span class="text-slate-400 dark:text-slate-500">—</span>'
+                : (pucSurcharge > 0 ? '' : '<span class="text-slate-400 dark:text-slate-500">—</span>')
               }
             </div>
           </td>
@@ -4818,6 +4911,18 @@
       }
     }
 
+    // Update PUC Surcharge display
+    function updatePucSurchargeDisplay() {
+      const input = document.getElementById('pucSurchargeInput');
+      const status = document.getElementById('pucSurchargeStatus');
+      if (input) {
+        input.value = pucSurcharge.toFixed(2);
+      }
+      if (status) {
+        status.textContent = `Current value: ${pucSurcharge.toFixed(2)}%`;
+      }
+    }
+
     // Save late fee
     window.saveLateFee = async function() {
       const input = document.getElementById('lateFeeInput');
@@ -4857,6 +4962,54 @@
         lateFee = oldValue; // Revert on error
         if (status) {
           status.textContent = 'Error saving late fee. Please try again.';
+          status.className = 'text-xs text-red-500 dark:text-red-400';
+        }
+      }
+    };
+
+    // Save PUC Surcharge
+    window.savePucSurcharge = async function() {
+      const input = document.getElementById('pucSurchargeInput');
+      const status = document.getElementById('pucSurchargeStatus');
+      
+      if (!input) return;
+      
+      const newValue = parseFloat(input.value);
+      
+      if (isNaN(newValue) || newValue < 0 || newValue > 100) {
+        if (status) {
+          status.textContent = 'Please enter a valid percentage (must be between 0 and 100)';
+          status.className = 'text-xs text-red-500 dark:text-red-400';
+        }
+        return;
+      }
+      
+      const oldValue = pucSurcharge;
+      pucSurcharge = newValue;
+      
+      try {
+        await savePucSurchargeToFirestore();
+        if (status) {
+          status.textContent = 'PUC Surcharge saved successfully!';
+          status.className = 'text-xs text-green-500 dark:text-green-400';
+        }
+        
+        // Update all customer tables to reflect the change
+        updateCustomerTable();
+        updateSettingsCustomerTable();
+        
+        // Clear status message after 3 seconds
+        setTimeout(() => {
+          if (status) {
+            status.textContent = `Current value: ${pucSurcharge.toFixed(2)}%`;
+            status.className = 'text-xs text-slate-500 dark:text-slate-400';
+          }
+        }, 3000);
+      } catch (error) {
+        console.error('[SAVE PUC SURCHARGE] Error:', error);
+        pucSurcharge = oldValue; // Revert on error
+        if (status) {
+          status.textContent = 'Error saving PUC surcharge. Please try again.';
           status.className = 'text-xs text-red-500 dark:text-red-400';
         }
       }
@@ -5400,6 +5553,146 @@
       }).filter(code => code !== null);
     }
 
+    // Helper function to convert Excel serial date to readable date string
+    function excelSerialToDate(serial) {
+      // Excel serial dates start from January 1, 1900
+      // But Excel incorrectly treats 1900 as a leap year, so we need to adjust
+      if (typeof serial === 'number' && serial > 0 && serial < 1000000) {
+        // Check if it's likely an Excel serial date (between 1 and 1,000,000)
+        // Excel date range: 1 (Jan 1, 1900) to ~2958465 (Dec 31, 9999)
+        // Common dates are in the 40000-50000 range for recent years
+        const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899 (Excel's epoch)
+        const date = new Date(excelEpoch.getTime() + (serial - 1) * 24 * 60 * 60 * 1000);
+        
+        // Check if the resulting date is reasonable (between 1900 and 2100)
+        if (date.getFullYear() >= 1900 && date.getFullYear() <= 2100) {
+          const month = (date.getMonth() + 1).toString().padStart(2, '0');
+          const day = date.getDate().toString().padStart(2, '0');
+          const year = date.getFullYear().toString().slice(-2);
+          return `${month}/${day}/${year}`;
+        }
+      }
+      return serial; // Return original if not a valid date
+    }
+
+    // Fix Excel serial dates in existing customer data
+    window.fixExcelDates = async function() {
+      if (!confirm('This will fix Excel serial dates (like 46053) in all customers\' importData. Continue?')) {
+        return;
+      }
+
+      let fixed = 0;
+      let errors = 0;
+
+      customers.forEach(customer => {
+        if (!customer.importData) {
+          return; // Skip customers without importData
+        }
+
+        try {
+          let updated = false;
+          const rowData = customer.importData;
+
+          // Check each field in importData
+          Object.keys(rowData).forEach(key => {
+            const value = rowData[key];
+            // Check if key contains "date" and value is a number (likely Excel serial date)
+            const keyLower = String(key || '').toLowerCase();
+            if ((keyLower.includes('date') || keyLower.includes('billdate')) && typeof value === 'number') {
+              const convertedDate = excelSerialToDate(value);
+              if (convertedDate !== value) {
+                rowData[key] = convertedDate;
+                updated = true;
+              }
+            }
+          });
+
+          if (updated) {
+            customer.importData = rowData;
+            fixed++;
+          }
+        } catch (error) {
+          console.error(`[FIX EXCEL DATES] Error fixing dates for customer ${customer.id}:`, error);
+          errors++;
+        }
+      });
+
+      if (fixed > 0) {
+        // Save all updated customers to Firestore
+        await saveCustomersToFirestore();
+        alert(`Fixed Excel dates for ${fixed} customer(s).${errors > 0 ? `\n${errors} error(s) occurred.` : ''}`);
+        // Refresh the display if customer data profile is open
+        const modal = document.getElementById('customerDataProfileModal');
+        if (modal && !modal.classList.contains('hidden')) {
+          const customerId = modal.getAttribute('data-customer-id');
+          if (customerId) {
+            showCustomerDataProfile(customerId);
+          }
+        }
+      } else {
+        alert(`No dates needed fixing.${errors > 0 ? `\n${errors} error(s) occurred.` : ''}`);
+      }
+    };
+
+    // Fix Bill Date column specifically
+    window.fixBillDates = async function() {
+      if (!confirm('This will fix the "Bill Date" column in all customers\' importData. Continue?')) {
+        return;
+      }
+
+      let fixed = 0;
+      let errors = 0;
+
+      customers.forEach(customer => {
+        if (!customer.importData) {
+          return; // Skip customers without importData
+        }
+
+        try {
+          let updated = false;
+          const rowData = customer.importData;
+
+          // Look for "Bill Date" column specifically (case-insensitive)
+          Object.keys(rowData).forEach(key => {
+            const keyLower = String(key || '').toLowerCase().trim();
+            // Match "Bill Date" exactly or variations like "BillDate", "bill date", etc.
+            if ((keyLower === 'bill date' || keyLower === 'billdate' || keyLower === 'bill_date') && typeof rowData[key] === 'number') {
+              const value = rowData[key];
+              const convertedDate = excelSerialToDate(value);
+              if (convertedDate !== value) {
+                rowData[key] = convertedDate;
+                updated = true;
+              }
+            }
+          });
+
+          if (updated) {
+            customer.importData = rowData;
+            fixed++;
+          }
+        } catch (error) {
+          console.error(`[FIX BILL DATES] Error fixing Bill Date for customer ${customer.id}:`, error);
+          errors++;
+        }
+      });
+
+      if (fixed > 0) {
+        // Save all updated customers to Firestore
+        await saveCustomersToFirestore();
+        alert(`Fixed Bill Date for ${fixed} customer(s).${errors > 0 ? `\n${errors} error(s) occurred.` : ''}`);
+        // Refresh the display if customer data profile is open
+        const modal = document.getElementById('customerDataProfileModal');
+        if (modal && !modal.classList.contains('hidden')) {
+          const customerId = modal.getAttribute('data-customer-id');
+          if (customerId) {
+            showCustomerDataProfile(customerId);
+          }
+        }
+      } else {
+        alert(`No Bill Dates needed fixing.${errors > 0 ? `\n${errors} error(s) occurred.` : ''}`);
+      }
+    };
+
     // Re-sync pastDue amounts from stored importData
     window.syncPastDueFromImportData = async function() {
       if (!confirm('This will update all customers\' past due amounts from their imported Excel data. Continue?')) {
@@ -5573,10 +5866,39 @@
               if (!row || row.length === 0) continue;
 
               try {
+                // Helper function to convert Excel serial date to readable date string
+                const excelSerialToDate = (serial) => {
+                  // Excel serial dates start from January 1, 1900
+                  // But Excel incorrectly treats 1900 as a leap year, so we need to adjust
+                  if (typeof serial === 'number' && serial > 0 && serial < 1000000) {
+                    // Check if it's likely an Excel serial date (between 1 and 1,000,000)
+                    // Excel date range: 1 (Jan 1, 1900) to ~2958465 (Dec 31, 9999)
+                    // Common dates are in the 40000-50000 range for recent years
+                    const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899 (Excel's epoch)
+                    const date = new Date(excelEpoch.getTime() + (serial - 1) * 24 * 60 * 60 * 1000);
+                    
+                    // Check if the resulting date is reasonable (between 1900 and 2100)
+                    if (date.getFullYear() >= 1900 && date.getFullYear() <= 2100) {
+                      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+                      const day = date.getDate().toString().padStart(2, '0');
+                      const year = date.getFullYear().toString().slice(-2);
+                      return `${month}/${day}/${year}`;
+                    }
+                  }
+                  return serial; // Return original if not a valid date
+                };
+
                 // Create object with all Excel data
                 const rowData = {};
                 headers.forEach((header, index) => {
-                  rowData[header] = row[index] || '';
+                  const value = row[index] || '';
+                  // Check if header contains "date" or "Date" and value is a number (likely Excel serial date)
+                  const headerLower = String(header || '').toLowerCase();
+                  if ((headerLower.includes('date') || headerLower.includes('billdate')) && typeof value === 'number') {
+                    rowData[header] = excelSerialToDate(value);
+                  } else {
+                    rowData[header] = value;
+                  }
                 });
 
                 // Get account number
@@ -6236,10 +6558,14 @@
 
       // Calculate code surcharges (applied to adjusted service cost after factor)
       // IMPORTANT: Refresh customer codes from the global codes array to get latest amounts
+      // Tax codes are affected by the factor
       let totalSurcharge = 0;
       const codesContainer = document.getElementById('amountDetailsCodesContainer');
       codesContainer.innerHTML = '';
 
+      // Collect all codes with their amounts for sorting
+      const codeRows = [];
+      
       if (customer.codes && customer.codes.length > 0) {
         customer.codes.forEach(customerCode => {
           // Look up the latest code data from the global codes array
@@ -6254,28 +6580,89 @@
 
           const codeType = codeToUse.type || 'percentage';
           const codeAmount = codeToUse.amount !== undefined ? codeToUse.amount : (codeToUse.percentage !== undefined ? codeToUse.percentage : 0);
-          let surchargeAmount;
+          
+          // Calculate base surcharge amount (before factor)
+          let baseSurchargeAmount;
           if (codeType === 'flat') {
-            surchargeAmount = codeAmount;
+            baseSurchargeAmount = codeAmount;
           } else {
-            surchargeAmount = adjustedServiceCost * (codeAmount / 100);
+            baseSurchargeAmount = adjustedServiceCost * (codeAmount / 100);
           }
+          
+          // Apply factor to the surcharge amount
+          const surchargeAmount = baseSurchargeAmount * factor;
           totalSurcharge += surchargeAmount;
 
-          const codeRow = document.createElement('div');
-          codeRow.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600';
-          const displayText = codeType === 'flat' 
-            ? `${codeToUse.name} ($${parseFloat(codeAmount).toFixed(2)})` 
-            : `${codeToUse.name} (${parseFloat(codeAmount).toFixed(2)}%)`;
-          codeRow.innerHTML = `
-            <span class="text-slate-600 dark:text-slate-400">${displayText}</span>
-            <span class="font-medium">$${surchargeAmount.toFixed(2)}</span>
-          `;
-          codesContainer.appendChild(codeRow);
+          // Build display text with factor if factor is not 1.0
+          let displayText;
+          if (factor !== 1.0) {
+            if (codeType === 'flat') {
+              displayText = `${codeToUse.name} ($${parseFloat(codeAmount).toFixed(2)} x ${factor})`;
+            } else {
+              // Show full calculation: percentage% x factor x adjustedServiceCost
+              displayText = `${codeToUse.name} (${parseFloat(codeAmount).toFixed(2)}% x ${factor} x ${adjustedServiceCost.toFixed(2)})`;
+            }
+          } else {
+            if (codeType === 'flat') {
+              displayText = `${codeToUse.name} ($${parseFloat(codeAmount).toFixed(2)})`;
+            } else {
+              displayText = `${codeToUse.name} (${parseFloat(codeAmount).toFixed(2)}%)`;
+            }
+          }
+          
+          codeRows.push({
+            name: codeToUse.name,
+            displayText: displayText,
+            surchargeAmount: surchargeAmount
+          });
         });
       }
 
-      const total = adjustedServiceCost + pastDue + lateFeeAmount + totalSurcharge;
+      // Sort codes alphabetically by name
+      codeRows.sort((a, b) => a.name.localeCompare(b.name));
+
+      // Add sorted codes to container
+      codeRows.forEach(codeRow => {
+        const row = document.createElement('div');
+        row.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600';
+        row.innerHTML = `
+          <span class="text-slate-600 dark:text-slate-400">${codeRow.displayText}</span>
+          <span class="font-medium">$${codeRow.surchargeAmount.toFixed(2)}</span>
+        `;
+        codesContainer.appendChild(row);
+      });
+
+      // Calculate subtotal: adjusted service cost + tax codes (both affected by factor)
+      const subtotalBeforePuc = adjustedServiceCost + totalSurcharge;
+
+      // PUC Surcharge is applied to the subtotal (NOT affected by factor)
+      // PUC Surcharge container (displayed after tax codes, before Past Due)
+      const pucSurchargeContainer = document.getElementById('amountDetailsPucSurchargeContainer');
+      let pucSurchargeAmount = 0;
+      if (pucSurchargeContainer) {
+        pucSurchargeContainer.innerHTML = '';
+        if (pucSurcharge > 0) {
+          // PUC Surcharge is applied to subtotal (sewage service + tax codes), NOT affected by factor
+          pucSurchargeAmount = subtotalBeforePuc * (pucSurcharge / 100);
+          const pucRow = document.createElement('div');
+          pucRow.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600';
+          
+          // Display: "PUC SCHG SW (1.00% x [subtotal])"
+          const pucDisplayText = `PUC SCHG SW (${pucSurcharge.toFixed(2)}% x $${subtotalBeforePuc.toFixed(2)})`;
+          
+          pucRow.innerHTML = `
+            <span class="text-slate-600 dark:text-slate-400">${pucDisplayText}</span>
+            <span class="font-medium">$${pucSurchargeAmount.toFixed(2)}</span>
+          `;
+          pucSurchargeContainer.appendChild(pucRow);
+        }
+      }
+
+      // Calculate current due (everything except past due)
+      const currentDue = subtotalBeforePuc + pucSurchargeAmount + lateFeeAmount;
+      
+      // Calculate total - PUC surcharge is NOT affected by factor, applied to subtotal
+      const total = pastDue + currentDue;
 
       // Calculate due date as last day of current month
       const now = new Date();
@@ -6297,30 +6684,72 @@
 
       const billingCycleStr = `${formatShortDate(billingCycleStart)} to ${formatShortDate(billingCycleEnd)}`;
 
-      // Add factor adjustment to display if factor is not 1.0
+      // Hide factor container since it's now shown inline with service cost
       const factorContainer = document.getElementById('amountDetailsFactorContainer');
       if (factorContainer) {
-        factorContainer.innerHTML = '';
-        if (factor !== 1.0) {
-          const factorAdjustment = adjustedServiceCost - baseServiceCost;
-          const factorRow = document.createElement('div');
-          factorRow.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600';
-          factorRow.innerHTML = `
-            <span class="text-slate-600 dark:text-slate-400">Factor (${factor}x)</span>
-            <span class="font-medium">$${factorAdjustment.toFixed(2)}</span>
-          `;
-          factorContainer.appendChild(factorRow);
-        }
+        factorContainer.innerHTML = ''; // Clear it since factor is now shown inline
+        factorContainer.style.display = 'none'; // Hide it
       }
 
       document.getElementById('amountDetailsCustomer').textContent = customer.name;
-      // Show base service cost (before factor)
-      document.getElementById('amountDetailsService').textContent = `$${baseServiceCost.toFixed(2)}`;
+      
+      // Display factor if it's not 1.0
+      const factorRow = document.getElementById('amountDetailsFactorRow');
+      const factorElement = document.getElementById('amountDetailsFactor');
+      if (factorRow && factorElement) {
+        if (factor !== 1.0) {
+          factorRow.style.display = 'flex';
+          factorElement.textContent = factor.toFixed(1);
+        } else {
+          factorRow.style.display = 'none';
+        }
+      }
+      
+      // Show service cost with factor calculation inline
+      const serviceRow = document.getElementById('amountDetailsServiceRow');
+      if (serviceRow) {
+        if (factor !== 1.0) {
+          // Show: "Sewage Service (168.36 x 2) $336.72"
+          serviceRow.innerHTML = `
+            <span class="text-slate-600 dark:text-slate-400">Sewage Service (${baseServiceCost.toFixed(2)} x ${factor})</span>
+            <span class="font-medium" id="amountDetailsService">$${adjustedServiceCost.toFixed(2)}</span>
+          `;
+        } else {
+          // Show: "Sewage Service $168.36" (no factor)
+          serviceRow.innerHTML = `
+            <span class="text-slate-600 dark:text-slate-400">Sewage Service</span>
+            <span class="font-medium" id="amountDetailsService">$${adjustedServiceCost.toFixed(2)}</span>
+          `;
+        }
+      } else {
+        // Fallback if row not found
+        const serviceElement = document.getElementById('amountDetailsService');
+        if (serviceElement) {
+          serviceElement.textContent = `$${adjustedServiceCost.toFixed(2)}`;
+        }
+      }
       const pastDueElement = document.getElementById('amountDetailsPastDue');
       pastDueElement.textContent = `$${pastDue.toFixed(2)}`;
       pastDueElement.setAttribute('data-customer-id', customerId);
       pastDueElement.setAttribute('data-past-due', pastDue.toFixed(2));
-      document.getElementById('amountDetailsLateFee').textContent = `$${lateFeeAmount.toFixed(2)}`;
+      
+      // Display current due
+      const currentDueElement = document.getElementById('amountDetailsCurrentDue');
+      if (currentDueElement) {
+        currentDueElement.textContent = `$${currentDue.toFixed(2)}`;
+      }
+      
+      // Show/hide Late Fee based on amount
+      const lateFeeRow = document.getElementById('amountDetailsLateFeeRow');
+      const lateFeeElement = document.getElementById('amountDetailsLateFee');
+      if (lateFeeRow && lateFeeElement) {
+        if (lateFeeAmount > 0) {
+          lateFeeRow.style.display = 'flex';
+          lateFeeElement.textContent = `$${lateFeeAmount.toFixed(2)}`;
+        } else {
+          lateFeeRow.style.display = 'none';
+        }
+      }
       document.getElementById('amountDetailsTotal').textContent = `$${total.toFixed(2)}`;
       document.getElementById('amountDetailsDueDate').textContent = dueDateStr;
       document.getElementById('amountDetailsBillingCycle').textContent = billingCycleStr;
@@ -6491,15 +6920,22 @@
             <div>
               <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Tax Codes</label>
               <div class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 text-slate-800 dark:text-slate-200">
-                ${customer.codes && customer.codes.length > 0 
-                  ? customer.codes.map(code => {
+                ${(() => {
+                  const codesList = [];
+                  if (pucSurcharge > 0) {
+                    codesList.push(`PUC SCHG SW (${pucSurcharge.toFixed(2)}%)`);
+                  }
+                  if (customer.codes && customer.codes.length > 0) {
+                    customer.codes.forEach(code => {
                       const codeType = code.type || 'percentage';
                       const codeAmount = code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0);
-                      return codeType === 'flat' 
+                      codesList.push(codeType === 'flat' 
                         ? `${code.name} ($${parseFloat(codeAmount).toFixed(2)})` 
-                        : `${code.name} (${parseFloat(codeAmount).toFixed(2)}%)`;
-                    }).join(', ')
-                  : 'N/A'}
+                        : `${code.name} (${parseFloat(codeAmount).toFixed(2)}%)`);
+                    });
+                  }
+                  return codesList.length > 0 ? codesList.join(', ') : 'N/A';
+                })()}
               </div>
             </div>
           </div>
@@ -6607,9 +7043,29 @@
               <tr class="bg-white dark:bg-slate-800">
       `;
 
+      // Helper function to convert Excel serial date to readable date string
+      const excelSerialToDate = (serial) => {
+        if (typeof serial === 'number' && serial > 0 && serial < 1000000) {
+          const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899 (Excel's epoch)
+          const date = new Date(excelEpoch.getTime() + (serial - 1) * 24 * 60 * 60 * 1000);
+          if (date.getFullYear() >= 1900 && date.getFullYear() <= 2100) {
+            const month = (date.getMonth() + 1).toString().padStart(2, '0');
+            const day = date.getDate().toString().padStart(2, '0');
+            const year = date.getFullYear().toString().slice(-2);
+            return `${month}/${day}/${year}`;
+          }
+        }
+        return serial;
+      };
+
       // Add data row
       headers.forEach(header => {
-        const value = customer.importData[header];
+        let value = customer.importData[header];
+        // Check if it's a date field and value is a number (Excel serial date)
+        const headerLower = String(header || '').toLowerCase();
+        if ((headerLower.includes('date') || headerLower.includes('billdate')) && typeof value === 'number') {
+          value = excelSerialToDate(value);
+        }
         tableHTML += `<td class="px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400">${value || ''}</td>`;
       });
 
@@ -7628,6 +8084,13 @@
             >
               Users
             </button>
+            <button 
+              id="settingsCleanupTab"
+              onclick="switchSettingsView('cleanup')" 
+              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
+            >
+              Data Cleanup
+            </button>
           </div>
 
           <!-- Accounts Section -->
@@ -7651,13 +8114,6 @@
                   class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm"
                 >
                   Import Customer Data
-                </button>
-                <button 
-                  onclick="syncPastDueFromImportData()" 
-                  class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors text-sm"
-                  title="Re-sync past due amounts from imported Excel data"
-                >
-                  Sync Past Due Amounts
                 </button>
                 <button 
                   onclick="deleteAllUserData()" 
@@ -7846,6 +8302,41 @@
               </div>
             </div>
 
+            <!-- PUC Surcharge Setting -->
+            <div class="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6 mb-6">
+              <div class="flex justify-between items-center mb-4">
+                <div>
+                  <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">PUC Surcharge</h4>
+                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Set the PUC surcharge percentage (applied to all customers)</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-4">
+                <div class="flex-1">
+                  <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Percentage (%)</label>
+                  <input 
+                    type="number" 
+                    id="pucSurchargeInput" 
+                    min="0" 
+                    max="100"
+                    step="0.01"
+                    class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="0.00"
+                  />
+                </div>
+                <div class="flex items-end">
+                  <button 
+                    onclick="savePucSurcharge()" 
+                    class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+              <div class="mt-2">
+                <p class="text-xs text-slate-500 dark:text-slate-400" id="pucSurchargeStatus"></p>
+              </div>
+            </div>
+
             <div class="flex justify-between items-center mb-6">
               <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">Tax Codes</h4>
               <button 
@@ -7913,6 +8404,55 @@
                   <!-- User rows populated dynamically -->
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          <!-- Data Cleanup Section -->
+          <div id="settingsCleanupContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
+            <div class="mb-6">
+              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Data Cleanup</h2>
+              <p class="text-sm text-slate-500 dark:text-slate-400">
+                Tools to clean up and fix data issues in customer records
+              </p>
+            </div>
+
+            <div class="space-y-4">
+              <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-200 dark:border-blue-700">
+                <h3 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Data Synchronization</h3>
+                <p class="text-sm text-blue-600 dark:text-blue-300 mb-4">
+                  Re-sync past due amounts from imported Excel data
+                </p>
+                <button 
+                  onclick="syncPastDueFromImportData()" 
+                  class="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition-colors font-medium"
+                  title="Re-sync past due amounts from imported Excel data"
+                >
+                  Sync Past Due Amounts
+                </button>
+              </div>
+
+              <div class="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-xl border border-orange-200 dark:border-orange-700">
+                <h3 class="font-semibold text-orange-800 dark:text-orange-200 mb-2">Date Fixes</h3>
+                <p class="text-sm text-orange-600 dark:text-orange-300 mb-4">
+                  Fix Excel serial dates that appear as numbers (like 46053) in customer data
+                </p>
+                <div class="flex flex-col gap-3">
+                  <button 
+                    onclick="fixBillDates()" 
+                    class="bg-orange-600 text-white px-6 py-3 rounded-lg hover:bg-orange-700 transition-colors font-medium"
+                    title="Fix Bill Date column in all customer records"
+                  >
+                    Fix Dates
+                  </button>
+                  <button 
+                    onclick="fixExcelDates()" 
+                    class="bg-orange-500 text-white px-6 py-3 rounded-lg hover:bg-orange-600 transition-colors font-medium"
+                    title="Fix all Excel serial dates (like 46053) in customer importData"
+                  >
+                    Fix All Excel Dates
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -8006,15 +8546,29 @@
             >
               Import Customer Data
             </button>
-            <button 
-              onclick="syncPastDueFromImportData()" 
-              class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors text-sm"
-              title="Re-sync past due amounts from imported Excel data"
-            >
-              Sync Past Due Amounts
-            </button>
-            <button 
-              onclick="deleteAllUserData()" 
+                <button 
+                  onclick="syncPastDueFromImportData()" 
+                  class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors text-sm"
+                  title="Re-sync past due amounts from imported Excel data"
+                >
+                  Sync Past Due Amounts
+                </button>
+                <button 
+                  onclick="fixBillDates()" 
+                  class="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors text-sm"
+                  title="Fix Bill Date column in all customer records"
+                >
+                  Fix Dates
+                </button>
+                <button 
+                  onclick="fixExcelDates()" 
+                  class="bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 transition-colors text-sm"
+                  title="Fix all Excel serial dates (like 46053) in customer importData"
+                >
+                  Fix All Excel Dates
+                </button>
+                <button 
+                  onclick="deleteAllUserData()"
               class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors text-sm"
             >
               Delete User Data
@@ -8685,6 +9239,10 @@
           <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
             <h4 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Customer: <span id="amountDetailsCustomer"></span></h4>
             <div class="space-y-2 pt-2 border-t border-blue-200 dark:border-blue-700 mt-2">
+              <div class="flex justify-between items-center" id="amountDetailsFactorRow" style="display: none;">
+                <span class="text-sm text-blue-600 dark:text-blue-300">Factor</span>
+                <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsFactor">1.0</span>
+              </div>
               <div class="flex justify-between items-center">
                 <span class="text-sm text-blue-600 dark:text-blue-300">Due Date</span>
                 <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsDueDate">--/--/----</span>
@@ -8701,23 +9259,29 @@
           </div>
 
           <div class="space-y-3">
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
+            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600" id="amountDetailsServiceRow">
               <span class="text-slate-600 dark:text-slate-400">Sewage Service</span>
               <span class="font-medium" id="amountDetailsService">$150.00</span>
             </div>
             <div id="amountDetailsFactorContainer"></div>
+            <div id="amountDetailsCodesContainer"></div>
+            <div id="amountDetailsPucSurchargeContainer"></div>
+            <div style="height: 1rem;"></div>
             <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
-              <span class="text-slate-600 dark:text-slate-400">Past Due</span>
-              <span class="font-medium cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 p-2 rounded" 
+              <span class="font-bold text-slate-800 dark:text-slate-200">Current Due</span>
+              <span class="font-bold text-slate-800 dark:text-slate-200" id="amountDetailsCurrentDue">$0.00</span>
+            </div>
+            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
+              <span class="font-bold text-slate-800 dark:text-slate-200">Past Due</span>
+              <span class="font-bold text-slate-800 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 p-2 rounded" 
                     id="amountDetailsPastDue" 
                     ondblclick="editPastDueFromModal()"
                     title="Double-click to edit">$0.00</span>
             </div>
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
+            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600" id="amountDetailsLateFeeRow" style="display: none;">
               <span class="text-slate-600 dark:text-slate-400">Late Fee</span>
               <span class="font-medium" id="amountDetailsLateFee">$0.00</span>
             </div>
-            <div id="amountDetailsCodesContainer"></div>
             <div class="flex justify-between items-center py-3 bg-slate-50 dark:bg-slate-700 rounded-lg px-4">
               <span class="font-semibold text-slate-800 dark:text-slate-200">Total Due</span>
               <span class="font-bold text-lg" id="amountDetailsTotal">$0.00</span>
