@@ -29,6 +29,11 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // Billing cycles collection - only admin user (for snapshot storage)
+    match /billingCycles/{cycleId} {
+      allow read, write: if isAdmin();
+    }
+
     // Payment batches - only admin user
     match /paymentBatches/{batchId} {
       allow read, write: if isAdmin();
