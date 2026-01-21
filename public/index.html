@@ -366,6 +366,16 @@
       }
     }
 
+    // Save a single customer to Firestore (avoid updating all customers)
+    async function saveSingleCustomerToFirestore(customer) {
+      if (!customer || !customer.id) {
+        throw new Error('Customer object with valid id is required');
+      }
+      const customersRef = collection(db, 'customers');
+      const customerRef = doc(customersRef, customer.id);
+      await setDoc(customerRef, customer);
+    }
+
     async function loadCustomersFromFirestore() {
       try {
         const customersRef = collection(db, 'customers');
@@ -383,6 +393,7 @@
         filteredCustomers = [...customers];
 
         updateCustomerTable();
+        populatePaymentCustomerSelect();
 
         // Save codes to Firestore if any new codes were added during customer load
         // NOTE: Since loadCodesFromFirestore() now runs FIRST, codes are already loaded.
@@ -632,27 +643,43 @@
 
     async function saveBatchToFirestore(batch) {
       try {
+        console.log('[SAVE BATCH] Starting save to Firestore...');
+        console.log('[SAVE BATCH] Batch ID:', batch.id);
+        console.log('[SAVE BATCH] Batch data:', JSON.stringify(batch, null, 2));
+        
         const batchesRef = collection(db, 'paymentBatches');
         const batchRef = doc(batchesRef, batch.id);
         await setDoc(batchRef, batch);
-
+        
+        console.log('[SAVE BATCH] Successfully saved batch to Firestore with ID:', batch.id);
+        return true;
       } catch (error) {
-
+        console.error('[SAVE BATCH] Error saving batch:', error);
+        console.error('[SAVE BATCH] Error stack:', error.stack);
+        throw error;
       }
     }
 
     async function loadPaymentBatchesFromFirestore() {
       try {
+        console.log('[LOAD BATCHES] Starting load from Firestore...');
         const batchesRef = collection(db, 'paymentBatches');
         const snapshot = await getDocs(batchesRef);
+        console.log('[LOAD BATCHES] Snapshot size:', snapshot.size);
+        
         window.paymentBatches = [];
         snapshot.forEach(batchDoc => {
-          window.paymentBatches.push({ id: batchDoc.id, ...batchDoc.data() });
+          const batchData = { id: batchDoc.id, ...batchDoc.data() };
+          console.log('[LOAD BATCHES] Loaded batch:', batchDoc.id, 'Username:', batchData.username, 'Entries:', batchData.entries?.length || 0);
+          window.paymentBatches.push(batchData);
         });
 
+        console.log('[LOAD BATCHES] Total batches loaded:', window.paymentBatches.length);
+        console.log('[LOAD BATCHES] All batch IDs:', window.paymentBatches.map(b => b.id));
         renderBatchesList();
       } catch (error) {
-
+        console.error('[LOAD BATCHES] Error loading batches:', error);
+        console.error('[LOAD BATCHES] Error stack:', error.stack);
       }
     }
 
@@ -1369,7 +1396,7 @@
         return;
       }
 
-      select.innerHTML = '<option value="">Select a user...</option>';
+      select.innerHTML = '<option value="">Select a user...</option><option value="Test User">Test User</option>';
       users.forEach(user => {
         const option = document.createElement('option');
         const fullName = user.fullName || user.id || 'Unnamed User';
@@ -2485,6 +2512,11 @@
       const customerId = document.getElementById('paymentCustomerSelect')?.value;
       const paymentAmount = parseFloat(document.getElementById('paymentAmount')?.value);
       const paymentType = document.getElementById('paymentType')?.value || '';
+      const cashReceived = parseFloat(document.getElementById('cashReceivedInput')?.value);
+      const changeDueInput = parseFloat(document.getElementById('cashChangeDisplay')?.value);
+      const checkReceivedInput = parseFloat(document.getElementById('checkReceivedInput')?.value);
+      const checkChangeInput = parseFloat(document.getElementById('checkChangeDisplay')?.value);
+      const checkNumberInput = document.getElementById('checkNumberInput')?.value || '';
 
       if (!customerId) {
 
@@ -2537,14 +2569,40 @@
         // Update last payment
         customer.lastPayment = formattedDate;
 
-        // Save to Firestore
-        await saveCustomersToFirestore();
+        // Save only this customer to Firestore
+        await saveSingleCustomerToFirestore(customer);
 
         updateDashboard();
 
         if (window.currentPaymentBatch) {
 
-          addEntryToCurrentBatch(customer, paymentAmount, paymentType, formattedDate);
+          let cashIn = 0;
+          let cashOut = 0;
+          let checkIn = 0;
+          if (paymentType === 'Cash') {
+            const received = !isNaN(cashReceived) ? cashReceived : paymentAmount;
+            const change = Math.max(0, !isNaN(changeDueInput) ? changeDueInput : received - paymentAmount);
+            cashIn = received;
+            cashOut = change;
+          } else if (paymentType === 'Check') {
+            const received = !isNaN(checkReceivedInput) ? checkReceivedInput : paymentAmount;
+            const change = Math.max(0, !isNaN(checkChangeInput) ? checkChangeInput : received - paymentAmount);
+            checkIn = received;
+            cashOut = change; // change given comes out of cash drawer
+          }
+          if (window.currentPaymentBatch.register && window.currentPaymentBatch.register.runningTotals) {
+            window.currentPaymentBatch.register.runningTotals.cashIn += cashIn;
+            window.currentPaymentBatch.register.runningTotals.cashOut += cashOut;
+            window.currentPaymentBatch.register.runningTotals.checkIn += checkIn;
+          }
+
+          addEntryToCurrentBatch(customer, paymentAmount, paymentType, formattedDate, {
+            cashReceived: !isNaN(cashReceived) ? cashReceived : null,
+            changeGiven: paymentType === 'Cash' ? Math.max(0, (!isNaN(cashReceived) ? cashReceived : paymentAmount) - paymentAmount) : 0,
+            checkReceived: !isNaN(checkReceivedInput) ? checkReceivedInput : null,
+            checkChangeGiven: paymentType === 'Check' ? Math.max(0, (!isNaN(checkReceivedInput) ? checkReceivedInput : paymentAmount) - paymentAmount) : 0,
+            checkNumber: checkNumberInput || null
+          });
 
         } else {
 
@@ -2649,6 +2707,129 @@
           </div>
         </div>
 
+        <!-- Initial cash register count -->
+        <div id="registerCountSection" class="hidden space-y-6 py-6 px-6 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl">
+          <div class="flex items-center justify-between">
+            <div>
+              <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Cash Register Counting</h4>
+              <p class="text-sm text-slate-500 dark:text-slate-400">Enter quantities to establish the initial register balance.</p>
+            </div>
+            <button onclick="cancelCurrentBatch()" class="text-sm text-slate-500 hover:text-slate-700">Cancel</button>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="space-y-3">
+              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Bills</h5>
+              <div class="grid grid-cols-2 gap-3">
+                ${[1,2,5,10,20,50,100].map(v => `
+                  <div class="flex items-center gap-2">
+                    <label class="text-sm text-slate-600 dark:text-slate-300">$${v}</label>
+                    <input type="number" min="0" id="init_bill_${v}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRegisterTotal('init')">
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Coins</h5>
+              <div class="grid grid-cols-2 gap-3">
+                ${[['penny',0.01,'Pennies'],['nickel',0.05,'Nickels'],['dime',0.10,'Dimes'],['quarter',0.25,'Quarters'],['half',0.50,'Half Dollars']].map(([k,val,label]) => `
+                  <div class="flex items-center gap-2">
+                    <label class="text-sm text-slate-600 dark:text-slate-300">${label}</label>
+                    <input type="number" min="0" id="init_coin_${k}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRegisterTotal('init')">
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Checks in Drawer</h5>
+              <button onclick="addCheckInput('init')" class="text-sm text-blue-600 hover:text-blue-800">Add Check</button>
+            </div>
+            <div id="init_checksContainer" class="space-y-2">
+              <div class="flex items-center gap-3">
+                <label class="text-sm text-slate-600 dark:text-slate-300 w-24">Check #1</label>
+                <input type="number" min="0" step="0.01" class="flex-1 px-3 py-2 border rounded-lg" placeholder="Amount" oninput="calculateRegisterTotal('init')" />
+                <button onclick="removeCheckInput(this)" class="text-xs text-red-500">Remove</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <div>
+              <p id="initRegisterTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">Total: $0.00</p>
+            </div>
+            <div class="flex gap-3">
+              <button onclick="calculateRegisterTotal('init')" class="px-4 py-2 text-sm bg-slate-200 rounded-lg">Recalculate</button>
+              <button onclick="saveInitialRegisterCount()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Save Initial Count</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Final recount before submit -->
+        <div id="registerRecountSection" class="hidden space-y-6 py-6 px-6 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl">
+          <div class="flex items-center justify-between">
+            <div>
+              <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Closing Register Count</h4>
+              <p class="text-sm text-slate-500 dark:text-slate-400">Recount the drawer to balance the batch.</p>
+            </div>
+            <button onclick="backToBatchEntryFromRecount()" class="text-sm text-slate-500 hover:text-slate-700">Back</button>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="space-y-3">
+              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Bills</h5>
+              <div class="grid grid-cols-2 gap-3">
+                ${[1,2,5,10,20,50,100].map(v => `
+                  <div class="flex items-center gap-2">
+                    <label class="text-sm text-slate-600 dark:text-slate-300">$${v}</label>
+                    <input type="number" min="0" id="close_bill_${v}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRegisterTotal('close')">
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Coins</h5>
+              <div class="grid grid-cols-2 gap-3">
+                ${[['penny',0.01,'Pennies'],['nickel',0.05,'Nickels'],['dime',0.10,'Dimes'],['quarter',0.25,'Quarters'],['half',0.50,'Half Dollars']].map(([k,val,label]) => `
+                  <div class="flex items-center gap-2">
+                    <label class="text-sm text-slate-600 dark:text-slate-300">${label}</label>
+                    <input type="number" min="0" id="close_coin_${k}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRegisterTotal('close')">
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Checks in Drawer</h5>
+              <button onclick="addCheckInput('close')" class="text-sm text-blue-600 hover:text-blue-800">Add Check</button>
+            </div>
+            <div id="close_checksContainer" class="space-y-2">
+              <div class="flex items-center gap-3">
+                <label class="text-sm text-slate-600 dark:text-slate-300 w-24">Check #1</label>
+                <input type="number" min="0" step="0.01" class="flex-1 px-3 py-2 border rounded-lg" placeholder="Amount" oninput="calculateRegisterTotal('close')" />
+                <button onclick="removeCheckInput(this)" class="text-xs text-red-500">Remove</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <div>
+              <p id="closeRegisterTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">Total: $0.00</p>
+              <p id="registerVarianceText" class="text-xs text-slate-500"></p>
+            </div>
+            <div class="flex gap-3">
+              <button onclick="calculateRegisterTotal('close')" class="px-4 py-2 text-sm bg-slate-200 rounded-lg">Recalculate</button>
+              <button onclick="finalizeBatchWithRecount()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Submit Batch</button>
+            </div>
+          </div>
+        </div>
+
         <div id="batchEntrySection" class="hidden space-y-6 mt-8">
           <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
@@ -2709,6 +2890,7 @@
               <select 
                 id="paymentType" 
                 class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                onchange="togglePaymentInputs()"
               >
                 <option value="">Select Payment Type</option>
                 <option value="Check">Check</option>
@@ -2725,7 +2907,71 @@
                 min="0" 
                 class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
                 placeholder="Enter payment amount"
+                oninput="updateCashChangeDisplay(); updateCheckChangeDisplay();"
               >
+            </div>
+
+            <div id="cashInputsContainer" class="hidden mb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Cash Received</label>
+                <input 
+                  type="number" 
+                  id="cashReceivedInput" 
+                  step="0.01" 
+                  min="0" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="Amount given by customer"
+                  oninput="updateCashChangeDisplay()"
+                >
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Change Due</label>
+                <input 
+                  type="number" 
+                  id="cashChangeDisplay" 
+                  step="0.01" 
+                  min="0" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="$0.00" 
+                  readonly
+                >
+              </div>
+            </div>
+
+            <div id="checkInputsContainer" class="hidden mb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Check Number</label>
+                <input 
+                  type="text" 
+                  id="checkNumberInput" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="Enter check number"
+                >
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Check Received</label>
+                <input 
+                  type="number" 
+                  id="checkReceivedInput" 
+                  step="0.01" 
+                  min="0" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="Amount on check"
+                  oninput="updateCheckChangeDisplay()"
+                >
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Change Due</label>
+                <input 
+                  type="number" 
+                  id="checkChangeDisplay" 
+                  step="0.01" 
+                  min="0" 
+                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                  placeholder="$0.00" 
+                  readonly
+                >
+              </div>
             </div>
 
             <button 
@@ -2742,49 +2988,35 @@
             <!-- Header -->
             <div class="border-b px-6 py-4 bg-slate-50 flex items-center justify-between">
               <h2 class="text-lg font-semibold text-slate-800">Batch Preview</h2>
-              <button class="px-4 py-2 text-sm bg-green-600 text-white rounded-md shadow hover:bg-green-700 transition">
+              <button onclick="submitCurrentBatch()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-md shadow hover:bg-green-700 transition">
                 Submit Batch
               </button>
             </div>
 
             <!-- Scrollable Table Wrapper -->
             <div class="overflow-x-auto">
-              <table class="min-w-full table-fixed border-collapse text-sm">
-                <colgroup>
-                  <col style="width: 100px;" />
-                  <col style="width: 160px;" />
-                  <col style="width: 267px;" />
-                  <col style="width: 200px;" />
-                  <col style="width: 96px;" />
-                  <col style="width: 112px;" />
-                </colgroup>
+              <div class="min-w-[1100px] text-sm">
+                <div class="grid grid-cols-[110px_180px_140px_220px_90px_110px_140px_110px] bg-slate-100 text-xs uppercase text-slate-600">
+                  <div class="px-4 py-3 text-left font-semibold">Date</div>
+                  <div class="px-4 py-3 text-left font-semibold">Customer</div>
+                  <div class="px-4 py-3 text-left font-semibold">Account #</div>
+                  <div class="px-4 py-3 text-left font-semibold">Property</div>
+                  <div class="px-4 py-3 text-left font-semibold">Type</div>
+                  <div class="px-4 py-3 text-right font-semibold">Amount</div>
+                  <div class="px-4 py-3 text-right font-semibold">Change Given</div>
+                  <div class="px-4 py-3 text-right font-semibold">Total Paid</div>
+                </div>
 
-                <!-- Column Headers -->
-                <thead class="bg-slate-100 text-xs uppercase text-slate-600">
-                  <tr>
-                    <th class="px-4 py-3 text-left font-semibold">Date</th>
-                    <th class="px-4 py-3 text-left font-semibold">Customer</th>
-                    <th class="px-4 py-3 text-left font-semibold">Account #</th>
-                    <th class="px-4 py-3 text-left font-semibold">Property</th>
-                    <th class="px-4 py-3 text-left font-semibold">Type</th>
-                    <th class="px-4 py-3 text-right font-semibold">Amount</th>
-                  </tr>
-                </thead>
-
-                <!-- Table Rows -->
-                <tbody id="batchPreviewTable" class="divide-y divide-slate-100">
+                <div id="batchPreviewTable" class="divide-y divide-slate-100">
                   <!-- Filled by renderBatchPreview() -->
-                </tbody>
+                </div>
 
-                <!-- Table Footer -->
-                <tfoot class="bg-slate-100">
-                  <tr>
-                    <td colspan="4"></td>
-                    <td class="px-4 py-3 text-right font-semibold text-slate-700">Total</td>
-                    <td id="batchPreviewTotal" class="px-4 py-3 text-right font-bold text-slate-900">$0.00</td>
-                  </tr>
-                </tfoot>
-              </table>
+                <div class="grid grid-cols-[110px_180px_140px_220px_90px_110px_140px_110px] bg-slate-100">
+                  <div class="col-span-6"></div>
+                  <div class="px-4 py-3 text-right font-semibold text-slate-700">Total Paid</div>
+                  <div id="batchPreviewTotal" class="px-4 py-3 text-right font-bold text-slate-900">$0.00</div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -2803,11 +3035,12 @@
                   <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Entries</th>
                   <th class="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Amount</th>
                   <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Submitted</th>
+                  <th class="px-4 py-2 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
               <tbody id="batchesListTable" class="bg-white divide-y divide-slate-200">
                 <tr>
-                  <td colspan="5" class="px-4 py-3 text-center text-sm text-slate-500">No batches submitted yet.</td>
+                  <td colspan="6" class="px-4 py-3 text-center text-sm text-slate-500">No batches submitted yet.</td>
                 </tr>
               </tbody>
             </table>
@@ -2852,59 +3085,175 @@
     }
 
     function setBatchViewState(view) {
+      console.log('[SET VIEW STATE] Setting view state to:', view);
 
       // Ensure payment module is visible
-
       const paymentModule = document.getElementById('paymentModule');
-
       if (paymentModule) {
         const wasHidden = paymentModule.classList.contains('hidden');
         paymentModule.classList.remove('hidden');
-
+        console.log('[SET VIEW STATE] Payment module was hidden?', wasHidden, 'Now visible:', !paymentModule.classList.contains('hidden'));
       } else {
-
+        console.error('[SET VIEW STATE] Payment module not found!');
       }
 
       const sections = {
         start: document.getElementById('batchStartSection'),
+        register: document.getElementById('registerCountSection'),
         entry: document.getElementById('batchEntrySection'),
         preview: document.getElementById('batchPreviewSection'),
+        recount: document.getElementById('registerRecountSection'),
         list: document.getElementById('batchesListSection')
       };
+
+      console.log('[SET VIEW STATE] Section elements found:', Object.entries(sections).map(([name, el]) => `${name}: ${!!el}`).join(', '));
 
       Object.entries(sections).forEach(([name, el]) => {
         if (!el) {
           if (view === name) {
-
-          } else {
-
+            console.error(`[SET VIEW STATE] Section '${name}' not found but view state is '${view}'!`);
           }
           return;
         }
         const wasHidden = el.classList.contains('hidden');
         if (view === name) {
           el.classList.remove('hidden');
-
+          console.log(`[SET VIEW STATE] Showing section '${name}', was hidden: ${wasHidden}`);
         } else {
           el.classList.add('hidden');
-
         }
       });
+
+      // When viewing list, hide Active Batch and Select Customer sections
+      const batchEntrySection = document.getElementById('batchEntrySection');
+      if (view === 'list') {
+        if (batchEntrySection) {
+          batchEntrySection.classList.add('hidden');
+          batchEntrySection.style.cssText = 'display: none !important; visibility: hidden !important; opacity: 0 !important;';
+        }
+      }
 
       debugBatchDom('view-' + view);
 
       const target = sections[view];
       if (target) {
-
+        console.log('[SET VIEW STATE] Target section found, scrolling into view');
         requestAnimationFrame(() => {
-
           target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
       } else {
-
+        console.error(`[SET VIEW STATE] Target section '${view}' not found!`);
       }
 
     }
+
+    function showBatchEntryWithPreview() {
+      const idsToHide = ['batchStartSection', 'registerCountSection', 'registerRecountSection', 'batchesListSection'];
+      idsToHide.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
+      });
+      const entry = document.getElementById('batchEntrySection');
+      const preview = document.getElementById('batchPreviewSection');
+      if (entry) {
+        entry.classList.remove('hidden');
+        entry.style.cssText = '';
+      }
+      if (preview) {
+        preview.classList.remove('hidden');
+        preview.style.cssText = '';
+      }
+    }
+
+    function resetBatchEntryForm() {
+      const select = document.getElementById('paymentCustomerSelect');
+      if (select) select.value = '';
+      hideCustomerPaymentInfo();
+      const paymentTypeField = document.getElementById('paymentType');
+      if (paymentTypeField) paymentTypeField.value = '';
+      const paymentAmountField = document.getElementById('paymentAmount');
+      if (paymentAmountField) paymentAmountField.value = '';
+      const cashReceived = document.getElementById('cashReceivedInput');
+      if (cashReceived) cashReceived.value = '';
+      const cashChange = document.getElementById('cashChangeDisplay');
+      if (cashChange) cashChange.value = '';
+      const checkNumber = document.getElementById('checkNumberInput');
+      if (checkNumber) checkNumber.value = '';
+      const checkReceived = document.getElementById('checkReceivedInput');
+      if (checkReceived) checkReceived.value = '';
+      const checkChange = document.getElementById('checkChangeDisplay');
+      if (checkChange) checkChange.value = '';
+      togglePaymentInputs();
+    }
+
+    // Helpers for register counting (prefix init|close)
+    const billDenoms = [1, 2, 5, 10, 20, 50, 100];
+    const coinDenoms = [
+      { key: 'penny', value: 0.01 },
+      { key: 'nickel', value: 0.05 },
+      { key: 'dime', value: 0.10 },
+      { key: 'quarter', value: 0.25 },
+      { key: 'half', value: 0.50 }
+    ];
+
+    window.addCheckInput = function(prefix) {
+      const container = document.getElementById(`${prefix}_checksContainer`);
+      if (!container) return;
+      const idx = container.children.length + 1;
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-3';
+      row.innerHTML = `
+        <label class="text-sm text-slate-600 dark:text-slate-300 w-24">Check #${idx}</label>
+        <input type="number" min="0" step="0.01" class="flex-1 px-3 py-2 border rounded-lg" placeholder="Amount" oninput="calculateRegisterTotal('${prefix}')" />
+        <button onclick="removeCheckInput(this)" class="text-xs text-red-500">Remove</button>
+      `;
+      container.appendChild(row);
+    };
+
+    window.removeCheckInput = function(btn) {
+      const row = btn.closest('div');
+      if (row && row.parentElement) {
+        row.parentElement.removeChild(row);
+      }
+    };
+
+    function readRegisterCounts(prefix) {
+      const bills = {};
+      const coins = {};
+      let cashTotal = 0;
+      billDenoms.forEach(v => {
+        const el = document.getElementById(`${prefix}_bill_${v}`);
+        const qty = el ? parseFloat(el.value) || 0 : 0;
+        bills[v] = qty;
+        cashTotal += qty * v;
+      });
+      coinDenoms.forEach(({ key, value }) => {
+        const el = document.getElementById(`${prefix}_coin_${key}`);
+        const qty = el ? parseFloat(el.value) || 0 : 0;
+        coins[key] = qty;
+        cashTotal += qty * value;
+      });
+      const checksContainer = document.getElementById(`${prefix}_checksContainer`);
+      const checks = [];
+      if (checksContainer) {
+        checksContainer.querySelectorAll('input[type="number"]').forEach(input => {
+          const amt = parseFloat(input.value);
+          if (!isNaN(amt) && amt > 0) checks.push(amt);
+        });
+      }
+      const checksTotal = checks.reduce((s, v) => s + v, 0);
+      const total = cashTotal + checksTotal;
+      return { bills, coins, checks, cashTotal, checksTotal, total };
+    }
+
+    window.calculateRegisterTotal = function(prefix) {
+      const result = readRegisterCounts(prefix);
+      const target = document.getElementById(prefix === 'init' ? 'initRegisterTotal' : 'closeRegisterTotal');
+      if (target) {
+        target.textContent = `Total: $${result.total.toFixed(2)}`;
+      }
+      return result;
+    };
 
     window.startPaymentBatch = function() {
       const userSelect = document.getElementById('batchStartUserSelect');
@@ -2925,22 +3274,26 @@
       // Generate batch ID: [username][dayOfYear]
       // Remove spaces from username for the ID
       const usernameForId = username.replace(/\s+/g, '');
-      const batchId = `${usernameForId}${dayOfYear}`;
+      const batchId = `${usernameForId}${dayOfYear}-${Date.now()}`;
 
       window.currentPaymentBatch = {
         id: batchId,
         username: username,
         startedAt: new Date().toISOString(),
-        entries: []
+        entries: [],
+        register: {
+          initial: null,
+          closing: null,
+          runningTotals: { cashIn: 0, cashOut: 0, checkIn: 0 }
+        }
       };
-      renderBatchPreview();
 
       const activeUserLabel = document.getElementById('activeBatchUser');
       if (activeUserLabel) activeUserLabel.textContent = username;
 
-      setBatchViewState('entry');
-      addAnotherBatchEntry();
-      debugBatchDom('after-start');
+      // Move to register counting view
+      setBatchViewState('register');
+      calculateRegisterTotal('init');
     };
 
     window.cancelCurrentBatch = function() {
@@ -2959,6 +3312,22 @@
 
     };
 
+    window.saveInitialRegisterCount = function() {
+      if (!window.currentPaymentBatch) {
+        alert('Start a batch first.');
+        return;
+      }
+      const initial = calculateRegisterTotal('init');
+      window.currentPaymentBatch.register.initial = {
+        ...initial,
+        recordedAt: new Date().toISOString()
+      };
+      window.currentPaymentBatch.register.runningTotals = window.currentPaymentBatch.register.runningTotals || { cashIn: 0, cashOut: 0, checkIn: 0 };
+      renderBatchPreview();
+      setBatchViewState('entry');
+      addAnotherBatchEntry();
+    };
+
     window.addAnotherBatchEntry = function() {
       if (!window.currentPaymentBatch) {
         alert('Start a batch before adding entries.');
@@ -2967,28 +3336,113 @@
 
       setBatchViewState('entry');
       debugBatchDom('add-entry');
-      const select = document.getElementById('paymentCustomerSelect');
-      if (select) select.value = '';
-      hideCustomerPaymentInfo();
-      const paymentTypeField = document.getElementById('paymentType');
-      if (paymentTypeField) paymentTypeField.value = '';
-      const paymentAmountField = document.getElementById('paymentAmount');
-      if (paymentAmountField) paymentAmountField.value = '';
+      resetBatchEntryForm();
 
     };
 
-    window.viewPaymentBatches = function() {
-      renderBatchesList();
-      setBatchViewState('list');
+    window.togglePaymentInputs = function() {
+      const type = document.getElementById('paymentType')?.value;
+      const cashContainer = document.getElementById('cashInputsContainer');
+      const checkContainer = document.getElementById('checkInputsContainer');
+      if (cashContainer) cashContainer.classList.add('hidden');
+      if (checkContainer) checkContainer.classList.add('hidden');
+      if (type === 'Cash') {
+        if (cashContainer) cashContainer.classList.remove('hidden');
+        updateCashChangeDisplay();
+      } else if (type === 'Check') {
+        if (checkContainer) {
+          checkContainer.classList.remove('hidden');
+          updateCheckChangeDisplay();
+        }
+      }
+    };
 
+    window.updateCashChangeDisplay = function() {
+      const paymentAmount = parseFloat(document.getElementById('paymentAmount')?.value) || 0;
+      const cashReceived = parseFloat(document.getElementById('cashReceivedInput')?.value) || paymentAmount;
+      const change = Math.max(0, cashReceived - paymentAmount);
+      const display = document.getElementById('cashChangeDisplay');
+      if (display) display.value = change.toFixed(2);
+    };
+
+    window.updateCheckChangeDisplay = function() {
+      const paymentAmount = parseFloat(document.getElementById('paymentAmount')?.value) || 0;
+      const checkReceived = parseFloat(document.getElementById('checkReceivedInput')?.value) || paymentAmount;
+      const change = Math.max(0, checkReceived - paymentAmount);
+      const display = document.getElementById('checkChangeDisplay');
+      if (display) display.value = change.toFixed(2);
+    };
+
+    function renderBatchesOnlyView() {
+      const paymentModule = document.getElementById('paymentModule');
+      if (!paymentModule) {
+        console.error('[BATCH LIST VIEW] Payment module not found');
+        return;
+      }
+
+      paymentModule.innerHTML = `
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Payment Batches</h3>
+          <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div id="batchesListSection" data-batch-section="list" class="mt-4">
+          <div class="flex justify-between items-center mb-4">
+            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Submitted Batches</h4>
+            <button onclick="closeBatchList()" class="text-sm text-slate-500 hover:text-slate-700">Close</button>
+          </div>
+          <div class="overflow-x-auto bg-white rounded-2xl border border-slate-200 shadow-inner">
+            <table class="min-w-full divide-y divide-slate-200">
+              <thead class="bg-slate-100">
+                <tr>
+                  <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Batch ID</th>
+                  <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">User</th>
+                  <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Entries</th>
+                  <th class="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Amount</th>
+                  <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Submitted</th>
+                  <th class="px-4 py-2 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="batchesListTable" class="bg-white divide-y divide-slate-200">
+                <tr>
+                  <td colspan="6" class="px-4 py-3 text-center text-sm text-slate-500">No batches submitted yet.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    window.viewPaymentBatches = async function() {
+      console.log('[VIEW BATCHES] Starting viewPaymentBatches...');
+      console.log('[VIEW BATCHES] Current batches in array before load:', window.paymentBatches?.length || 0);
+
+      // Ensure payment module is visible
+      const paymentModule = document.getElementById('paymentModule');
+      if (!paymentModule) {
+        console.error('[VIEW BATCHES] Payment module not found!');
+        return;
+      }
+
+      paymentModule.classList.remove('hidden');
+      paymentModule.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important;';
+
+      // Rebuild the module UI to only show the batches list
+      renderBatchesOnlyView();
+
+      await loadPaymentBatchesFromFirestore();
+      renderBatchesList();
+
+      console.log('[VIEW BATCHES] viewPaymentBatches complete');
     };
 
     window.closeBatchList = function() {
-      if (window.currentPaymentBatch) {
-        setBatchViewState(window.currentPaymentBatch.entries.length ? 'preview' : 'entry');
-      } else {
-        setBatchViewState('start');
-      }
+      resetPaymentForm();
 
     };
 
@@ -3003,6 +3457,82 @@
         return;
       }
 
+      if (!window.currentPaymentBatch.register || !window.currentPaymentBatch.register.initial) {
+        alert('Please record the initial register count before submitting.');
+        return;
+      }
+
+      const running = window.currentPaymentBatch.register.runningTotals || { cashIn: 0, cashOut: 0, checkIn: 0 };
+      const initial = window.currentPaymentBatch.register.initial;
+      const expectedCash = (initial.cashTotal || 0) + (running.cashIn || 0) - (running.cashOut || 0);
+      const expectedChecks = (initial.checksTotal || 0) + (running.checkIn || 0);
+      const expectedTotal = expectedCash + expectedChecks;
+      const varianceText = document.getElementById('registerVarianceText');
+      if (varianceText) {
+        varianceText.textContent = `Expected drawer total: $${expectedTotal.toFixed(2)} (cash ${expectedCash.toFixed(2)}, checks ${expectedChecks.toFixed(2)})`;
+      }
+
+      calculateRegisterTotal('close');
+      setBatchViewState('recount');
+      // Force-hide entry/preview when moving to recount
+      ['batchEntrySection','batchPreviewSection','batchStartSection','registerCountSection','batchesListSection'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.classList.add('hidden');
+          el.style.cssText = 'display: none !important; visibility: hidden !important; opacity: 0 !important;';
+        }
+      });
+      const recount = document.getElementById('registerRecountSection');
+      if (recount) {
+        recount.classList.remove('hidden');
+        recount.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+
+    window.backToBatchEntryFromRecount = function() {
+      if (!window.currentPaymentBatch) {
+        setBatchViewState('start');
+        return;
+      }
+      showBatchEntryWithPreview();
+    };
+
+    window.finalizeBatchWithRecount = async function() {
+      console.log('[FINALIZE BATCH] Starting batch finalization...');
+      
+      if (!window.currentPaymentBatch) {
+        console.error('[FINALIZE BATCH] No current batch found!');
+        alert('Start a batch before submitting.');
+        return;
+      }
+
+      console.log('[FINALIZE BATCH] Current batch ID:', window.currentPaymentBatch.id);
+      console.log('[FINALIZE BATCH] Current batch entries:', window.currentPaymentBatch.entries.length);
+
+      const closing = calculateRegisterTotal('close');
+      const running = window.currentPaymentBatch.register.runningTotals || { cashIn: 0, cashOut: 0, checkIn: 0 };
+      const initial = window.currentPaymentBatch.register.initial || { cashTotal: 0, checksTotal: 0, total: 0 };
+
+      const expectedCash = (initial.cashTotal || 0) + (running.cashIn || 0) - (running.cashOut || 0);
+      const expectedChecks = (initial.checksTotal || 0) + (running.checkIn || 0);
+      const expectedTotal = expectedCash + expectedChecks;
+      const variance = (closing.total || 0) - expectedTotal;
+
+      console.log('[FINALIZE BATCH] Register variance:', variance);
+
+      if (variance !== 0) {
+        const statusMsg = `Register ${variance > 0 ? 'over' : 'short'} by $${Math.abs(variance).toFixed(2)}. Please try again.`;
+        alert(statusMsg);
+        return;
+      }
+
+      window.currentPaymentBatch.register.closing = {
+        ...closing,
+        recordedAt: new Date().toISOString(),
+        expectedTotal,
+        variance
+      };
+
       const totalAmount = window.currentPaymentBatch.entries.reduce((sum, entry) => sum + entry.amount, 0);
       const submittedBatch = {
         ...window.currentPaymentBatch,
@@ -3010,19 +3540,39 @@
         totalAmount
       };
 
+      console.log('[FINALIZE BATCH] Prepared submitted batch:', submittedBatch.id);
+      console.log('[FINALIZE BATCH] Batch total amount:', totalAmount);
+      
+      // Add to local array first
       window.paymentBatches.push(submittedBatch);
+      console.log('[FINALIZE BATCH] Added to local array. Total batches in array:', window.paymentBatches.length);
+      
+      // Save to Firestore
+      console.log('[FINALIZE BATCH] Saving to Firestore...');
       await saveBatchToFirestore(submittedBatch);
-      alert('Batch submitted successfully!');
+      console.log('[FINALIZE BATCH] Save complete, waiting 500ms before reload...');
+      
+      // Small delay to ensure Firestore write propagates
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Reload from Firestore to get fresh data
+      console.log('[FINALIZE BATCH] Reloading from Firestore...');
+      await loadPaymentBatchesFromFirestore();
+      console.log('[FINALIZE BATCH] Reload complete. Batches in array:', window.paymentBatches.length);
+      
+      alert('Batch submitted. Register balanced.');
 
       window.currentPaymentBatch = null;
       renderBatchPreview();
       renderBatchesList();
       setBatchViewState('list');
 
+      console.log('[FINALIZE BATCH] Calling viewPaymentBatches...');
       viewPaymentBatches();
+      console.log('[FINALIZE BATCH] Batch finalization complete');
     };
 
-    function addEntryToCurrentBatch(customer, paymentAmount, paymentType, paymentDate) {
+    function addEntryToCurrentBatch(customer, paymentAmount, paymentType, paymentDate, extra = {}) {
 
       if (!window.currentPaymentBatch) {
 
@@ -3038,7 +3588,12 @@
         property: customer.address || 'N/A',
         paymentType,
         amount: paymentAmount,
-        date: paymentDate
+        date: paymentDate,
+        cashReceived: extra.cashReceived || null,
+        changeGiven: extra.changeGiven || 0,
+        checkReceived: extra.checkReceived || null,
+        checkChangeGiven: extra.checkChangeGiven || 0,
+        checkNumber: extra.checkNumber || null
       };
 
       window.currentPaymentBatch.entries.push(entry);
@@ -3062,6 +3617,7 @@
       }
 
       setBatchViewState('preview');
+      showBatchEntryWithPreview();
 
       // IMMEDIATE: Force preview section visible right after setBatchViewState
       const immediatePreviewSection = document.getElementById('batchPreviewSection');
@@ -3197,6 +3753,7 @@
         }
       }, 100);
 
+      resetBatchEntryForm();
       debugBatchDom('after-add-entry');
 
     }
@@ -3212,32 +3769,40 @@
 
       if (!window.currentPaymentBatch || !window.currentPaymentBatch.entries || window.currentPaymentBatch.entries.length === 0) {
         tbody.innerHTML = `
-          <tr>
-            <td colspan="6" class="px-4 py-3 text-center text-sm text-slate-500">
+          <div class="grid grid-cols-[110px_180px_140px_220px_90px_110px_120px_110px]">
+            <div class="col-span-8 px-4 py-3 text-center text-sm text-slate-500">
               No payments added yet.
-            </td>
-          </tr>
+            </div>
+          </div>
         `;
         if (totalCell) totalCell.textContent = "$0.00";
         return;
       }
 
       window.currentPaymentBatch.entries.forEach(entry => {
-        const row = document.createElement("tr");
-        row.className = "hover:bg-slate-50 transition-colors";
+        const row = document.createElement("div");
+        row.className = "grid grid-cols-[110px_180px_140px_220px_90px_110px_140px_110px] hover:bg-slate-50 transition-colors";
 
         // Format property as multi-line (the KEY fix)
         const [street, cityStateZip] = entry.property.split(/,(.+)/);
 
+        const receivedAmount = entry.paymentType === 'Cash'
+          ? (entry.cashReceived ?? entry.amount)
+          : (entry.checkReceived ?? entry.amount);
+        const changeGiven = entry.paymentType === 'Cash'
+          ? (entry.changeGiven || 0)
+          : (entry.checkChangeGiven || 0);
         row.innerHTML = `
-            <td class="px-4 py-4 align-top whitespace-nowrap">${entry.date || ''}</td>
-            <td class="px-4 py-4 align-top whitespace-nowrap">${entry.customerName || ''}</td>
-            <td class="px-4 py-4 align-top whitespace-nowrap">${entry.accountNumber || ''}</td>
-            <td class="px-4 py-4 align-top leading-5">
+            <div class="px-4 py-4 align-top whitespace-nowrap">${entry.date || ''}</div>
+            <div class="px-4 py-4 align-top whitespace-nowrap">${entry.customerName || ''}</div>
+            <div class="px-4 py-4 align-top whitespace-nowrap">${entry.accountNumber || ''}</div>
+            <div class="px-4 py-4 align-top leading-5">
                 ${street || ''}${cityStateZip ? ',<br>' + cityStateZip.trim() : ''}
-            </td>
-            <td class="px-4 py-4 align-top whitespace-nowrap">${entry.paymentType || ''}</td>
-            <td class="px-4 py-4 align-top text-right whitespace-nowrap">$${(entry.amount || 0).toFixed(2)}</td>
+            </div>
+            <div class="px-4 py-4 align-top whitespace-nowrap">${entry.paymentType || ''}</div>
+            <div class="px-4 py-4 align-top text-right whitespace-nowrap">$${(receivedAmount || 0).toFixed(2)}</div>
+            <div class="px-4 py-4 align-top text-right whitespace-nowrap">$${(changeGiven || 0).toFixed(2)}</div>
+            <div class="px-4 py-4 align-top text-right whitespace-nowrap">$${(entry.amount || 0).toFixed(2)}</div>
         `;
 
         tbody.appendChild(row);
@@ -3251,36 +3816,231 @@
     }
 
     function renderBatchesList() {
+      console.log('[RENDER BATCHES] Starting render...');
       const tbody = document.getElementById('batchesListTable');
       if (!tbody) {
-
+        console.error('[RENDER BATCHES] batchesListTable not found in DOM!');
+        console.error('[RENDER BATCHES] Payment module exists?', !!document.getElementById('paymentModule'));
+        console.error('[RENDER BATCHES] Batches list section exists?', !!document.getElementById('batchesListSection'));
         debugBatchDom('renderList-missing');
         return;
       }
 
-      if (!window.paymentBatches || window.paymentBatches.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-3 text-center text-sm text-slate-500">No batches submitted yet.</td></tr>`;
+      console.log('[RENDER BATCHES] Found tbody element:', tbody);
+      console.log('[RENDER BATCHES] paymentBatches array:', window.paymentBatches);
+      console.log('[RENDER BATCHES] paymentBatches length:', window.paymentBatches?.length || 0);
 
+      if (!window.paymentBatches || window.paymentBatches.length === 0) {
+        console.log('[RENDER BATCHES] No batches to display, showing empty message');
+        tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-3 text-center text-sm text-slate-500">No batches submitted yet.</td></tr>`;
         return;
       }
 
+      console.log('[RENDER BATCHES] Rendering', window.paymentBatches.length, 'batches');
       let rows = '';
-      window.paymentBatches.slice().reverse().forEach(batch => {
+      window.paymentBatches.slice().reverse().forEach((batch, index) => {
+        console.log(`[RENDER BATCHES] Processing batch ${index + 1}:`, batch.id, 'Username:', batch.username, 'Entries:', batch.entries?.length || 0);
         const submitted = batch.submittedAt ? new Date(batch.submittedAt).toLocaleString() : '—';
         rows += `
           <tr>
             <td class="px-4 py-2 text-sm text-slate-700">${batch.id}</td>
             <td class="px-4 py-2 text-sm text-slate-700">${batch.username}</td>
-            <td class="px-4 py-2 text-sm text-slate-700">${batch.entries.length}</td>
+            <td class="px-4 py-2 text-sm text-slate-700">${batch.entries?.length || 0}</td>
             <td class="px-4 py-2 text-sm text-slate-700 text-right">$${(batch.totalAmount || 0).toFixed(2)}</td>
             <td class="px-4 py-2 text-sm text-slate-700">${submitted}</td>
+            <td class="px-4 py-2 text-sm text-slate-700 text-center">
+              <button onclick="openBatchDetails('${batch.id.replace(/'/g, "\\'")}')" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 mr-2">Open</button>
+              <button onclick="deleteBatch('${batch.id.replace(/'/g, "\\'")}')" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700">Delete</button>
+            </td>
           </tr>
         `;
       });
 
+      console.log('[RENDER BATCHES] Setting innerHTML with', rows.split('<tr>').length - 1, 'rows');
+      console.log('[RENDER BATCHES] HTML content:', rows.substring(0, 200) + '...');
       tbody.innerHTML = rows;
+      
+      // Force table row visibility
+      Array.from(tbody.children).forEach((row, idx) => {
+        row.style.cssText = 'display: table-row !important; visibility: visible !important;';
+        console.log(`[RENDER BATCHES] Row ${idx} set, display:`, window.getComputedStyle(row).display);
+      });
+      
+      // Verify it was set
+      setTimeout(() => {
+        console.log('[RENDER BATCHES] Verification - tbody.innerHTML length:', tbody.innerHTML.length);
+        console.log('[RENDER BATCHES] Verification - tbody.children.length:', tbody.children.length);
+        console.log('[RENDER BATCHES] Verification - tbody computed display:', window.getComputedStyle(tbody).display);
+        const listSection = document.getElementById('batchesListSection');
+        if (listSection) {
+          console.log('[RENDER BATCHES] batchesListSection hidden?', listSection.classList.contains('hidden'));
+          console.log('[RENDER BATCHES] batchesListSection display style:', window.getComputedStyle(listSection).display);
+          console.log('[RENDER BATCHES] batchesListSection computed visibility:', window.getComputedStyle(listSection).visibility);
+          console.log('[RENDER BATCHES] batchesListSection computed opacity:', window.getComputedStyle(listSection).opacity);
+          console.log('[RENDER BATCHES] batchesListSection bounding rect:', listSection.getBoundingClientRect());
+        }
+        const table = tbody.closest('table');
+        if (table) {
+          console.log('[RENDER BATCHES] Table computed display:', window.getComputedStyle(table).display);
+          console.log('[RENDER BATCHES] Table computed visibility:', window.getComputedStyle(table).visibility);
+        }
+      }, 200);
+      
+      console.log('[RENDER BATCHES] Render complete');
 
     }
+
+    window.openBatchDetails = function(batchId) {
+      console.log('[BATCH DETAILS] Opening batch:', batchId);
+      const batch = window.paymentBatches.find(b => b.id === batchId);
+      if (!batch) {
+        alert('Batch not found');
+        return;
+      }
+
+      // Create modal HTML
+      let entriesHtml = '';
+      if (batch.entries && batch.entries.length > 0) {
+        entriesHtml = batch.entries.map(entry => {
+          const receivedAmount = entry.paymentType === 'Cash'
+            ? (entry.cashReceived ?? entry.amount)
+            : (entry.checkReceived ?? entry.amount);
+          const changeGiven = entry.paymentType === 'Cash'
+            ? (entry.changeGiven || 0)
+            : (entry.checkChangeGiven || 0);
+          
+          return '<tr class="border-b border-slate-200">' +
+            '<td class="px-4 py-3 text-sm text-slate-700">' + (entry.date || '') + '</td>' +
+            '<td class="px-4 py-3 text-sm text-slate-700">' + (entry.customerName || '') + '</td>' +
+            '<td class="px-4 py-3 text-sm text-slate-700">' + (entry.accountNumber || '') + '</td>' +
+            '<td class="px-4 py-3 text-sm text-slate-700">' + (entry.property || '') + '</td>' +
+            '<td class="px-4 py-3 text-sm text-slate-700">' + (entry.paymentType || '') + '</td>' +
+            '<td class="px-4 py-3 text-sm text-slate-700 text-right">$' + (receivedAmount || 0).toFixed(2) + '</td>' +
+            '<td class="px-4 py-3 text-sm text-slate-700 text-right">$' + (changeGiven || 0).toFixed(2) + '</td>' +
+            '<td class="px-4 py-3 text-sm text-slate-700 text-right">$' + (entry.amount || 0).toFixed(2) + '</td>' +
+            '</tr>';
+        }).join('');
+      }
+
+      const submitted = batch.submittedAt ? new Date(batch.submittedAt).toLocaleString() : '—';
+      const started = batch.startedAt ? new Date(batch.startedAt).toLocaleString() : '—';
+
+      const modalHtml = `
+        <div id="batchDetailsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-6xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-6">
+              <h2 class="text-2xl font-bold text-slate-800">Batch Details</h2>
+              <button onclick="closeBatchDetailsModal()" class="text-slate-400 hover:text-slate-600">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 mb-6">
+              <div>
+                <p class="text-sm text-slate-600">Batch ID</p>
+                <p class="text-lg font-semibold text-slate-800">${batch.id}</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600">User</p>
+                <p class="text-lg font-semibold text-slate-800">${batch.username || '—'}</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600">Started</p>
+                <p class="text-sm text-slate-700">${started}</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600">Submitted</p>
+                <p class="text-sm text-slate-700">${submitted}</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600">Total Amount</p>
+                <p class="text-lg font-bold text-green-600">$${(batch.totalAmount || 0).toFixed(2)}</p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-600">Entries</p>
+                <p class="text-lg font-semibold text-slate-800">${batch.entries?.length || 0}</p>
+              </div>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="min-w-full border-collapse text-sm">
+                <thead class="bg-slate-100">
+                  <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Date</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Customer</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Account #</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Property</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Type</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase">Amount</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase">Change Given</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase">Total Paid</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${entriesHtml || '<tr><td colspan="8" class="px-4 py-3 text-center text-slate-500">No entries</td></tr>'}
+                </tbody>
+                <tfoot class="bg-slate-100">
+                  <tr>
+                    <td colspan="5" class="px-4 py-3 text-right font-semibold text-slate-700">Total Paid</td>
+                    <td colspan="3" class="px-4 py-3 text-right font-bold text-slate-900">$${(batch.totalAmount || 0).toFixed(2)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            <div class="mt-6 flex justify-end">
+              <button onclick="closeBatchDetailsModal()" class="px-6 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600">Close</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Remove existing modal if any
+      const existingModal = document.getElementById('batchDetailsModal');
+      if (existingModal) {
+        existingModal.remove();
+      }
+
+      // Add modal to body
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    };
+
+    window.closeBatchDetailsModal = function() {
+      const modal = document.getElementById('batchDetailsModal');
+      if (modal) {
+        modal.remove();
+      }
+    };
+
+    window.deleteBatch = async function(batchId) {
+      if (!confirm('Are you sure you want to delete this batch? This action cannot be undone.')) {
+        return;
+      }
+
+      console.log('[DELETE BATCH] Deleting batch:', batchId);
+      
+      try {
+        // Delete from Firestore
+        const batchesRef = collection(db, 'paymentBatches');
+        const batchRef = doc(batchesRef, batchId);
+        await deleteDoc(batchRef);
+        console.log('[DELETE BATCH] Successfully deleted from Firestore');
+
+        // Remove from local array
+        window.paymentBatches = window.paymentBatches.filter(b => b.id !== batchId);
+        console.log('[DELETE BATCH] Removed from local array. Remaining batches:', window.paymentBatches.length);
+
+        // Re-render the list
+        renderBatchesList();
+        
+        alert('Batch deleted successfully');
+      } catch (error) {
+        console.error('[DELETE BATCH] Error deleting batch:', error);
+        alert('Error deleting batch: ' + error.message);
+      }
+    };
 
     // Add Client Module Functions
     function populateAddClientLocationSelect() {
@@ -3438,8 +4198,8 @@
       window.selectedClientCodes = [];
       updateClientCodesList();
 
-      // Save to Firestore
-      await saveCustomersToFirestore();
+      // Save only this customer to Firestore
+      await saveSingleCustomerToFirestore(customer);
       await saveLocationsToFirestore();
       updateDashboard();
 
@@ -6476,8 +7236,8 @@
       updateSettingsCustomerTable();
       updateDashboard();
 
-      // Save to Firestore
-      await saveCustomersToFirestore();
+      // Save only this customer to Firestore
+      await saveSingleCustomerToFirestore(customer);
 
       alert(`Sync complete! Updated ${updated} customers. ${errors > 0 ? errors + ' errors occurred.' : ''}`);
     };
@@ -8069,229 +8829,6 @@
     .safe-pad { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
     .tap { -webkit-tap-highlight-color: transparent; }
 
-    /* Batch Preview - Custom CSS (overrides Tailwind utilities) */
-    /* Use !important to override Tailwind's utility classes */
-    /* Target specific elements within .batch-preview-custom for full control */
-
-    .batch-preview-custom table {
-      /* Custom table styles - these will override Tailwind */
-      width: 100%;
-      border-collapse: collapse;
-      table-layout: fixed !important;
-      border: 1px solid #e2e8f0; /* Outer border */
-    }
-
-    /* DRASTIC MEASURES: Force Date column to be exactly 100px - no exceptions */
-    .batch-preview-custom colgroup col:nth-child(1) { 
-      width: 100px !important; 
-      min-width: 100px !important;
-      max-width: 100px !important;
-    }
-
-    /* Force Date header cell to be exactly 100px */
-    .batch-preview-custom thead th:nth-child(1) {
-      width: 100px !important;
-      min-width: 100px !important;
-      max-width: 100px !important;
-      box-sizing: border-box !important;
-    }
-
-    /* Force Date data cells to be exactly 100px */
-    .batch-preview-custom tbody td:nth-child(1),
-    .batch-preview-custom tfoot td:nth-child(1) {
-      width: 130px !important;
-      min-width: 130px !important;
-      max-width: 130px !important;
-      box-sizing: border-box !important;
-    }
-
-    /* DRASTIC MEASURES: Force Customer column to be exactly 160px */
-    .batch-preview-custom colgroup col:nth-child(2) { 
-      width: 160px !important; 
-      min-width: 160px !important;
-      max-width: 160px !important;
-    }
-    /* Customer header 50px narrower */
-    .batch-preview-custom thead th:nth-child(2) {
-      width: 160px !important;
-      min-width: 160px !important;
-      max-width: 160px !important;
-      box-sizing: border-box !important;
-    }
-    .batch-preview-custom tbody td:nth-child(2),
-    .batch-preview-custom tfoot td:nth-child(2) {
-      width: 202px !important;
-      min-width: 202px !important;
-      max-width: 202px !important;
-      box-sizing: border-box !important;
-    }
-
-    /* DRASTIC MEASURES: Force Account # column to be exactly 267px */
-    .batch-preview-custom colgroup col:nth-child(3) { 
-      width: 267px !important; 
-      min-width: 267px !important;
-      max-width: 267px !important;
-    }
-    /* Account # header to be exactly 267px */
-    .batch-preview-custom thead th:nth-child(3) {
-      width: 267px !important;
-      min-width: 267px !important;
-      max-width: 267px !important;
-      box-sizing: border-box !important;
-    }
-    .batch-preview-custom tbody td:nth-child(3),
-    .batch-preview-custom tfoot td:nth-child(3) {
-      width: 340px !important;
-      min-width: 340px !important;
-      max-width: 340px !important;
-      box-sizing: border-box !important;
-    }
-
-    /* DRASTIC MEASURES: Force Property column to be exactly 200px */
-    .batch-preview-custom colgroup col:nth-child(4) { 
-      width: 200px !important; 
-      min-width: 200px !important;
-      max-width: 200px !important;
-    }
-    /* Property header 50px narrower */
-    .batch-preview-custom thead th:nth-child(4) {
-      width: 150px !important;
-      min-width: 150px !important;
-      max-width: 150px !important;
-      box-sizing: border-box !important;
-    }
-    .batch-preview-custom tbody td:nth-child(4),
-    .batch-preview-custom tfoot td:nth-child(4) {
-      width: 255px !important;
-      min-width: 255px !important;
-      max-width: 255px !important;
-      box-sizing: border-box !important;
-    }
-
-    /* DRASTIC MEASURES: Force Type column to be exactly 96px */
-    .batch-preview-custom colgroup col:nth-child(5) { 
-      width: 96px !important; 
-      min-width: 96px !important;
-      max-width: 96px !important;
-    }
-    /* Type header 50px narrower */
-    .batch-preview-custom thead th:nth-child(5) {
-      width: 46px !important;
-      min-width: 46px !important;
-      max-width: 46px !important;
-      box-sizing: border-box !important;
-    }
-    .batch-preview-custom tbody td:nth-child(5),
-    .batch-preview-custom tfoot td:nth-child(5) {
-      width: 125px !important;
-      min-width: 125px !important;
-      max-width: 125px !important;
-      box-sizing: border-box !important;
-    }
-
-    /* DRASTIC MEASURES: Force Amount column to be exactly 112px */
-    .batch-preview-custom colgroup col:nth-child(6) { 
-      width: 112px !important; 
-      min-width: 112px !important;
-      max-width: 112px !important;
-    }
-    /* Amount header 50px narrower */
-    .batch-preview-custom thead th:nth-child(6) {
-      width: 62px !important;
-      min-width: 62px !important;
-      max-width: 62px !important;
-      box-sizing: border-box !important;
-    }
-    .batch-preview-custom tbody td:nth-child(6),
-    .batch-preview-custom tfoot td:nth-child(6) {
-      width: 112px !important;
-      min-width: 140px !important;
-      max-width: 140px !important;
-      box-sizing: border-box !important;
-    }
-
-    /* Ensure all cells align properly - each in its own column box */
-    .batch-preview-custom th,
-    .batch-preview-custom td {
-      vertical-align: top;
-      box-sizing: border-box;
-      border: 1px solid #e2e8f0; /* Grid lines between cells */
-    }
-
-    /* Remove double borders by only showing right and bottom */
-    .batch-preview-custom th,
-    .batch-preview-custom td {
-      border-top: 1px solid #e2e8f0;
-      border-left: 1px solid #e2e8f0;
-      border-right: none;
-      border-bottom: none;
-    }
-
-    /* Add right border to last column */
-    .batch-preview-custom th:last-child,
-    .batch-preview-custom td:last-child {
-      border-right: 1px solid #e2e8f0;
-    }
-
-    /* Add bottom border to last row */
-    .batch-preview-custom tbody tr:last-child td,
-    .batch-preview-custom tfoot tr td {
-      border-bottom: 1px solid #e2e8f0;
-    }
-
-    /* Property column can wrap */
-    .batch-preview-custom tbody td:nth-child(4) {
-      white-space: normal;
-      word-wrap: break-word;
-      overflow-wrap: break-word;
-    }
-
-    /* All other columns should not wrap and stay in their boxes */
-    .batch-preview-custom tbody td:not(:nth-child(4)) {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    /* Ensure header and body cells align perfectly */
-    .batch-preview-custom thead th,
-    .batch-preview-custom tbody td {
-      padding-left: 1rem !important;
-      padding-right: 1rem !important;
-    }
-
-    .batch-preview-custom thead th {
-      padding-top: 0.75rem !important;
-      padding-bottom: 0.75rem !important;
-    }
-
-    .batch-preview-custom tbody td {
-      padding-top: 1rem !important;
-      padding-bottom: 1rem !important;
-    }
-
-    /* Custom cell styles - override Tailwind padding, spacing, etc. */
-    /* Example: uncomment and customize as needed */
-    /*
-    .batch-preview-custom th,
-    .batch-preview-custom td {
-      padding: 1rem !important;
-      font-size: 0.875rem !important;
-    }
-    */
-
-    /* Override specific Tailwind classes within batch preview */
-    .batch-preview-custom .px-4 {
-      padding-left: 1rem !important;
-      padding-right: 1rem !important;
-    }
-
-    .batch-preview-custom .py-4 {
-      padding-top: 1rem !important;
-      padding-bottom: 1rem !important;
-    }
-
-    /* Add your custom styles here - they will take precedence over Tailwind */
   </style>
 </head>
 <body class="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 tap">
