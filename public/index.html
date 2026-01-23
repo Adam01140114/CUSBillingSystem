@@ -2723,6 +2723,17 @@
               <div class="grid grid-cols-2 gap-3">
                 ${[1,2,5,10,20,50,100].map(v => `
                   <div class="flex items-center gap-2">
+                    <svg class="w-10 h-6" viewBox="0 0 40 24" fill="none">
+                      <!-- Bill background -->
+                      <rect x="2" y="2" width="36" height="20" rx="1.5" fill="#E8F5E9" stroke="#4CAF50" stroke-width="1"/>
+                      <!-- Decorative border lines -->
+                      <rect x="4" y="4" width="32" height="16" rx="1" fill="none" stroke="#81C784" stroke-width="0.5" opacity="0.5"/>
+                      <!-- Center denomination -->
+                      <text x="20" y="15" font-size="10" font-weight="bold" fill="#1B5E20" text-anchor="middle">$${v}</text>
+                      <!-- Decorative lines -->
+                      <line x1="6" y1="11" x2="12" y2="11" stroke="#66BB6A" stroke-width="0.5"/>
+                      <line x1="28" y1="11" x2="34" y2="11" stroke="#66BB6A" stroke-width="0.5"/>
+                    </svg>
                     <label class="text-sm text-slate-600 dark:text-slate-300">$${v}</label>
                     <input type="number" min="0" id="init_bill_${v}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRegisterTotal('init')">
                   </div>
@@ -2733,8 +2744,13 @@
             <div class="space-y-3">
               <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Coins</h5>
               <div class="grid grid-cols-2 gap-3">
-                ${[['penny',0.01,'Pennies'],['nickel',0.05,'Nickels'],['dime',0.10,'Dimes'],['quarter',0.25,'Quarters'],['half',0.50,'Half Dollars']].map(([k,val,label]) => `
+                ${[['penny',0.01,'Pennies','#CD7F32'],['nickel',0.05,'Nickels','#C0C0C0'],['dime',0.10,'Dimes','#C0C0C0'],['quarter',0.25,'Quarters','#C0C0C0'],['half',0.50,'Half Dollars','#C0C0C0']].map(([k,val,label,color]) => `
                   <div class="flex items-center gap-2">
+                    <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" fill="${color}" stroke="#333" stroke-width="1"/>
+                      <circle cx="12" cy="12" r="8" fill="none" stroke="#333" stroke-width="0.5" opacity="0.3"/>
+                      <text x="12" y="15" text-anchor="middle" font-size="6" font-weight="bold" fill="#333">${k === 'penny' ? '1¢' : k === 'nickel' ? '5¢' : k === 'dime' ? '10¢' : k === 'quarter' ? '25¢' : '50¢'}</text>
+                    </svg>
                     <label class="text-sm text-slate-600 dark:text-slate-300">${label}</label>
                     <input type="number" min="0" id="init_coin_${k}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRegisterTotal('init')">
                   </div>
@@ -2778,54 +2794,146 @@
             <button onclick="backToBatchEntryFromRecount()" class="text-sm text-slate-500 hover:text-slate-700">Back</button>
           </div>
 
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="space-y-3">
-              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Bills</h5>
-              <div class="grid grid-cols-2 gap-3">
-                ${[1,2,5,10,20,50,100].map(v => `
-                  <div class="flex items-center gap-2">
-                    <label class="text-sm text-slate-600 dark:text-slate-300">$${v}</label>
-                    <input type="number" min="0" id="close_bill_${v}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRegisterTotal('close')">
-                  </div>
-                `).join('')}
-              </div>
-            </div>
-
-            <div class="space-y-3">
-              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Coins</h5>
-              <div class="grid grid-cols-2 gap-3">
-                ${[['penny',0.01,'Pennies'],['nickel',0.05,'Nickels'],['dime',0.10,'Dimes'],['quarter',0.25,'Quarters'],['half',0.50,'Half Dollars']].map(([k,val,label]) => `
-                  <div class="flex items-center gap-2">
-                    <label class="text-sm text-slate-600 dark:text-slate-300">${label}</label>
-                    <input type="number" min="0" id="close_coin_${k}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRegisterTotal('close')">
-                  </div>
-                `).join('')}
-              </div>
-            </div>
+          <!-- Step Indicator -->
+          <div class="flex items-center gap-4 mb-6">
+            <button id="recountStep1Btn" onclick="switchRecountStep(1)" class="px-4 py-2 text-sm font-semibold bg-green-600 text-white rounded-lg">Step 1: Count Payment Total</button>
+            <button id="recountStep2Btn" onclick="switchRecountStep(2)" class="px-4 py-2 text-sm font-semibold bg-slate-200 text-slate-700 rounded-lg">Step 2: Count Initial Total</button>
           </div>
 
-          <div class="space-y-3">
+          <!-- Step 1: Payment Count -->
+          <div id="recountStep1" class="space-y-6">
+            <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg">
+              <p class="text-sm font-semibold text-blue-800 dark:text-blue-200 mb-2">Count the payment total (money received during this batch)</p>
+              <p id="expectedPaymentTotal" class="text-xs text-blue-600 dark:text-blue-400"></p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div class="space-y-3">
+                <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Bills</h5>
+                <div class="grid grid-cols-2 gap-3">
+                  ${[1,2,5,10,20,50,100].map(v => `
+                    <div class="flex items-center gap-2">
+                      <svg class="w-10 h-6" viewBox="0 0 40 24" fill="none">
+                        <rect x="2" y="2" width="36" height="20" rx="1.5" fill="#E8F5E9" stroke="#4CAF50" stroke-width="1"/>
+                        <rect x="4" y="4" width="32" height="16" rx="1" fill="none" stroke="#81C784" stroke-width="0.5" opacity="0.5"/>
+                        <text x="20" y="15" font-size="10" font-weight="bold" fill="#1B5E20" text-anchor="middle">$${v}</text>
+                        <line x1="6" y1="11" x2="12" y2="11" stroke="#66BB6A" stroke-width="0.5"/>
+                        <line x1="28" y1="11" x2="34" y2="11" stroke="#66BB6A" stroke-width="0.5"/>
+                      </svg>
+                      <label class="text-sm text-slate-600 dark:text-slate-300">$${v}</label>
+                      <input type="number" min="0" id="payment_bill_${v}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRecountTotal('payment')">
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div class="space-y-3">
+                <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Coins</h5>
+                <div class="grid grid-cols-2 gap-3">
+                  ${[['penny',0.01,'Pennies','#CD7F32'],['nickel',0.05,'Nickels','#C0C0C0'],['dime',0.10,'Dimes','#C0C0C0'],['quarter',0.25,'Quarters','#C0C0C0'],['half',0.50,'Half Dollars','#C0C0C0']].map(([k,val,label,color]) => `
+                    <div class="flex items-center gap-2">
+                      <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" fill="${color}" stroke="#333" stroke-width="1"/>
+                        <circle cx="12" cy="12" r="8" fill="none" stroke="#333" stroke-width="0.5" opacity="0.3"/>
+                        <text x="12" y="15" text-anchor="middle" font-size="6" font-weight="bold" fill="#333">${k === 'penny' ? '1¢' : k === 'nickel' ? '5¢' : k === 'dime' ? '10¢' : k === 'quarter' ? '25¢' : '50¢'}</text>
+                      </svg>
+                      <label class="text-sm text-slate-600 dark:text-slate-300">${label}</label>
+                      <input type="number" min="0" id="payment_coin_${k}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRecountTotal('payment')">
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Checks</h5>
+                <button onclick="addCheckInput('payment')" class="text-sm text-blue-600 hover:text-blue-800">Add Check</button>
+              </div>
+              <div id="payment_checksContainer" class="space-y-2">
+                <div class="flex items-center gap-3">
+                  <label class="text-sm text-slate-600 dark:text-slate-300 w-24">Check #1</label>
+                  <input type="number" min="0" step="0.01" class="flex-1 px-3 py-2 border rounded-lg" placeholder="Amount" oninput="calculateRecountTotal('payment')" />
+                  <button onclick="removeCheckInput(this)" class="text-xs text-red-500">Remove</button>
+                </div>
+              </div>
+            </div>
+
             <div class="flex items-center justify-between">
-              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Checks in Drawer</h5>
-              <button onclick="addCheckInput('close')" class="text-sm text-blue-600 hover:text-blue-800">Add Check</button>
-            </div>
-            <div id="close_checksContainer" class="space-y-2">
-              <div class="flex items-center gap-3">
-                <label class="text-sm text-slate-600 dark:text-slate-300 w-24">Check #1</label>
-                <input type="number" min="0" step="0.01" class="flex-1 px-3 py-2 border rounded-lg" placeholder="Amount" oninput="calculateRegisterTotal('close')" />
-                <button onclick="removeCheckInput(this)" class="text-xs text-red-500">Remove</button>
-              </div>
+              <p id="paymentRecountTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">Payment Total: $0.00</p>
+              <button onclick="switchRecountStep(2)" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Continue to Step 2</button>
             </div>
           </div>
 
-          <div class="flex items-center justify-between">
-            <div>
-              <p id="closeRegisterTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">Total: $0.00</p>
-              <p id="registerVarianceText" class="text-xs text-slate-500"></p>
+          <!-- Step 2: Initial Count -->
+          <div id="recountStep2" class="hidden space-y-6">
+            <div class="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg">
+              <p class="text-sm font-semibold text-green-800 dark:text-green-200 mb-2">Count the initial total (what was in the drawer at the start)</p>
+              <p id="expectedInitialTotal" class="text-xs text-green-600 dark:text-green-400"></p>
+              <p id="originalInitialCount" class="text-xs text-green-600 dark:text-green-400 mt-2"></p>
             </div>
-            <div class="flex gap-3">
-              <button onclick="calculateRegisterTotal('close')" class="px-4 py-2 text-sm bg-slate-200 rounded-lg">Recalculate</button>
-              <button onclick="finalizeBatchWithRecount()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Submit Batch</button>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div class="space-y-3">
+                <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Bills</h5>
+                <div class="grid grid-cols-2 gap-3">
+                  ${[1,2,5,10,20,50,100].map(v => `
+                    <div class="flex items-center gap-2">
+                      <svg class="w-10 h-6" viewBox="0 0 40 24" fill="none">
+                        <rect x="2" y="2" width="36" height="20" rx="1.5" fill="#E8F5E9" stroke="#4CAF50" stroke-width="1"/>
+                        <rect x="4" y="4" width="32" height="16" rx="1" fill="none" stroke="#81C784" stroke-width="0.5" opacity="0.5"/>
+                        <text x="20" y="15" font-size="10" font-weight="bold" fill="#1B5E20" text-anchor="middle">$${v}</text>
+                        <line x1="6" y1="11" x2="12" y2="11" stroke="#66BB6A" stroke-width="0.5"/>
+                        <line x1="28" y1="11" x2="34" y2="11" stroke="#66BB6A" stroke-width="0.5"/>
+                      </svg>
+                      <label class="text-sm text-slate-600 dark:text-slate-300">$${v}</label>
+                      <input type="number" min="0" id="initial_recount_bill_${v}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRecountTotal('initial')">
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div class="space-y-3">
+                <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Coins</h5>
+                <div class="grid grid-cols-2 gap-3">
+                  ${[['penny',0.01,'Pennies','#CD7F32'],['nickel',0.05,'Nickels','#C0C0C0'],['dime',0.10,'Dimes','#C0C0C0'],['quarter',0.25,'Quarters','#C0C0C0'],['half',0.50,'Half Dollars','#C0C0C0']].map(([k,val,label,color]) => `
+                    <div class="flex items-center gap-2">
+                      <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" fill="${color}" stroke="#333" stroke-width="1"/>
+                        <circle cx="12" cy="12" r="8" fill="none" stroke="#333" stroke-width="0.5" opacity="0.3"/>
+                        <text x="12" y="15" text-anchor="middle" font-size="6" font-weight="bold" fill="#333">${k === 'penny' ? '1¢' : k === 'nickel' ? '5¢' : k === 'dime' ? '10¢' : k === 'quarter' ? '25¢' : '50¢'}</text>
+                      </svg>
+                      <label class="text-sm text-slate-600 dark:text-slate-300">${label}</label>
+                      <input type="number" min="0" id="initial_recount_coin_${k}" class="w-24 px-3 py-2 border rounded-lg text-right" value="0" oninput="calculateRecountTotal('initial')">
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Checks</h5>
+                <button onclick="addCheckInput('initial_recount')" class="text-sm text-blue-600 hover:text-blue-800">Add Check</button>
+              </div>
+              <div id="initial_recount_checksContainer" class="space-y-2">
+                <div class="flex items-center gap-3">
+                  <label class="text-sm text-slate-600 dark:text-slate-300 w-24">Check #1</label>
+                  <input type="number" min="0" step="0.01" class="flex-1 px-3 py-2 border rounded-lg" placeholder="Amount" oninput="calculateRecountTotal('initial')" />
+                  <button onclick="removeCheckInput(this)" class="text-xs text-red-500">Remove</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div>
+                <p id="initialRecountTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">Initial Total: $0.00</p>
+                <p id="registerVarianceText" class="text-xs text-slate-500 mt-1"></p>
+              </div>
+              <div class="flex gap-3">
+                <button onclick="switchRecountStep(1)" class="px-4 py-2 text-sm bg-slate-200 rounded-lg">Back to Step 1</button>
+                <button onclick="finalizeBatchWithRecount()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Submit Batch</button>
+              </div>
             </div>
           </div>
         </div>
@@ -2898,7 +3006,7 @@
               </select>
             </div>
 
-            <div class="mb-4">
+            <div class="mb-4 hidden">
               <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Amount</label>
               <input 
                 type="number" 
@@ -3202,9 +3310,11 @@
       const idx = container.children.length + 1;
       const row = document.createElement('div');
       row.className = 'flex items-center gap-3';
+      const calcFunc = (prefix === 'payment' || prefix === 'initial_recount') ? 'calculateRecountTotal' : 'calculateRegisterTotal';
+      const calcParam = prefix === 'payment' ? 'payment' : (prefix === 'initial_recount' ? 'initial' : prefix);
       row.innerHTML = `
         <label class="text-sm text-slate-600 dark:text-slate-300 w-24">Check #${idx}</label>
-        <input type="number" min="0" step="0.01" class="flex-1 px-3 py-2 border rounded-lg" placeholder="Amount" oninput="calculateRegisterTotal('${prefix}')" />
+        <input type="number" min="0" step="0.01" class="flex-1 px-3 py-2 border rounded-lg" placeholder="Amount" oninput="${calcFunc}('${calcParam}')" />
         <button onclick="removeCheckInput(this)" class="text-xs text-red-500">Remove</button>
       `;
       container.appendChild(row);
@@ -3467,12 +3577,30 @@
       const expectedCash = (initial.cashTotal || 0) + (running.cashIn || 0) - (running.cashOut || 0);
       const expectedChecks = (initial.checksTotal || 0) + (running.checkIn || 0);
       const expectedTotal = expectedCash + expectedChecks;
-      const varianceText = document.getElementById('registerVarianceText');
-      if (varianceText) {
-        varianceText.textContent = `Expected drawer total: $${expectedTotal.toFixed(2)} (cash ${expectedCash.toFixed(2)}, checks ${expectedChecks.toFixed(2)})`;
+      const initialCash = initial.cashTotal || 0;
+      const initialChecks = initial.checksTotal || 0;
+      const receivedCash = (running.cashIn || 0) - (running.cashOut || 0);
+      const receivedChecks = running.checkIn || 0;
+      
+      // Populate expected values for Step 1 (Payment Count)
+      const expectedPaymentTotal = receivedCash + receivedChecks;
+      const expectedPaymentTotalText = document.getElementById('expectedPaymentTotal');
+      if (expectedPaymentTotalText) {
+        expectedPaymentTotalText.innerHTML =
+          `<strong>Expected Payment Total:</strong> $${expectedPaymentTotal.toFixed(2)} (received cash ${receivedCash.toFixed(2)}, received checks ${receivedChecks.toFixed(2)})`;
       }
+      
+      // Populate expected values for Step 2 (Initial Count)
+      const expectedInitialTotal = initialCash + initialChecks;
+      const expectedInitialTotalText = document.getElementById('expectedInitialTotal');
+      if (expectedInitialTotalText) {
+        expectedInitialTotalText.innerHTML =
+          `<strong>Expected Initial Total:</strong> $${expectedInitialTotal.toFixed(2)} (initial cash ${initialCash.toFixed(2)}, initial checks ${initialChecks.toFixed(2)})`;
+      }
+      
 
-      calculateRegisterTotal('close');
+      // Reset recount step to 1
+      switchRecountStep(1);
       setBatchViewState('recount');
       // Force-hide entry/preview when moving to recount
       ['batchEntrySection','batchPreviewSection','batchStartSection','registerCountSection','batchesListSection'].forEach(id => {
@@ -3497,6 +3625,100 @@
       showBatchEntryWithPreview();
     };
 
+    window.switchRecountStep = function(step) {
+      // Validate payment count before proceeding to step 2
+      if (step === 2) {
+        if (!window.currentPaymentBatch || !window.currentPaymentBatch.register) {
+          alert('No batch data found.');
+          return;
+        }
+        
+        const running = window.currentPaymentBatch.register.runningTotals || { cashIn: 0, cashOut: 0, checkIn: 0 };
+        const expectedPaymentCash = (running.cashIn || 0) - (running.cashOut || 0);
+        const expectedPaymentChecks = running.checkIn || 0;
+        const expectedPaymentTotal = expectedPaymentCash + expectedPaymentChecks;
+        
+        const paymentCountTotal = calculateRecountTotal('payment');
+        const paymentVariance = paymentCountTotal - expectedPaymentTotal;
+        
+        if (Math.abs(paymentVariance) > 0.01) {
+          const statusMsg = `Payment count ${paymentVariance > 0 ? 'over' : 'short'} by $${Math.abs(paymentVariance).toFixed(2)}. Please correct the count before continuing.`;
+          alert(statusMsg);
+          return;
+        }
+      }
+      
+      const step1 = document.getElementById('recountStep1');
+      const step2 = document.getElementById('recountStep2');
+      const btn1 = document.getElementById('recountStep1Btn');
+      const btn2 = document.getElementById('recountStep2Btn');
+      
+      if (step === 1) {
+        if (step1) step1.classList.remove('hidden');
+        if (step2) step2.classList.add('hidden');
+        if (btn1) {
+          btn1.classList.remove('bg-slate-200', 'text-slate-700');
+          btn1.classList.add('bg-green-600', 'text-white');
+        }
+        if (btn2) {
+          btn2.classList.remove('bg-green-600', 'text-white');
+          btn2.classList.add('bg-slate-200', 'text-slate-700');
+        }
+      } else if (step === 2) {
+        if (step1) step1.classList.add('hidden');
+        if (step2) step2.classList.remove('hidden');
+        if (btn1) {
+          btn1.classList.remove('bg-green-600', 'text-white');
+          btn1.classList.add('bg-slate-200', 'text-slate-700');
+        }
+        if (btn2) {
+          btn2.classList.remove('bg-slate-200', 'text-slate-700');
+          btn2.classList.add('bg-green-600', 'text-white');
+        }
+      }
+    };
+
+    window.calculateRecountTotal = function(type) {
+      let total = 0;
+      const prefix = type === 'payment' ? 'payment' : 'initial_recount';
+      
+      // Calculate bills
+      [1,2,5,10,20,50,100].forEach(v => {
+        const input = document.getElementById(`${prefix}_bill_${v}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          total += count * v;
+        }
+      });
+      
+      // Calculate coins
+      [['penny',0.01],['nickel',0.05],['dime',0.10],['quarter',0.25],['half',0.50]].forEach(([k,val]) => {
+        const input = document.getElementById(`${prefix}_coin_${k}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          total += count * val;
+        }
+      });
+      
+      // Calculate checks
+      const checksContainer = document.getElementById(`${prefix}_checksContainer`);
+      if (checksContainer) {
+        const checkInputs = checksContainer.querySelectorAll('input[type="number"]');
+        checkInputs.forEach(input => {
+          const amount = parseFloat(input.value) || 0;
+          total += amount;
+        });
+      }
+      
+      // Update display
+      const totalElement = document.getElementById(type === 'payment' ? 'paymentRecountTotal' : 'initialRecountTotal');
+      if (totalElement) {
+        totalElement.textContent = `${type === 'payment' ? 'Payment' : 'Initial'} Total: $${total.toFixed(2)}`;
+      }
+      
+      return total;
+    };
+
     window.finalizeBatchWithRecount = async function() {
       console.log('[FINALIZE BATCH] Starting batch finalization...');
       
@@ -3509,28 +3731,131 @@
       console.log('[FINALIZE BATCH] Current batch ID:', window.currentPaymentBatch.id);
       console.log('[FINALIZE BATCH] Current batch entries:', window.currentPaymentBatch.entries.length);
 
-      const closing = calculateRegisterTotal('close');
       const running = window.currentPaymentBatch.register.runningTotals || { cashIn: 0, cashOut: 0, checkIn: 0 };
       const initial = window.currentPaymentBatch.register.initial || { cashTotal: 0, checksTotal: 0, total: 0 };
 
-      const expectedCash = (initial.cashTotal || 0) + (running.cashIn || 0) - (running.cashOut || 0);
-      const expectedChecks = (initial.checksTotal || 0) + (running.checkIn || 0);
-      const expectedTotal = expectedCash + expectedChecks;
-      const variance = (closing.total || 0) - expectedTotal;
+      // Calculate expected values
+      const expectedPaymentCash = (running.cashIn || 0) - (running.cashOut || 0);
+      const expectedPaymentChecks = running.checkIn || 0;
+      const expectedPaymentTotal = expectedPaymentCash + expectedPaymentChecks;
+      
+      const expectedInitialCash = initial.cashTotal || 0;
+      const expectedInitialChecks = initial.checksTotal || 0;
+      const expectedInitialTotal = expectedInitialCash + expectedInitialChecks;
+      
+      const expectedTotal = expectedInitialTotal + expectedPaymentTotal;
 
-      console.log('[FINALIZE BATCH] Register variance:', variance);
+      // Get counted values
+      const paymentCountTotal = calculateRecountTotal('payment');
+      const initialCountTotal = calculateRecountTotal('initial');
+      
+      // Calculate variances
+      const paymentVariance = paymentCountTotal - expectedPaymentTotal;
+      const initialVariance = initialCountTotal - expectedInitialTotal;
+      const totalVariance = (paymentCountTotal + initialCountTotal) - expectedTotal;
 
-      if (variance !== 0) {
-        const statusMsg = `Register ${variance > 0 ? 'over' : 'short'} by $${Math.abs(variance).toFixed(2)}. Please try again.`;
+      console.log('[FINALIZE BATCH] Payment count:', paymentCountTotal, 'Expected:', expectedPaymentTotal, 'Variance:', paymentVariance);
+      console.log('[FINALIZE BATCH] Initial count:', initialCountTotal, 'Expected:', expectedInitialTotal, 'Variance:', initialVariance);
+      console.log('[FINALIZE BATCH] Total variance:', totalVariance);
+
+      // Check payment count
+      if (Math.abs(paymentVariance) > 0.01) {
+        const statusMsg = `Payment count ${paymentVariance > 0 ? 'over' : 'short'} by $${Math.abs(paymentVariance).toFixed(2)}. Please try again.`;
         alert(statusMsg);
         return;
       }
 
+      // Check initial count
+      if (Math.abs(initialVariance) > 0.01) {
+        const statusMsg = `Initial count ${initialVariance > 0 ? 'over' : 'short'} by $${Math.abs(initialVariance).toFixed(2)}. Please try again.`;
+        alert(statusMsg);
+        return;
+      }
+
+      // Collect payment count details
+      const paymentCount = {
+        bills: {},
+        coins: {},
+        checks: [],
+        cashTotal: 0,
+        checksTotal: 0,
+        total: paymentCountTotal
+      };
+      [1,2,5,10,20,50,100].forEach(v => {
+        const input = document.getElementById(`payment_bill_${v}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          paymentCount.bills[v] = count;
+          paymentCount.cashTotal += count * v;
+        }
+      });
+      [['penny',0.01],['nickel',0.05],['dime',0.10],['quarter',0.25],['half',0.50]].forEach(([k,val]) => {
+        const input = document.getElementById(`payment_coin_${k}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          paymentCount.coins[k] = count;
+          paymentCount.cashTotal += count * val;
+        }
+      });
+      const paymentChecksContainer = document.getElementById('payment_checksContainer');
+      if (paymentChecksContainer) {
+        const checkInputs = paymentChecksContainer.querySelectorAll('input[type="number"]');
+        checkInputs.forEach(input => {
+          const amount = parseFloat(input.value) || 0;
+          if (amount > 0) {
+            paymentCount.checks.push(amount);
+            paymentCount.checksTotal += amount;
+          }
+        });
+      }
+
+      // Collect initial count details
+      const initialCount = {
+        bills: {},
+        coins: {},
+        checks: [],
+        cashTotal: 0,
+        checksTotal: 0,
+        total: initialCountTotal
+      };
+      [1,2,5,10,20,50,100].forEach(v => {
+        const input = document.getElementById(`initial_recount_bill_${v}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          initialCount.bills[v] = count;
+          initialCount.cashTotal += count * v;
+        }
+      });
+      [['penny',0.01],['nickel',0.05],['dime',0.10],['quarter',0.25],['half',0.50]].forEach(([k,val]) => {
+        const input = document.getElementById(`initial_recount_coin_${k}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          initialCount.coins[k] = count;
+          initialCount.cashTotal += count * val;
+        }
+      });
+      const initialChecksContainer = document.getElementById('initial_recount_checksContainer');
+      if (initialChecksContainer) {
+        const checkInputs = initialChecksContainer.querySelectorAll('input[type="number"]');
+        checkInputs.forEach(input => {
+          const amount = parseFloat(input.value) || 0;
+          if (amount > 0) {
+            initialCount.checks.push(amount);
+            initialCount.checksTotal += amount;
+          }
+        });
+      }
+
       window.currentPaymentBatch.register.closing = {
-        ...closing,
+        paymentCount,
+        initialCount,
         recordedAt: new Date().toISOString(),
+        expectedPaymentTotal,
+        expectedInitialTotal,
         expectedTotal,
-        variance
+        paymentVariance,
+        initialVariance,
+        variance: totalVariance
       };
 
       const totalAmount = window.currentPaymentBatch.entries.reduce((sum, entry) => sum + entry.amount, 0);
@@ -3990,8 +4315,15 @@
               </table>
             </div>
 
-            <div class="mt-6 flex justify-end">
-              <button onclick="closeBatchDetailsModal()" class="px-6 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600">Close</button>
+            <div class="mt-6 space-y-4">
+              <div class="flex flex-wrap gap-3">
+                ${batch.register?.initial ? `<button onclick="viewDenominations('${batchId}', 'initial1')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">View Initial Count #1</button>` : ''}
+                ${batch.register?.closing?.initialCount ? `<button onclick="viewDenominations('${batchId}', 'initial2')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">View Initial Count #2</button>` : ''}
+                ${batch.register?.closing?.paymentCount ? `<button onclick="viewDenominations('${batchId}', 'payment')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">View Payment Count</button>` : ''}
+              </div>
+              <div class="flex justify-end">
+                <button onclick="closeBatchDetailsModal()" class="px-6 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600">Close</button>
+              </div>
             </div>
           </div>
         </div>
@@ -4009,6 +4341,156 @@
 
     window.closeBatchDetailsModal = function() {
       const modal = document.getElementById('batchDetailsModal');
+      if (modal) {
+        modal.remove();
+      }
+    };
+
+    window.viewDenominations = function(batchId, type) {
+      const batch = window.paymentBatches.find(b => b.id === batchId);
+      if (!batch) {
+        alert('Batch not found');
+        return;
+      }
+
+      let countData = null;
+      let title = '';
+      
+      if (type === 'initial1') {
+        countData = batch.register?.initial;
+        title = 'Initial Count #1 Denominations';
+      } else if (type === 'initial2') {
+        countData = batch.register?.closing?.initialCount;
+        title = 'Initial Count #2 Denominations';
+      } else if (type === 'payment') {
+        countData = batch.register?.closing?.paymentCount;
+        title = 'Payment Count Denominations';
+      }
+
+      if (!countData) {
+        alert('Count data not available for this batch');
+        return;
+      }
+
+      // Build bills HTML
+      const billsHtml = [1,2,5,10,20,50,100].map(v => {
+        const count = countData.bills?.[v] || 0;
+        return `
+          <div class="flex items-center gap-2">
+            <svg class="w-10 h-6" viewBox="0 0 40 24" fill="none">
+              <rect x="2" y="2" width="36" height="20" rx="1.5" fill="#E8F5E9" stroke="#4CAF50" stroke-width="1"/>
+              <rect x="4" y="4" width="32" height="16" rx="1" fill="none" stroke="#81C784" stroke-width="0.5" opacity="0.5"/>
+              <text x="20" y="15" font-size="10" font-weight="bold" fill="#1B5E20" text-anchor="middle">$${v}</text>
+              <line x1="6" y1="11" x2="12" y2="11" stroke="#66BB6A" stroke-width="0.5"/>
+              <line x1="28" y1="11" x2="34" y2="11" stroke="#66BB6A" stroke-width="0.5"/>
+            </svg>
+            <label class="text-sm text-slate-600 dark:text-slate-300">$${v}</label>
+            <input type="number" class="w-24 px-3 py-2 border rounded-lg text-right bg-slate-100" value="${count}" readonly>
+          </div>
+        `;
+      }).join('');
+
+      // Build coins HTML
+      const coinsHtml = [['penny',0.01,'Pennies','#CD7F32'],['nickel',0.05,'Nickels','#C0C0C0'],['dime',0.10,'Dimes','#C0C0C0'],['quarter',0.25,'Quarters','#C0C0C0'],['half',0.50,'Half Dollars','#C0C0C0']].map(([k,val,label,color]) => {
+        const count = countData.coins?.[k] || 0;
+        return `
+          <div class="flex items-center gap-2">
+            <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" fill="${color}" stroke="#333" stroke-width="1"/>
+              <circle cx="12" cy="12" r="8" fill="none" stroke="#333" stroke-width="0.5" opacity="0.3"/>
+              <text x="12" y="15" text-anchor="middle" font-size="6" font-weight="bold" fill="#333">${k === 'penny' ? '1¢' : k === 'nickel' ? '5¢' : k === 'dime' ? '10¢' : k === 'quarter' ? '25¢' : '50¢'}</text>
+            </svg>
+            <label class="text-sm text-slate-600 dark:text-slate-300">${label}</label>
+            <input type="number" class="w-24 px-3 py-2 border rounded-lg text-right bg-slate-100" value="${count}" readonly>
+          </div>
+        `;
+      }).join('');
+
+      // Build checks HTML
+      const checks = countData.checks || [];
+      const checksHtml = checks.length > 0 
+        ? checks.map((amount, idx) => `
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-slate-600 dark:text-slate-300 w-24">Check #${idx + 1}</label>
+              <input type="number" step="0.01" class="flex-1 px-3 py-2 border rounded-lg bg-slate-100" value="${amount.toFixed(2)}" readonly>
+            </div>
+          `).join('')
+        : '<p class="text-sm text-slate-500">No checks</p>';
+
+      // Calculate total
+      let total = 0;
+      // Bills
+      [1,2,5,10,20,50,100].forEach(v => {
+        const count = countData.bills?.[v] || 0;
+        total += count * v;
+      });
+      // Coins
+      [['penny',0.01],['nickel',0.05],['dime',0.10],['quarter',0.25],['half',0.50]].forEach(([k,val]) => {
+        const count = countData.coins?.[k] || 0;
+        total += count * val;
+      });
+      // Checks
+      checks.forEach(amount => {
+        total += amount;
+      });
+
+      const modalHtml = `
+        <div id="denominationsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-6">
+              <h2 class="text-2xl font-bold text-slate-800">${title}</h2>
+              <button onclick="closeDenominationsModal()" class="text-slate-400 hover:text-slate-600">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div class="space-y-3">
+                <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Bills</h5>
+                <div class="grid grid-cols-2 gap-3">
+                  ${billsHtml}
+                </div>
+              </div>
+
+              <div class="space-y-3">
+                <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Coins</h5>
+                <div class="grid grid-cols-2 gap-3">
+                  ${coinsHtml}
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-3 mt-6">
+              <div class="flex items-center justify-between">
+                <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Checks in Drawer</h5>
+              </div>
+              <div class="space-y-2">
+                ${checksHtml}
+              </div>
+            </div>
+
+            <div class="mt-6 flex items-center justify-between border-t border-slate-200 pt-4">
+              <p class="text-lg font-semibold text-slate-700 dark:text-slate-100">Total: $${total.toFixed(2)}</p>
+              <button onclick="closeDenominationsModal()" class="px-6 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600">Close</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // Remove existing modal if any
+      const existingModal = document.getElementById('denominationsModal');
+      if (existingModal) {
+        existingModal.remove();
+      }
+
+      // Add modal to body
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    };
+
+    window.closeDenominationsModal = function() {
+      const modal = document.getElementById('denominationsModal');
       if (modal) {
         modal.remove();
       }
