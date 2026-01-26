@@ -536,6 +536,197 @@
       }
     }
 
+    // Hierarchy order management
+    window.paymentHierarchyOrder = ['Past Due', 'Late Fee', 'Tax Codes', 'PUC Surcharge', 'Current Due'];
+    let hierarchyLoaded = false;
+    let hierarchyIsDirty = false;
+    let hierarchyLoadVersion = 0;
+
+    async function loadHierarchyOrder() {
+      try {
+        const loadVersion = ++hierarchyLoadVersion;
+        const hierarchyRef = doc(db, 'settings', 'paymentHierarchy');
+        const hierarchyDoc = await getDoc(hierarchyRef);
+        
+        if (loadVersion !== hierarchyLoadVersion) {
+          return;
+        }
+        if (hierarchyIsDirty) {
+          // Keep local changes if the user has already reordered
+          return;
+        }
+        if (hierarchyDoc.exists()) {
+          const data = hierarchyDoc.data();
+          if (data.order && Array.isArray(data.order)) {
+            window.paymentHierarchyOrder = data.order;
+          }
+        }
+        
+        renderHierarchyList();
+        hierarchyLoaded = true;
+      } catch (error) {
+        console.error('Error loading hierarchy order:', error);
+        renderHierarchyList(); // Render with default order even if load fails
+      }
+    }
+
+    async function saveHierarchyOrder(options = {}) {
+      try {
+        const hierarchyRef = doc(db, 'settings', 'paymentHierarchy');
+        await setDoc(hierarchyRef, {
+          order: window.paymentHierarchyOrder,
+          updatedAt: new Date().toISOString()
+        });
+        
+        hierarchyIsDirty = false;
+        if (!options.silent) {
+          alert('Hierarchy order saved successfully!');
+        }
+      } catch (error) {
+        console.error('Error saving hierarchy order:', error);
+        if (!options.silent) {
+          alert('Error saving hierarchy order. Please try again.');
+        }
+      }
+    }
+
+    function renderHierarchyList() {
+      const hierarchyList = document.getElementById('hierarchyList');
+      if (!hierarchyList) return;
+
+      // Use DocumentFragment for faster DOM updates
+      const fragment = document.createDocumentFragment();
+      
+      window.paymentHierarchyOrder.forEach((item, index) => {
+        const div = document.createElement('div');
+        div.className = 'flex items-center gap-3 p-4 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg cursor-move hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors draggable-item';
+        div.draggable = true;
+        div.dataset.index = index;
+        div.dataset.item = item;
+        div.ondragstart = handleHierarchyDragStart;
+        div.ondragenter = handleHierarchyDragEnter;
+        div.ondragleave = handleHierarchyDragLeave;
+        div.ondragover = handleHierarchyDragOver;
+        div.ondrop = handleHierarchyDrop;
+        div.ondragend = handleHierarchyDragEnd;
+        
+        div.innerHTML = `
+          <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8h16M4 16h16"/>
+          </svg>
+          <span class="flex-1 text-slate-700 dark:text-slate-200 font-medium">${item}</span>
+          <span class="text-sm text-slate-500 dark:text-slate-400">${index + 1}</span>
+        `;
+        
+        fragment.appendChild(div);
+      });
+      
+      // Clear and update in one operation
+      hierarchyList.innerHTML = '';
+      hierarchyList.appendChild(fragment);
+    }
+
+    let draggedHierarchyIndex = null;
+    let draggedHierarchyElement = null;
+    let lastHierarchyDragOverIndex = null;
+
+    window.handleHierarchyDragStart = function(e) {
+      draggedHierarchyElement = e.target.closest('.draggable-item');
+      if (!draggedHierarchyElement) return;
+      
+      draggedHierarchyIndex = parseInt(draggedHierarchyElement.dataset.index);
+      draggedHierarchyElement.classList.add('opacity-50');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/html', draggedHierarchyElement.innerHTML);
+    };
+
+    window.handleHierarchyDragOver = function(e) {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'move';
+      }
+
+      const item = e.target.closest('.draggable-item');
+      if (!item || item === draggedHierarchyElement) return;
+
+      // Move the dragged element immediately on hover for instant visual feedback
+      const hierarchyList = document.getElementById('hierarchyList');
+      if (!hierarchyList) return;
+
+      const overIndex = parseInt(item.dataset.index);
+      if (Number.isNaN(overIndex) || overIndex === lastHierarchyDragOverIndex) return;
+
+      if (draggedHierarchyIndex < overIndex) {
+        hierarchyList.insertBefore(draggedHierarchyElement, item.nextSibling);
+      } else {
+        hierarchyList.insertBefore(draggedHierarchyElement, item);
+      }
+
+      // Update order array and indices based on current DOM
+      const items = Array.from(hierarchyList.children);
+      window.paymentHierarchyOrder = items.map(node => node.dataset.item);
+      items.forEach((node, index) => {
+        node.dataset.index = index;
+        const orderLabel = node.querySelector('span:last-child');
+        if (orderLabel) orderLabel.textContent = index + 1;
+      });
+
+      draggedHierarchyIndex = parseInt(draggedHierarchyElement.dataset.index);
+      lastHierarchyDragOverIndex = overIndex;
+      hierarchyIsDirty = true;
+
+      // Highlight the current item
+      document.querySelectorAll('.draggable-item').forEach(i => {
+        i.classList.remove('border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/20');
+      });
+      item.classList.add('border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/20');
+    };
+
+    window.handleHierarchyDragEnter = function(e) {
+      e.preventDefault();
+      const item = e.target.closest('.draggable-item');
+      if (item && item !== draggedHierarchyElement) {
+        // Remove highlight from all items first
+        document.querySelectorAll('.draggable-item').forEach(i => {
+          if (i !== item) {
+            i.classList.remove('border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/20');
+          }
+        });
+        item.classList.add('border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/20');
+      }
+    };
+
+    window.handleHierarchyDragLeave = function(e) {
+      // Only remove highlight if we're actually leaving the item (not just moving to a child)
+      const item = e.target.closest('.draggable-item');
+      const relatedTarget = e.relatedTarget;
+      if (item && (!relatedTarget || !item.contains(relatedTarget))) {
+        item.classList.remove('border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/20');
+      }
+    };
+
+    window.handleHierarchyDrop = function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (hierarchyIsDirty) {
+        // Save silently in the background so reloads preserve the order
+        saveHierarchyOrder({ silent: true });
+      }
+
+      handleHierarchyDragEnd(e);
+    };
+
+    window.handleHierarchyDragEnd = function(e) {
+      // Remove opacity from all items
+      document.querySelectorAll('.draggable-item').forEach(item => {
+        item.classList.remove('opacity-50', 'border-blue-500', 'bg-blue-50', 'dark:bg-blue-900/20');
+      });
+      draggedHierarchyIndex = null;
+      draggedHierarchyElement = null;
+      lastHierarchyDragOverIndex = null;
+    };
+
     // Load sewer charge from Firestore
     async function loadSewerChargeFromFirestore() {
       try {
@@ -884,6 +1075,7 @@
       await loadSewerChargeFromFirestore();
       await loadLateFeeFromFirestore();
       await loadPucSurchargeFromFirestore();
+      await loadHierarchyOrder();
 
       // Now load other data
       await loadLocationsFromFirestore();
@@ -960,14 +1152,16 @@
       const codesTab = document.getElementById('settingsCodesTab');
       const usersTab = document.getElementById('settingsUsersTab');
       const cleanupTab = document.getElementById('settingsCleanupTab');
+      const hierarchyTab = document.getElementById('settingsHierarchyTab');
       const accountsContent = document.getElementById('settingsAccountsContent');
       const locationsContent = document.getElementById('settingsLocationsContent');
       const codesContent = document.getElementById('settingsCodesContent');
       const usersContent = document.getElementById('settingsUsersContent');
       const cleanupContent = document.getElementById('settingsCleanupContent');
+      const hierarchyContent = document.getElementById('settingsHierarchyContent');
 
       // Reset all tabs and content
-      [accountsTab, locationsTab, codesTab, usersTab, cleanupTab].forEach(tab => {
+      [accountsTab, locationsTab, codesTab, usersTab, cleanupTab, hierarchyTab].forEach(tab => {
         if (!tab) return;
         tab.classList.remove('bg-blue-600', 'text-white');
         tab.classList.add('bg-slate-200', 'text-slate-700');
@@ -977,6 +1171,7 @@
       codesContent.classList.add('hidden');
       usersContent.classList.add('hidden');
       if (cleanupContent) cleanupContent.classList.add('hidden');
+      if (hierarchyContent) hierarchyContent.classList.add('hidden');
 
       if (view === 'accounts') {
         accountsTab.classList.add('bg-blue-600', 'text-white');
@@ -1008,6 +1203,15 @@
           cleanupTab.classList.remove('bg-slate-200', 'text-slate-700');
         }
         if (cleanupContent) cleanupContent.classList.remove('hidden');
+      } else if (view === 'hierarchy') {
+        if (hierarchyTab) {
+          hierarchyTab.classList.add('bg-blue-600', 'text-white');
+          hierarchyTab.classList.remove('bg-slate-200', 'text-slate-700');
+        }
+        if (hierarchyContent) {
+          hierarchyContent.classList.remove('hidden');
+          loadHierarchyOrder();
+        }
       }
     };
 
@@ -9911,6 +10115,13 @@
             >
               Data Cleanup
             </button>
+            <button 
+              id="settingsHierarchyTab"
+              onclick="switchSettingsView('hierarchy')" 
+              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
+            >
+              Hierarchy
+            </button>
           </div>
 
           <!-- Accounts Section -->
@@ -10287,6 +10498,35 @@
                   Split Accounts by Cycle
                 </button>
               </div>
+            </div>
+          </div>
+
+          <!-- Hierarchy Section -->
+          <div id="settingsHierarchyContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
+            <div class="mb-6">
+              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Payment Application Hierarchy</h2>
+              <p class="text-sm text-slate-500 dark:text-slate-400">
+                Define the order in which partial payments are applied to different charges. Drag items to reorder.
+              </p>
+            </div>
+
+            <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-200 dark:border-blue-700 mb-6">
+              <p class="text-sm text-blue-600 dark:text-blue-300">
+                <strong>How it works:</strong> When a customer makes a partial payment, the payment will be applied in the order shown below. For example, if the order is "Past Due, Late Fee, Tax Codes, PUC Surcharge, Current Due", the payment will first go towards Past Due, then Late Fee, and so on.
+              </p>
+            </div>
+
+            <div id="hierarchyList" class="space-y-3 mb-6">
+              <!-- Hierarchy items will be populated dynamically -->
+            </div>
+
+            <div class="flex justify-end gap-3">
+              <button 
+                onclick="saveHierarchyOrder()" 
+                class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+              >
+                Save Order
+              </button>
             </div>
           </div>
         </div>
