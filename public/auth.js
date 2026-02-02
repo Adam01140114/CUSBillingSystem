@@ -164,7 +164,8 @@
             }
         }
         
-        window.location.href = getLoginPagePath();
+        // Reload the page instead of redirecting to login.html
+        window.location.reload();
     };
     
     // ============================================

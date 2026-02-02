@@ -4,54 +4,78 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ADMIN ONLY ACCESS: Only the specified admin UID can access data
-    function isAdmin() {
-      return request.auth != null && request.auth.uid == 'fQEVSsWI0DRca4h8K7uJgTwmjfv2';
+    // AUTHORIZED USER ACCESS: Check if user email is in the authorized list
+    function isAuthorized() {
+      return request.auth != null && (
+        request.auth.token.email == 'adam@gmail.com' ||
+        request.auth.token.email == 'admin@alcowater.com' ||
+        request.auth.token.email == 'adamchaabane1234@gmail.com' ||
+        request.auth.token.email == 'pos@alcowater.com' ||
+        request.auth.token.email == 'supervisor@alcowater.com'
+      );
     }
     
-    // Customers collection - only admin user
+    // Legacy admin UID check for backward compatibility
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.uid == 'fQEVSsWI0DRca4h8K7uJgTwmjfv2' ||
+        isAuthorized()
+      );
+    }
+    
+    // Customers collection - authorized users only
     match /customers/{customerId} {
-      allow read, write: if isAdmin();
+      allow read, write: if isAuthorized();
     }
 
-    // Locations collection - only admin user
+    // Locations collection - authorized users only
     match /locations/{locationId} {
-      allow read, write: if isAdmin();
+      allow read, write: if isAuthorized();
     }
 
-    // Codes collection - only admin user
+    // Codes collection - authorized users only
     match /codes/{codeId} {
-      allow read, write: if isAdmin();
+      allow read, write: if isAuthorized();
     }
 
-    // Settings collection - only admin user
+    // Settings collection - authorized users only
     match /settings/{settingId} {
-      allow read, write: if isAdmin();
+      allow read, write: if isAuthorized();
     }
 
-    // Billing cycles collection - only admin user (for snapshot storage)
+    // Billing cycles collection - authorized users only (for snapshot storage)
     match /billingCycles/{cycleId} {
-      allow read, write: if isAdmin();
+      allow read, write: if isAuthorized();
     }
 
-    // Payment batches - only admin user
+    // Payment batches - authorized users only (legacy collection name)
     match /paymentBatches/{batchId} {
-      allow read, write: if isAdmin();
+      allow read, write: if isAuthorized();
     }
 
-    // Users collection - only admin user
+    // Payment processing sessions - authorized users only
+    match /paymentProcessingSessions/{sessionId} {
+      allow read, write: if isAuthorized();
+    }
+
+    // Users collection - authorized users only
     match /users/{userId} {
-      allow read, write: if isAdmin();
+      allow read, write: if isAuthorized();
 
       // Allow read/write access to any subcollections
       match /{subCollection=**}/{docId} {
-        allow read, write: if isAdmin();
+        allow read, write: if isAuthorized();
       }
     }
 
-    // Forms collection - only admin user can read
+    // Drawers collection - authorized users only
+    match /drawers/{drawerId} {
+      allow read, write: if isAuthorized();
+    }
+
+    // Forms collection - authorized users can read
     match /forms/{formId} {
-      allow read: if isAdmin();
+      allow read: if isAuthorized();
       allow write: if false; // Only allow writes through Admin Console or server
     }
 
