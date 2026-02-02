@@ -1473,7 +1473,8 @@
         // Reset all buttons to hidden first
         const drawerCountBtn = document.getElementById('drawerCountButton');
         const endOfDayDrawerCountBtn = document.getElementById('endOfDayDrawerCountButton');
-        [addClientBtn, makePaymentBtn, sendBillBtn, searchDatabaseBtn, settingsBtn, logoutBtn, drawerCountBtn, endOfDayDrawerCountBtn, closeOutDrawerBtn].forEach(btn => {
+        const businessEndOfDayBtn = document.getElementById('businessEndOfDayButton');
+        [addClientBtn, makePaymentBtn, sendBillBtn, searchDatabaseBtn, settingsBtn, logoutBtn, drawerCountBtn, endOfDayDrawerCountBtn, businessEndOfDayBtn, closeOutDrawerBtn].forEach(btn => {
           if (btn) btn.classList.add('hidden');
         });
 
@@ -1485,7 +1486,7 @@
           if (closeOutDrawerBtn) closeOutDrawerBtn.classList.remove('hidden');
           if (logoutBtn) logoutBtn.classList.remove('hidden');
         } else if (userRole === 'supervisor') {
-          // Supervisor users: Send Bill, Search Clients, Start Of Day Drawer Count, End Of Day Drawer Count, Settings, Logout
+          // Supervisor users: Send Bill, Search Clients, Start Of Day Drawer Count, End Of Day Drawer Count, Business End Of Day, Logout
           if (sendBillBtn) sendBillBtn.classList.remove('hidden');
           if (searchDatabaseBtn) searchDatabaseBtn.classList.remove('hidden');
           const drawerCountBtn = document.getElementById('drawerCountButton');
@@ -1518,7 +1519,35 @@
           }
           
           if (endOfDayDrawerCountBtn) endOfDayDrawerCountBtn.classList.remove('hidden');
-          if (settingsBtn) settingsBtn.classList.remove('hidden');
+          
+          // Create Business End Of Day button if it doesn't exist
+          let businessEndOfDayBtn = document.getElementById('businessEndOfDayButton');
+          if (!businessEndOfDayBtn && (endOfDayDrawerCountBtn || settingsBtn || logoutBtn)) {
+            const buttonContainer = endOfDayDrawerCountBtn?.parentElement || settingsBtn?.parentElement || logoutBtn?.parentElement;
+            if (buttonContainer) {
+              businessEndOfDayBtn = document.createElement('button');
+              businessEndOfDayBtn.id = 'businessEndOfDayButton';
+              businessEndOfDayBtn.className = 'w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200';
+              businessEndOfDayBtn.innerHTML = `
+                <div class="flex items-center justify-center gap-2">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7h18M3 12h18M3 17h18"/>
+                  </svg>
+                  <span>Business End Of Day</span>
+                </div>
+              `;
+              businessEndOfDayBtn.onclick = () => showBusinessEndOfDaySummary();
+              if (endOfDayDrawerCountBtn && endOfDayDrawerCountBtn.parentElement) {
+                endOfDayDrawerCountBtn.parentElement.insertBefore(businessEndOfDayBtn, endOfDayDrawerCountBtn.nextSibling);
+              } else if (settingsBtn && settingsBtn.parentElement) {
+                settingsBtn.parentElement.insertBefore(businessEndOfDayBtn, settingsBtn);
+              } else if (buttonContainer) {
+                buttonContainer.appendChild(businessEndOfDayBtn);
+              }
+            }
+          }
+
+          if (businessEndOfDayBtn) businessEndOfDayBtn.classList.remove('hidden');
           if (logoutBtn) logoutBtn.classList.remove('hidden');
         } else if (userRole === 'admin' || userRole === 'helpdesk') {
           // Admin and Help Desk users: All buttons (default behavior)
@@ -2267,7 +2296,7 @@
         const customerName = (customer.name || '').toLowerCase().trim();
         const customerAccount = (customer.accountNumber || '').toLowerCase().trim();
         const customerAddress = (customer.address || '').toLowerCase().trim();
-        const customerPhone = (customer.phone || '').toLowerCase().trim();
+        const customerPhone = String(customer.phone || '').toLowerCase().trim();
 
         // Log first few customers for debugging
         if (index < 5) {
@@ -4014,7 +4043,7 @@
         <div id="registerRecountSection" class="hidden space-y-6 py-6 px-6 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl">
           <div class="flex items-center justify-between">
             <div>
-              <h4 id="closingCountTitle" class="text-lg font-semibold text-slate-800 dark:text-slate-100">Closing Register Count (End Of Day)</h4>
+              <h4 id="closingCountTitle" class="text-lg font-semibold text-slate-800 dark:text-slate-100">End Of Day Count</h4>
               <p class="text-sm text-slate-500 dark:text-slate-400">Recount the drawer to balance the payment processing session.</p>
             </div>
             <button onclick="backToPaymentProcessingEntryFromRecount()" class="text-sm text-slate-500 hover:text-slate-700">Back</button>
@@ -4022,14 +4051,14 @@
 
           <!-- Step Indicator -->
           <div class="flex items-center gap-4 mb-6">
-            <button id="recountStep1Btn" onclick="switchRecountStep(1)" class="px-4 py-2 text-sm font-semibold bg-green-600 text-white rounded-lg">Step 1: Count Initial Total</button>
+            <button id="recountStep1Btn" onclick="switchRecountStep(1)" class="px-4 py-2 text-sm font-semibold bg-green-600 text-white rounded-lg">Step 1: SOD Fund Count</button>
             <button id="recountStep2Btn" onclick="switchRecountStep(2)" class="px-4 py-2 text-sm font-semibold bg-slate-200 text-slate-700 rounded-lg">Step 2: Count Payment Total</button>
           </div>
 
-          <!-- Step 1: Initial Count -->
+          <!-- Step 1: SOD Fund Count -->
           <div id="recountStep1" class="space-y-6">
             <div class="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg">
-              <p class="text-sm font-semibold text-green-800 dark:text-green-200 mb-2">Count the initial total (what was in the drawer at the start)</p>
+              <p class="text-sm font-semibold text-green-800 dark:text-green-200 mb-2">SOD Fund Count (what was in the drawer at the start)</p>
               <p id="expectedInitialTotal" class="text-xs text-green-600 dark:text-green-400"></p>
             </div>
 
@@ -4073,10 +4102,13 @@
 
             <div class="flex items-center justify-between">
               <div>
-                <p id="initialRecountTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">Initial Total: $0.00</p>
+                <p id="initialRecountTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">SOD Fund Total: $0.00</p>
                 <p id="registerVarianceText" class="text-xs text-slate-500 mt-1"></p>
               </div>
-              <button onclick="switchRecountStep(2)" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Continue to Step 2</button>
+              <div class="flex gap-3">
+                <button onclick="printSODCountReceipt()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">Print Receipt</button>
+                <button onclick="switchRecountStep(2)" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Continue to Step 2</button>
+              </div>
             </div>
           </div>
 
@@ -4143,7 +4175,8 @@
               <p id="paymentRecountTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">Payment Total: $0.00</p>
               <div class="flex gap-3">
                 <button onclick="switchRecountStep(1)" class="px-4 py-2 text-sm bg-slate-200 rounded-lg">Back to Step 1</button>
-                <button onclick="finalizePaymentProcessingWithRecount()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Submit Batch</button>
+                <button onclick="printPaymentCountReceipt()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">Print Receipt</button>
+                <button onclick="finalizePaymentProcessingWithRecount()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Submit Payments</button>
               </div>
             </div>
           </div>
@@ -5277,10 +5310,260 @@
       // Update display
       const totalElement = document.getElementById(type === 'payment' ? 'paymentRecountTotal' : 'initialRecountTotal');
       if (totalElement) {
-        totalElement.textContent = `${type === 'payment' ? 'Payment' : 'Initial'} Total: $${total.toFixed(2)}`;
+        totalElement.textContent = `${type === 'payment' ? 'Payment' : 'SOD Fund'} Total: $${total.toFixed(2)}`;
       }
 
       return total;
+    };
+
+    // Print SOD Fund Count Receipt (Step 1)
+    window.printSODCountReceipt = function() {
+      if (!window.currentPaymentProcessing || !window.currentPaymentProcessing.drawer) {
+        alert('No drawer information available');
+        return;
+      }
+
+      const drawer = window.currentPaymentProcessing.drawer;
+      const today = window.getCurrentDate();
+      const dateStr = today.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      // Read current count values
+      const bills = {};
+      const coins = {};
+      let total = 0;
+
+      [1,2,5,10,20,50,100].forEach(v => {
+        const input = document.getElementById(`initial_recount_bill_${v}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          bills[v] = count;
+          total += count * v;
+        }
+      });
+
+      [['penny',0.01,'Pennies'],['nickel',0.05,'Nickels'],['dime',0.10,'Dimes'],['quarter',0.25,'Quarters'],['half',0.50,'Half Dollars']].forEach(([k,val,label]) => {
+        const input = document.getElementById(`initial_recount_coin_${k}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          coins[k] = count;
+          total += count * val;
+        }
+      });
+
+      // Build receipt HTML
+      let receiptHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>SOD Fund Count Receipt</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            h1 { text-align: center; margin-bottom: 10px; }
+            h2 { text-align: center; color: #666; margin-bottom: 30px; }
+            .info { margin-bottom: 20px; }
+            .info p { margin: 5px 0; }
+            table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .total { font-weight: bold; font-size: 1.2em; margin-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>${drawer.name} - SOD Fund Count Receipt</h1>
+          <div class="info">
+            <p><strong>Date:</strong> ${dateStr}</p>
+            <p><strong>Counted by:</strong> ${window.currentPaymentProcessing.username || 'Cashier'}</p>
+          </div>
+          <h3>Bills</h3>
+          <table>
+            <tr><th>Denomination</th><th>Quantity</th><th>Amount</th></tr>
+      `;
+
+      [1,2,5,10,20,50,100].forEach(v => {
+        const billCount = bills[v] || 0;
+        if (billCount > 0) {
+          const amount = billCount * v;
+          receiptHtml += `<tr><td>$${v}</td><td>${billCount}</td><td>$${amount.toFixed(2)}</td></tr>`;
+        }
+      });
+
+      receiptHtml += `
+          </table>
+          <h3>Coins</h3>
+          <table>
+            <tr><th>Denomination</th><th>Quantity</th><th>Amount</th></tr>
+      `;
+
+      [['penny',0.01,'Pennies'],['nickel',0.05,'Nickels'],['dime',0.10,'Dimes'],['quarter',0.25,'Quarters'],['half',0.50,'Half Dollars']].forEach(([k,val,label]) => {
+        const coinCount = coins[k] || 0;
+        if (coinCount > 0) {
+          const amount = coinCount * val;
+          receiptHtml += `<tr><td>${label}</td><td>${coinCount}</td><td>$${amount.toFixed(2)}</td></tr>`;
+        }
+      });
+
+      receiptHtml += `
+          </table>
+          <div class="total">Total: $${total.toFixed(2)}</div>
+          <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd;">
+            <p style="margin-top: 30px;">Signature: _____________</p>
+          </div>
+        </body>
+        </html>
+      `;
+
+      // Open print window
+      const printWindow = window.open('', '_blank');
+      printWindow.document.write(receiptHtml);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+        printWindow.print();
+      }, 250);
+    };
+
+    // Print Payment Count Receipt (Step 2)
+    window.printPaymentCountReceipt = function() {
+      if (!window.currentPaymentProcessing || !window.currentPaymentProcessing.drawer) {
+        alert('No drawer information available');
+        return;
+      }
+
+      const drawer = window.currentPaymentProcessing.drawer;
+      const today = window.getCurrentDate();
+      const dateStr = today.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      // Read current count values
+      const bills = {};
+      const coins = {};
+      const checks = [];
+      let total = 0;
+
+      [1,2,5,10,20,50,100].forEach(v => {
+        const input = document.getElementById(`payment_bill_${v}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          bills[v] = count;
+          total += count * v;
+        }
+      });
+
+      [['penny',0.01,'Pennies'],['nickel',0.05,'Nickels'],['dime',0.10,'Dimes'],['quarter',0.25,'Quarters'],['half',0.50,'Half Dollars']].forEach(([k,val,label]) => {
+        const input = document.getElementById(`payment_coin_${k}`);
+        if (input) {
+          const count = parseFloat(input.value) || 0;
+          coins[k] = count;
+          total += count * val;
+        }
+      });
+
+      // Calculate checks
+      const checksContainer = document.getElementById('payment_checksContainer');
+      if (checksContainer) {
+        const checkInputs = checksContainer.querySelectorAll('input[type="number"]');
+        checkInputs.forEach(input => {
+          const amount = parseFloat(input.value) || 0;
+          if (amount > 0) {
+            checks.push(amount);
+            total += amount;
+          }
+        });
+      }
+
+      // Build receipt HTML
+      let receiptHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Payment Count Receipt</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; }
+            h1 { text-align: center; margin-bottom: 10px; }
+            h2 { text-align: center; color: #666; margin-bottom: 30px; }
+            .info { margin-bottom: 20px; }
+            .info p { margin: 5px 0; }
+            table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .total { font-weight: bold; font-size: 1.2em; margin-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>${drawer.name} - Payment Count Receipt</h1>
+          <div class="info">
+            <p><strong>Date:</strong> ${dateStr}</p>
+            <p><strong>Counted by:</strong> ${window.currentPaymentProcessing.username || 'Cashier'}</p>
+          </div>
+          <h3>Bills</h3>
+          <table>
+            <tr><th>Denomination</th><th>Quantity</th><th>Amount</th></tr>
+      `;
+
+      [1,2,5,10,20,50,100].forEach(v => {
+        const billCount = bills[v] || 0;
+        if (billCount > 0) {
+          const amount = billCount * v;
+          receiptHtml += `<tr><td>$${v}</td><td>${billCount}</td><td>$${amount.toFixed(2)}</td></tr>`;
+        }
+      });
+
+      receiptHtml += `
+          </table>
+          <h3>Coins</h3>
+          <table>
+            <tr><th>Denomination</th><th>Quantity</th><th>Amount</th></tr>
+      `;
+
+      [['penny',0.01,'Pennies'],['nickel',0.05,'Nickels'],['dime',0.10,'Dimes'],['quarter',0.25,'Quarters'],['half',0.50,'Half Dollars']].forEach(([k,val,label]) => {
+        const coinCount = coins[k] || 0;
+        if (coinCount > 0) {
+          const amount = coinCount * val;
+          receiptHtml += `<tr><td>${label}</td><td>${coinCount}</td><td>$${amount.toFixed(2)}</td></tr>`;
+        }
+      });
+
+      if (checks.length > 0) {
+        receiptHtml += `
+          </table>
+          <h3>Checks</h3>
+          <table>
+            <tr><th>Check #</th><th>Amount</th></tr>
+        `;
+        checks.forEach((amount, idx) => {
+          receiptHtml += `<tr><td>Check #${idx + 1}</td><td>$${amount.toFixed(2)}</td></tr>`;
+        });
+      }
+
+      receiptHtml += `
+          </table>
+          <div class="total">Total: $${total.toFixed(2)}</div>
+          <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd;">
+            <p style="margin-top: 30px;">Signature: _____________</p>
+          </div>
+        </body>
+        </html>
+      `;
+
+      // Open print window
+      const printWindow = window.open('', '_blank');
+      printWindow.document.write(receiptHtml);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+        printWindow.print();
+      }, 250);
     };
 
     window.finalizePaymentProcessingWithRecount = async function() {
@@ -5951,11 +6234,6 @@
             </div>
 
             <div class="mt-6 space-y-4">
-              <div class="flex flex-wrap gap-3">
-                ${session.register?.initial ? `<button onclick="viewDenominations('${sessionId}', 'initial1')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">View Initial Count #1</button>` : ''}
-                ${session.register?.closing?.initialCount ? `<button onclick="viewDenominations('${sessionId}', 'initial2')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">View Initial Count #2</button>` : ''}
-                ${session.register?.closing?.paymentCount ? `<button onclick="viewDenominations('${sessionId}', 'payment')" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">View Payment Count</button>` : ''}
-              </div>
               <div class="flex justify-end">
                 <button onclick="closePaymentProcessingSessionDetailsModal()" class="px-6 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600">Close</button>
               </div>
@@ -8371,9 +8649,9 @@
       }
       
       expectedFundDisplay.innerHTML = `
-        <p class="text-sm font-semibold text-blue-800 dark:text-blue-200 mb-1">Expected Drawer Fund Value</p>
+        <p class="text-sm font-semibold text-blue-800 dark:text-blue-200 mb-1">Drawer Start Of Day Amount</p>
         <p class="text-lg font-bold text-blue-900 dark:text-blue-100">$${fundValue.toFixed(2)}</p>
-        <p class="text-xs text-blue-600 dark:text-blue-400 mt-1">This is the expected amount that should be in the drawer at the start of the day.</p>
+        <p class="text-xs text-blue-600 dark:text-blue-400 mt-1">start of day drawer amount</p>
       `;
       
       // Build bills HTML
@@ -8745,6 +9023,297 @@
 
     window.hideEndOfDayDrawerSelectionModal = function() {
       const modal = document.getElementById('endOfDayDrawerSelectionModal');
+      if (modal) {
+        modal.classList.add('hidden');
+      }
+    };
+
+    // Business End Of Day (BEOD) summary
+    function renderBusinessEndOfDayModal(innerHtml) {
+      let modal = document.getElementById('businessEndOfDayModal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'businessEndOfDayModal';
+        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden';
+        document.body.appendChild(modal);
+      }
+      modal.innerHTML = innerHtml;
+      modal.classList.remove('hidden');
+    }
+
+    function formatBeodDateLabel(dateKey) {
+      const [year, month, day] = dateKey.split('-').map(v => parseInt(v, 10));
+      const date = new Date(year, month - 1, day);
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+    }
+
+    window.showBusinessEndOfDaySummary = async function() {
+      renderBusinessEndOfDayModal(`
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-3xl w-full mx-4">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Business End Of Day</h2>
+            <button onclick="hideBusinessEndOfDayModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="text-center py-12">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+            <p class="text-slate-600 dark:text-slate-400">Loading daily totals...</p>
+          </div>
+        </div>
+      `);
+
+      try {
+        if (typeof loadPaymentProcessingSessionsFromFirestore === 'function') {
+          await loadPaymentProcessingSessionsFromFirestore();
+        }
+      } catch (error) {
+        console.error('[BEOD] Error loading payment sessions:', error);
+      }
+
+      const sessions = window.paymentProcessingSessions || [];
+      const sessionsByDay = {};
+      sessions.forEach(session => {
+        if (!session.submittedAt) return;
+        const dateKey = new Date(session.submittedAt).toISOString().split('T')[0];
+        if (!sessionsByDay[dateKey]) sessionsByDay[dateKey] = [];
+        sessionsByDay[dateKey].push(session);
+      });
+      window.businessEndOfDaySessionsByDay = sessionsByDay;
+
+      const dayKeys = Object.keys(sessionsByDay).sort((a, b) => b.localeCompare(a));
+      if (dayKeys.length === 0) {
+        renderBusinessEndOfDayModal(`
+          <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-3xl w-full mx-4">
+            <div class="flex justify-between items-center mb-6">
+              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Business End Of Day</h2>
+              <button onclick="hideBusinessEndOfDayModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+            <div class="text-center py-8 text-slate-500 dark:text-slate-400">
+              <p>No payment sessions have been submitted yet.</p>
+            </div>
+            <div class="flex justify-end mt-6">
+              <button onclick="hideBusinessEndOfDayModal()" class="px-6 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600">Close</button>
+            </div>
+          </div>
+        `);
+        return;
+      }
+
+      let listHtml = '';
+      dayKeys.forEach(dateKey => {
+        const daySessions = sessionsByDay[dateKey] || [];
+        const total = daySessions.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+        const drawers = new Set(daySessions.map(s => s.drawer?.name || 'Unknown Drawer'));
+        listHtml += `
+          <button 
+            onclick="showBusinessEndOfDayDay('${dateKey}')" 
+            class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-xl transition-colors text-left mb-3"
+          >
+            <div class="flex items-center justify-between w-full">
+              <div class="flex-1">
+                <span class="font-semibold">${formatBeodDateLabel(dateKey)}</span>
+                <div class="mt-1 text-xs opacity-90">
+                  <div>Drawers: ${drawers.size}</div>
+                  <div>Sessions: ${daySessions.length}</div>
+                  <div>Total Received: $${total.toFixed(2)}</div>
+                </div>
+              </div>
+              <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+              </svg>
+            </div>
+          </button>
+        `;
+      });
+
+      renderBusinessEndOfDayModal(`
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-3xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Business End Of Day</h2>
+            <button onclick="hideBusinessEndOfDayModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-400 mb-4">Select a day to review totals by drawer and payment.</p>
+          <div class="space-y-3">
+            ${listHtml}
+          </div>
+          <div class="flex justify-end mt-6">
+            <button onclick="hideBusinessEndOfDayModal()" class="px-6 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600">Close</button>
+          </div>
+        </div>
+      `);
+    };
+
+    window.showBusinessEndOfDayDay = function(dateKey) {
+      const sessionsByDay = window.businessEndOfDaySessionsByDay || {};
+      const daySessions = sessionsByDay[dateKey] || [];
+      if (daySessions.length === 0) {
+        showBusinessEndOfDaySummary();
+        return;
+      }
+
+      const sessionsByDrawer = {};
+      daySessions.forEach(session => {
+        const drawerName = session.drawer?.name || 'Unknown Drawer';
+        if (!sessionsByDrawer[drawerName]) sessionsByDrawer[drawerName] = [];
+        sessionsByDrawer[drawerName].push(session);
+      });
+
+      let listHtml = '';
+      Object.keys(sessionsByDrawer).forEach(drawerName => {
+        const drawerSessions = sessionsByDrawer[drawerName];
+        const total = drawerSessions.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+        const entriesCount = drawerSessions.reduce((sum, s) => sum + (s.entries?.length || 0), 0);
+        listHtml += `
+          <button 
+            onclick="showBusinessEndOfDayDrawer('${dateKey}', '${drawerName.replace(/'/g, "\\'")}')" 
+            class="w-full bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-4 rounded-xl transition-colors text-left mb-3"
+          >
+            <div class="flex items-center justify-between w-full">
+              <div class="flex-1">
+                <span class="font-semibold">${drawerName}</span>
+                <div class="mt-1 text-xs opacity-90">
+                  <div>Sessions: ${drawerSessions.length}</div>
+                  <div>Payments: ${entriesCount}</div>
+                  <div>Total Received: $${total.toFixed(2)}</div>
+                </div>
+              </div>
+              <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+              </svg>
+            </div>
+          </button>
+        `;
+      });
+
+      renderBusinessEndOfDayModal(`
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-3xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-center mb-6">
+            <div>
+              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Business End Of Day</h2>
+              <p class="text-sm text-slate-600 dark:text-slate-400">${formatBeodDateLabel(dateKey)}</p>
+            </div>
+            <button onclick="hideBusinessEndOfDayModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <p class="text-sm text-slate-600 dark:text-slate-400 mb-4">Select a drawer to review the payments for the day.</p>
+          <div class="space-y-3">
+            ${listHtml}
+          </div>
+          <div class="flex justify-between mt-6">
+            <button onclick="showBusinessEndOfDaySummary()" class="px-6 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300">Back</button>
+            <button onclick="hideBusinessEndOfDayModal()" class="px-6 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600">Close</button>
+          </div>
+        </div>
+      `);
+    };
+
+    window.showBusinessEndOfDayDrawer = function(dateKey, drawerName) {
+      const sessionsByDay = window.businessEndOfDaySessionsByDay || {};
+      const daySessions = sessionsByDay[dateKey] || [];
+      const drawerSessions = daySessions.filter(s => (s.drawer?.name || 'Unknown Drawer') === drawerName);
+
+      const entries = [];
+      drawerSessions.forEach(session => {
+        (session.entries || []).forEach(entry => {
+          entries.push({
+            ...entry,
+            sessionId: session.id,
+            submittedAt: session.submittedAt,
+            sessionUser: session.username || '—'
+          });
+        });
+      });
+
+      const total = entries.reduce((sum, e) => sum + (e.amount || 0), 0);
+      const rowsHtml = entries.length === 0
+        ? `<tr><td colspan="7" class="px-4 py-4 text-center text-sm text-slate-500">No payments recorded.</td></tr>`
+        : entries.map(entry => {
+            const entryDate = entry.timestamp ? new Date(entry.timestamp) : (entry.submittedAt ? new Date(entry.submittedAt) : null);
+            const dateStr = entry.date || (entryDate ? entryDate.toLocaleString() : '—');
+            const processedBy = entry.processedBy || entry.sessionUser || '—';
+            return `
+              <tr class="border-b border-slate-200">
+                <td class="px-4 py-3 text-sm text-slate-700">${dateStr}</td>
+                <td class="px-4 py-3 text-sm text-slate-700">${entry.customerName || '—'}</td>
+                <td class="px-4 py-3 text-sm text-slate-700">${entry.accountNumber || '—'}</td>
+                <td class="px-4 py-3 text-sm text-slate-700">${entry.property || '—'}</td>
+                <td class="px-4 py-3 text-sm text-slate-700">${entry.paymentType || '—'}</td>
+                <td class="px-4 py-3 text-sm text-slate-700 text-right">$${(entry.amount || 0).toFixed(2)}</td>
+                <td class="px-4 py-3 text-sm text-slate-700">${processedBy}</td>
+              </tr>
+            `;
+          }).join('');
+
+      renderBusinessEndOfDayModal(`
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-5xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-center mb-6">
+            <div>
+              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Business End Of Day</h2>
+              <p class="text-sm text-slate-600 dark:text-slate-400">${formatBeodDateLabel(dateKey)} • ${drawerName}</p>
+            </div>
+            <button onclick="hideBusinessEndOfDayModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="mb-4 flex items-center justify-between">
+            <p class="text-sm text-slate-600 dark:text-slate-400">Payments recorded for this drawer.</p>
+            <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Total Received: $${total.toFixed(2)}</p>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full border-collapse text-sm">
+              <thead class="bg-slate-100">
+                <tr>
+                  <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Date</th>
+                  <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Customer</th>
+                  <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Account #</th>
+                  <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Property</th>
+                  <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Type</th>
+                  <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase">Amount</th>
+                  <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase">Processed By</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+              <tfoot class="bg-slate-50">
+                <tr>
+                  <td colspan="5" class="px-4 py-3 text-right font-semibold text-slate-700">Total</td>
+                  <td class="px-4 py-3 text-right font-bold text-slate-900">$${total.toFixed(2)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <div class="flex justify-between mt-6">
+            <button onclick="showBusinessEndOfDayDay('${dateKey}')" class="px-6 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300">Back</button>
+            <button onclick="hideBusinessEndOfDayModal()" class="px-6 py-2 bg-slate-500 text-white rounded-lg hover:bg-slate-600">Close</button>
+          </div>
+        </div>
+      `);
+    };
+
+    window.hideBusinessEndOfDayModal = function() {
+      const modal = document.getElementById('businessEndOfDayModal');
       if (modal) {
         modal.classList.add('hidden');
       }
@@ -9252,10 +9821,19 @@
       const searchTerm = nameInput.value.toLowerCase().trim();
       const statusFilter = statusSelect.value;
       
-      let results = customers.filter(customer => {
-        const nameMatch = !searchTerm || (customer.name || '').toLowerCase().includes(searchTerm);
+      const results = customers.filter(customer => {
+        const customerName = (customer.name || '').toLowerCase().trim();
+        const customerAccount = (customer.accountNumber || '').toLowerCase().trim();
+        const customerAddress = (customer.address || '').toLowerCase().trim();
+        const customerPhone = String(customer.phone || '').toLowerCase().trim();
+
+        const nameMatch = !searchTerm || customerName.includes(searchTerm);
+        const accountMatch = !searchTerm || customerAccount.includes(searchTerm);
+        const addressMatch = !searchTerm || customerAddress.includes(searchTerm);
+        const phoneMatch = !searchTerm || customerPhone.includes(searchTerm);
         const statusMatch = !statusFilter || customer.paymentStatus === statusFilter;
-        return nameMatch && statusMatch;
+
+        return statusMatch && (nameMatch || accountMatch || addressMatch || phoneMatch);
       });
       
       if (results.length === 0) {
@@ -13701,13 +14279,14 @@
                   type="text" 
                   id="searchByName" 
                   class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="Enter customer name..."
+                  placeholder="Search by name, account number, address, or phone number..."
+                  oninput="performSearch()"
                 >
               </div>
 
               <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Filter by Status</label>
-                <select id="searchByStatus" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
+                <select id="searchByStatus" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200" onchange="performSearch()">
                   <option value="">All Status</option>
                   <option value="current">Current</option>
                   <option value="overdue">Overdue</option>
