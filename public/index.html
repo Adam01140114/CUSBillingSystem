@@ -17,7 +17,7 @@
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
     import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, writeBatch } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
-    import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+    import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 
     const firebaseConfig = {
       apiKey: "AIzaSyCxfnleg4jI9C3xPI_UabT81vIsnPjukSY",
@@ -53,6 +53,17 @@
 
         } catch (error) {
 
+        }
+      },
+      // Sign in anonymously (fallback when userCode is too short for Firebase Auth)
+      signInAnonymously: async function() {
+        try {
+          const userCredential = await signInAnonymously(auth);
+
+          return { success: true, user: userCredential.user };
+        } catch (error) {
+
+          return { success: false, error: error.message, code: error.code };
         }
       },
       // Get current user
@@ -109,6 +120,48 @@
 
     function logBatch(message, data) {
       const payload = data !== undefined ? data : '';
+
+    }
+
+    function populatePaymentCustomerSelect() {
+
+      const select = document.getElementById('paymentCustomerSelect');
+      if (!select) {
+
+        return;
+      }
+
+      const previousValue = select.value;
+      select.innerHTML = '<option value="">Choose a customer...</option>';
+
+      customers.forEach(customer => {
+        const option = document.createElement('option');
+        option.value = customer.id;
+        const name = customer.name || customer.fullName || customer.accountName || 'Unnamed Customer';
+        const account = customer.accountNumber || customer.account || customer.id;
+        option.textContent = `${name} (${account})`;
+        select.appendChild(option);
+      });
+
+      if (previousValue) {
+        select.value = previousValue;
+      }
+
+      select.onchange = () => {
+        const customerId = select.value;
+
+        if (!customerId) {
+          const info = document.getElementById('customerPaymentInfo');
+          if (info) info.classList.add('hidden');
+          return;
+        }
+        window.selectedCustomerIdForPayment = customerId;
+        const paymentCustomerId = document.getElementById('paymentCustomerId');
+        if (paymentCustomerId) {
+          paymentCustomerId.value = customerId;
+        }
+        showCustomerPaymentInfo(customerId);
+      };
 
     }
 
@@ -228,25 +281,46 @@
 
     async function loadLocationsFromFirestore() {
       try {
+
+        const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+        const effectiveRole = window.getEffectiveRole ? window.getEffectiveRole(effectiveUser) : null;
+
         const locationsRef = collection(db, 'locations');
         const snapshot = await getDocs(locationsRef);
+
         locations = [];
         snapshot.forEach(doc => {
           locations.push({ id: doc.id, ...doc.data() });
         });
+
         filteredLocations = [...locations];
         updateLocationsTable();
 
       } catch (error) {
 
+        // If permission denied, show helpful message
+        if (error?.code === 'permission-denied') {
+          const firebaseUser = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
+          if (!firebaseUser) {
+
+            // Don't throw - let the app continue, but data won't load
+            return;
+          }
+        }
+        throw error;
       }
     }
 
     // Load drawers from Firestore
     async function loadDrawersFromFirestore() {
       try {
+
+        const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+        const effectiveRole = window.getEffectiveRole ? window.getEffectiveRole(effectiveUser) : null;
+
         const drawersRef = collection(db, 'drawers');
         const snapshot = await getDocs(drawersRef);
+
         drawers = [];
         snapshot.forEach(doc => {
           const drawer = { id: doc.id, ...doc.data() };
@@ -256,11 +330,22 @@
           }
           drawers.push(drawer);
         });
+
         // Sort by created date (newest first)
         drawers.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
         updateSettingsDrawersTable();
       } catch (error) {
 
+        // If permission denied, show helpful message
+        if (error?.code === 'permission-denied') {
+          const firebaseUser = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
+          if (!firebaseUser) {
+
+            // Don't throw - let the app continue, but data won't load
+            return;
+          }
+        }
+        throw error;
       }
     }
 
@@ -416,8 +501,13 @@
 
     async function loadCustomersFromFirestore() {
       try {
+
+        const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+        const effectiveRole = window.getEffectiveRole ? window.getEffectiveRole(effectiveUser) : null;
+
         const customersRef = collection(db, 'customers');
         const snapshot = await getDocs(customersRef);
+
         customers = [];
         snapshot.forEach(doc => {
           const customer = { id: doc.id, ...doc.data() };
@@ -448,16 +538,21 @@
         // This will only save if ensureCodeExists() created any NEW codes that weren't in Firestore.
         // If codes already existed, ensureCodeExists() will find them and return them, so no new codes are created.
         if (codes.length > 0) {
-
-          // Only save if there might be new codes (codes that were just created by ensureCodeExists)
-          // Since codes are loaded first, this should rarely happen, but we save to be safe
-          await saveCodesToFirestore();
-
-        } else {
+          // Avoid write attempts during customer load to prevent permission errors
 
         }
       } catch (error) {
 
+        // If permission denied, show helpful message
+        if (error?.code === 'permission-denied') {
+          const firebaseUser = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
+          if (!firebaseUser) {
+
+            // Don't throw - let the app continue, but data won't load
+            return;
+          }
+        }
+        throw error;
       }
     }
 
@@ -568,19 +663,33 @@
     }
 
     async function loadUsersFromFirestore() {
+
       try {
         const usersRef = collection(db, 'users');
+
         const snapshot = await getDocs(usersRef);
+
         users = [];
         snapshot.forEach(docSnap => {
-          users.push({ id: docSnap.id, ...docSnap.data() });
+          const userData = { id: docSnap.id, ...docSnap.data() };
+
+          users.push(userData);
         });
+
         filteredUsers = [...users];
+
+        // Only update UI if functions exist (might not be available before auth)
+        if (typeof updateSettingsUsersTable === 'function') {
         updateSettingsUsersTable();
+        }
+        if (typeof populateBatchStartUserSelect === 'function') {
         populateBatchStartUserSelect();
+        }
 
       } catch (error) {
 
+        // Don't throw - allow login to continue even if users can't be loaded
+        // (might be a permissions issue that will resolve after auth)
       }
     }
 
@@ -898,7 +1007,9 @@
             skipPOSInitialRegisterCount: data.skipPOSInitialRegisterCount || false,
             afterHoursLogoutEnabled: data.afterHoursLogoutEnabled || false,
             afterHoursStartTime: data.afterHoursStartTime || '17:00',
-            afterHoursEndTime: data.afterHoursEndTime || '09:00'
+            afterHoursEndTime: data.afterHoursEndTime || '09:00',
+            posDoesntCloseOut: data.posDoesntCloseOut || false,
+            useUsernameInsteadOfUserCode: data.useUsernameInsteadOfUserCode || false
           };
         } else {
           // If setting doesn't exist, create it with default values
@@ -907,7 +1018,9 @@
             skipPOSInitialRegisterCount: false,
             afterHoursLogoutEnabled: false,
             afterHoursStartTime: '17:00',
-            afterHoursEndTime: '09:00'
+            afterHoursEndTime: '09:00',
+            posDoesntCloseOut: false,
+            useUsernameInsteadOfUserCode: false
           };
           await setDoc(settingsRef, settings);
         }
@@ -938,6 +1051,18 @@
           afterHoursEndTimeInput.value = endTimeValue;
 
         }
+        const posDoesntCloseOutCheckbox = document.getElementById('togglePOSDoesntCloseOut');
+        if (posDoesntCloseOutCheckbox) {
+          posDoesntCloseOutCheckbox.checked = settings.posDoesntCloseOut;
+        }
+        const useUsernameInsteadOfUserCodeCheckbox = document.getElementById('toggleUseUsernameInsteadOfUserCode');
+        if (useUsernameInsteadOfUserCodeCheckbox) {
+          const toggleValue = settings.useUsernameInsteadOfUserCode === true || settings.useUsernameInsteadOfUserCode === 'true' || settings.useUsernameInsteadOfUserCode === 1;
+          useUsernameInsteadOfUserCodeCheckbox.checked = toggleValue;
+          console.log('[loadTogglesSettings] useUsernameInsteadOfUserCode checkbox found, setting to:', toggleValue, 'from settings:', settings.useUsernameInsteadOfUserCode);
+        } else {
+          console.warn('[loadTogglesSettings] useUsernameInsteadOfUserCode checkbox not found in DOM');
+        }
 
         // Update time inputs visibility
         updateAfterHoursTimeInputs();
@@ -951,7 +1076,9 @@
           skipPOSInitialRegisterCount: false,
           afterHoursLogoutEnabled: false,
           afterHoursStartTime: '17:00',
-          afterHoursEndTime: '09:00'
+          afterHoursEndTime: '09:00',
+          posDoesntCloseOut: false,
+          useUsernameInsteadOfUserCode: false
         };
       }
     }
@@ -964,22 +1091,32 @@
         const afterHoursCheckbox = document.getElementById('toggleAfterHoursLogout');
         const afterHoursStartTimeInput = document.getElementById('afterHoursStartTime');
         const afterHoursEndTimeInput = document.getElementById('afterHoursEndTime');
+        const posDoesntCloseOutCheckbox = document.getElementById('togglePOSDoesntCloseOut');
+        const useUsernameInsteadOfUserCodeCheckbox = document.getElementById('toggleUseUsernameInsteadOfUserCode');
 
         const askUserCodePerTransaction = toggleCheckbox ? toggleCheckbox.checked : false;
         const skipPOSInitialRegisterCount = skipInitialCountCheckbox ? skipInitialCountCheckbox.checked : false;
         const afterHoursLogoutEnabled = afterHoursCheckbox ? afterHoursCheckbox.checked : false;
         const afterHoursStartTime = afterHoursStartTimeInput ? afterHoursStartTimeInput.value : '17:00';
         const afterHoursEndTime = afterHoursEndTimeInput ? afterHoursEndTimeInput.value : '09:00';
+        const posDoesntCloseOut = posDoesntCloseOutCheckbox ? posDoesntCloseOutCheckbox.checked : false;
+        const useUsernameInsteadOfUserCode = useUsernameInsteadOfUserCodeCheckbox ? useUsernameInsteadOfUserCodeCheckbox.checked : false;
+        console.log('[saveTogglesSettings] Saving useUsernameInsteadOfUserCode:', useUsernameInsteadOfUserCode, 'checkbox found:', !!useUsernameInsteadOfUserCodeCheckbox, 'checkbox checked:', useUsernameInsteadOfUserCodeCheckbox?.checked);
 
         const settingsRef = doc(db, 'settings', 'toggles');
-        await setDoc(settingsRef, {
+        const settingsToSave = {
           askUserCodePerTransaction: askUserCodePerTransaction,
           skipPOSInitialRegisterCount: skipPOSInitialRegisterCount,
           afterHoursLogoutEnabled: afterHoursLogoutEnabled,
           afterHoursStartTime: afterHoursStartTime,
           afterHoursEndTime: afterHoursEndTime,
+          posDoesntCloseOut: posDoesntCloseOut,
+          useUsernameInsteadOfUserCode: useUsernameInsteadOfUserCode,
           updatedAt: new Date().toISOString()
-        });
+        };
+        console.log('[saveTogglesSettings] Saving settings to Firestore:', settingsToSave);
+        await setDoc(settingsRef, settingsToSave);
+        console.log('[saveTogglesSettings] Settings saved successfully');
 
         // Show success feedback
         if (toggleCheckbox) {
@@ -1068,7 +1205,7 @@
             <p><strong>Customer:</strong> ${entry.customerName || '—'}</p>
             <p><strong>Account #:</strong> ${entry.accountNumber || '—'}</p>
             <p><strong>Property:</strong> ${entry.property || '—'}</p>
-            <p><strong>Processed By:</strong> ${entry.processedBy || session.username || '—'}</p>
+            <p><strong>Processed By:</strong> ${entry.processedBy || window.authenticatedUser?.fullName || session.username || '—'}</p>
           </div>
           <table>
             <tr><th>Item</th><th class="text-right">Amount</th></tr>
@@ -1136,7 +1273,7 @@
             <p><strong>Customer:</strong> ${entry.customerName || '—'}</p>
             <p><strong>Account #:</strong> ${entry.accountNumber || '—'}</p>
             <p><strong>Property:</strong> ${entry.property || '—'}</p>
-            <p><strong>Processed By:</strong> ${entry.processedBy || '—'}</p>
+            <p><strong>Processed By:</strong> ${entry.processedBy || window.authenticatedUser?.fullName || '—'}</p>
           </div>
           <table>
             <tr><th>Item</th><th class="text-right">Amount</th></tr>
@@ -1179,6 +1316,9 @@
 
     async function loadPaymentProcessingSessionsFromFirestore() {
       try {
+
+        const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+        const effectiveRole = window.getEffectiveRole ? window.getEffectiveRole(effectiveUser) : null;
 
         const sessionsRef = collection(db, 'paymentProcessingSessions');
         const snapshot = await getDocs(sessionsRef);
@@ -1414,15 +1554,138 @@
       // Admin UID (for backward compatibility with Firestore rules)
       const ADMIN_UID = 'fQEVSsWI0DRca4h8K7uJgTwmjfv2'; // Admin user UID
 
-      // Get user role from email
-      function getUserRole(email) {
-        if (!email) return null;
-        const normalizedEmail = email.toLowerCase().trim();
-        return ACCOUNT_ROLES[normalizedEmail] || null;
+      // Get user role from email (legacy) or user object (new)
+      function getUserRole(emailOrUser) {
+
+        // If it's a user object (new system)
+        if (emailOrUser && typeof emailOrUser === 'object' && emailOrUser.title) {
+
+          // Map title to role
+          const title = (emailOrUser.title || '').toLowerCase().trim();
+          let role = null;
+          if (title.includes('point of sale') || title === 'pos') {
+            role = 'pos';
+          } else if (title.includes('admin')) {
+            role = 'admin';
+          } else if (title.includes('supervisor')) {
+            role = 'supervisor';
+          } else if (title.includes('helpdesk')) {
+            role = 'helpdesk';
+          }
+
+          return role;
+        }
+
+        // Legacy: email-based lookup
+        if (typeof emailOrUser === 'string') {
+          const normalizedEmail = emailOrUser.toLowerCase().trim();
+          const role = ACCOUNT_ROLES[normalizedEmail] || null;
+
+          return role;
+        }
+
+        return null;
       }
 
       // Make getUserRole globally accessible
       window.getUserRole = getUserRole;
+
+      // Store authenticated user (new system)
+      window.authenticatedUser = null;
+
+      // Helper: get the current active user (new auth first, then Firebase Auth)
+      window.getEffectiveUser = function getEffectiveUser() {
+        const authUser = window.authenticatedUser || null;
+        if (authUser) {
+          return authUser;
+        }
+        const firebaseUser = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
+        return firebaseUser || null;
+      };
+
+      // Helper: resolve role for any user type (new or legacy)
+      window.getEffectiveRole = function getEffectiveRole(user = null) {
+        const resolvedUser = user || window.getEffectiveUser();
+        if (!resolvedUser) return null;
+        if (resolvedUser.role) return resolvedUser.role;
+        if (resolvedUser.title) return getUserRole(resolvedUser);
+        if (resolvedUser.email) return getUserRole(resolvedUser.email);
+        return getUserRole(resolvedUser);
+      };
+
+      // Helper: ensure Firebase Auth is available for Firestore rules
+      async function ensureFirebaseAuthSession(user, userCode) {
+        const currentFirebaseUser = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
+        if (currentFirebaseUser) {
+
+          return { success: true, user: currentFirebaseUser, method: 'existing' };
+        }
+
+        const email = user?.email || null;
+        const password = userCode || user?.userCode || '';
+        const authPassword = password.length < 6 ? password.padStart(6, '0') : password;
+
+        // Firebase Auth requires passwords >= 6 chars
+        if (!email) {
+
+          const anonResult = await window.firebaseAuth.signInAnonymously();
+
+          return { ...anonResult, method: 'anonymous' };
+        }
+
+        // Try sign-in
+        const signInResult = await window.firebaseAuth.signIn(email, authPassword);
+
+        if (signInResult.success) {
+          return { ...signInResult, method: 'password' };
+        }
+
+        // If sign-in failed due to wrong password (email exists), try anonymous auth
+        if (signInResult.error && (signInResult.error.includes('wrong-password') || signInResult.error.includes('invalid-credential'))) {
+
+          const anonResult = await window.firebaseAuth.signInAnonymously();
+
+          if (anonResult.success) {
+            return { ...anonResult, method: 'anonymous-fallback' };
+          }
+          // If anonymous also fails, log warning but continue - custom auth will still work
+
+          // Return failure but don't throw - let the app continue with custom auth
+          return { success: false, error: 'Firebase Auth unavailable', method: 'failed' };
+        }
+
+        // Try create + sign-in if needed (only if email doesn't exist)
+        try {
+          const auth = getAuth();
+          await createUserWithEmailAndPassword(auth, email, authPassword);
+
+          const retryResult = await window.firebaseAuth.signIn(email, authPassword);
+          return { ...retryResult, method: 'created' };
+        } catch (createError) {
+          // If email already exists, try anonymous auth
+          if (createError.code === 'auth/email-already-in-use' || createError.message?.includes('email-already-in-use')) {
+
+            const anonResult = await window.firebaseAuth.signInAnonymously();
+
+            if (anonResult.success) {
+              return { ...anonResult, method: 'anonymous-fallback' };
+            }
+            // If anonymous also fails, log warning but continue
+
+            return { success: false, error: 'Firebase Auth unavailable - email exists with different password', method: 'failed' };
+          }
+          // For other errors, also try anonymous
+
+          const anonResult = await window.firebaseAuth.signInAnonymously();
+
+          if (anonResult.success) {
+            return { ...anonResult, method: 'anonymous-fallback' };
+          }
+          // If all fails, return failure but don't throw
+
+          return { success: false, error: 'Firebase Auth unavailable', method: 'failed' };
+        }
+      }
 
       // Helper function to ensure currentPaymentProcessing session is always available
       // This function will restore from localStorage if needed
@@ -1522,26 +1785,26 @@
 
       // Check if user has admin role
       function isAdmin(user) {
-        if (!user || !user.email) return false;
-        return getUserRole(user.email) === 'admin';
+        const role = window.getEffectiveRole ? window.getEffectiveRole(user) : null;
+        return role === 'admin';
       }
 
       // Check if user has helpdesk role
       function isHelpDesk(user) {
-        if (!user || !user.email) return false;
-        return getUserRole(user.email) === 'helpdesk';
+        const role = window.getEffectiveRole ? window.getEffectiveRole(user) : null;
+        return role === 'helpdesk';
       }
 
       // Check if user has POS role
       function isPOS(user) {
-        if (!user || !user.email) return false;
-        return getUserRole(user.email) === 'pos';
+        const role = window.getEffectiveRole ? window.getEffectiveRole(user) : null;
+        return role === 'pos';
       }
 
       // Check if user has supervisor role
       function isSupervisor(user) {
-        if (!user || !user.email) return false;
-        return getUserRole(user.email) === 'supervisor';
+        const role = window.getEffectiveRole ? window.getEffectiveRole(user) : null;
+        return role === 'supervisor';
       }
 
       // Check if user is authorized (admin, helpdesk, pos, or supervisor)
@@ -1549,25 +1812,39 @@
         return isAdmin(user) || isHelpDesk(user) || isPOS(user) || isSupervisor(user);
       }
 
+      // Expose isAuthorized globally for data-loading guards
+      window.isAuthorized = isAuthorized;
+
       // Update dashboard title based on user role
       function updateDashboardTitle(user) {
+
         const dashboardTitle = document.querySelector('#dashboardScreen h1');
         const dashboardSubtitle = document.querySelector('#dashboardScreen p');
 
-        if (!dashboardTitle || !dashboardSubtitle) return;
+        if (!dashboardTitle || !dashboardSubtitle) {
 
-        const userRole = getUserRole(user?.email);
+          return;
+        }
+
+        const userRole = window.getEffectiveRole ? window.getEffectiveRole(user) : null;
 
         if (userRole === 'pos') {
           dashboardTitle.textContent = 'Payments';
-          const user = window.firebaseAuth.getCurrentUser();
-          const userEmail = user ? user.email : '';
-          const emailWithoutDomain = userEmail.replace('@alcowater.com', '');
+          // Get username from authenticated user or Firebase
+          let username = '';
+          const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+          if (effectiveUser?.fullName) {
+            username = effectiveUser.fullName;
+
+          } else if (effectiveUser?.email) {
+            username = effectiveUser.email.replace('@alcowater.com', '');
+
+          }
           dashboardSubtitle.textContent = 'Point of Sale - Process payments and manage transactions';
-          if (emailWithoutDomain) {
+          if (username) {
             const loggedInText = document.createElement('p');
             loggedInText.className = 'text-sm text-slate-500 dark:text-slate-400 mt-1';
-            loggedInText.textContent = `Logged in as: ${emailWithoutDomain}`;
+            loggedInText.textContent = `Logged in as: ${username}`;
             if (dashboardSubtitle.nextSibling && dashboardSubtitle.nextSibling.nodeType === 1 && dashboardSubtitle.nextSibling.classList && dashboardSubtitle.nextSibling.classList.contains('text-sm')) {
               dashboardSubtitle.nextSibling.remove();
             }
@@ -1576,6 +1853,26 @@
         } else if (userRole === 'supervisor') {
           dashboardTitle.textContent = 'Supervisor Dashboard';
           dashboardSubtitle.textContent = 'Supervisor - Manage drawer counts and verify transactions';
+          
+          // Add "Logged In As" text for supervisor
+          let username = '';
+          const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+          if (effectiveUser?.fullName) {
+            username = effectiveUser.fullName;
+          } else if (effectiveUser?.email) {
+            username = effectiveUser.email.replace('@alcowater.com', '');
+          }
+          
+          if (username) {
+            const loggedInText = document.createElement('p');
+            loggedInText.className = 'text-sm text-slate-500 dark:text-slate-400 mt-1';
+            loggedInText.textContent = `Logged in as: ${username}`;
+            // Remove existing logged in text if it exists
+            if (dashboardSubtitle.nextSibling && dashboardSubtitle.nextSibling.nodeType === 1 && dashboardSubtitle.nextSibling.classList && dashboardSubtitle.nextSibling.classList.contains('text-sm')) {
+              dashboardSubtitle.nextSibling.remove();
+            }
+            dashboardSubtitle.parentElement.insertBefore(loggedInText, dashboardSubtitle.nextSibling);
+          }
         } else if (userRole === 'admin' || userRole === 'helpdesk') {
           dashboardTitle.textContent = 'Admin Dashboard';
           dashboardSubtitle.textContent = 'Manage customer accounts and billing';
@@ -1586,7 +1883,8 @@
       }
 
       // Update button visibility based on user role
-      function updateButtonVisibility(user) {
+      window.updateButtonVisibility = async function updateButtonVisibility(user) {
+
         const addClientBtn = document.getElementById('addClientButton');
         const makePaymentBtn = document.getElementById('makePaymentButton');
         const sendBillBtn = document.getElementById('sendBillButton');
@@ -1684,6 +1982,7 @@
         }
 
         if (!user) {
+
           // Hide all buttons if no user
           [addClientBtn, makePaymentBtn, sendBillBtn, searchDatabaseBtn, settingsBtn, logoutBtn, closeOutDrawerBtn].forEach(btn => {
             if (btn) btn.classList.add('hidden');
@@ -1691,22 +1990,42 @@
           return;
         }
 
-        const userRole = getUserRole(user.email);
+        const userRole = window.getEffectiveRole ? window.getEffectiveRole(user) : null;
 
         // Reset all buttons to hidden first
+
         const drawerCountBtn = document.getElementById('drawerCountButton');
         const endOfDayDrawerCountBtn = document.getElementById('endOfDayDrawerCountButton');
         const businessEndOfDayBtn = document.getElementById('businessEndOfDayButton');
         [addClientBtn, makePaymentBtn, sendBillBtn, searchDatabaseBtn, settingsBtn, logoutBtn, drawerCountBtn, endOfDayDrawerCountBtn, businessEndOfDayBtn, closeOutDrawerBtn].forEach(btn => {
-          if (btn) btn.classList.add('hidden');
+          if (btn) {
+            btn.classList.add('hidden');
+
+          }
         });
 
         // Show buttons based on role
+
         if (userRole === 'pos') {
-          // POS users: Make Payment, Search Database, Close Out Drawer, Log Out
+          // Check if "POS Doesn't Close Out" toggle is enabled
+          let hideCloseOutButton = false;
+          try {
+            const togglesSettings = await loadTogglesSettings();
+            hideCloseOutButton = togglesSettings && togglesSettings.posDoesntCloseOut === true;
+          } catch (error) {
+
+          }
+
+          // POS users: Make Payment, Search Database, Close Out Drawer (if not hidden), Log Out
           if (makePaymentBtn) makePaymentBtn.classList.remove('hidden');
           if (searchDatabaseBtn) searchDatabaseBtn.classList.remove('hidden');
-          if (closeOutDrawerBtn) closeOutDrawerBtn.classList.remove('hidden');
+          if (closeOutDrawerBtn) {
+            if (hideCloseOutButton) {
+              closeOutDrawerBtn.classList.add('hidden');
+            } else {
+              closeOutDrawerBtn.classList.remove('hidden');
+            }
+          }
           if (logoutBtn) logoutBtn.classList.remove('hidden');
         } else if (userRole === 'supervisor') {
           // Supervisor users: Send Bill, Search Clients, Start Of Day Drawer Count, End Of Day Drawer Count, Business End Of Day, Logout
@@ -1773,12 +2092,28 @@
           if (businessEndOfDayBtn) businessEndOfDayBtn.classList.remove('hidden');
           if (logoutBtn) logoutBtn.classList.remove('hidden');
         } else if (userRole === 'admin' || userRole === 'helpdesk') {
+
           // Admin and Help Desk users: All buttons (default behavior)
-          if (addClientBtn) addClientBtn.classList.remove('hidden');
-          if (makePaymentBtn) makePaymentBtn.classList.remove('hidden');
-          if (sendBillBtn) sendBillBtn.classList.remove('hidden');
-          if (searchDatabaseBtn) searchDatabaseBtn.classList.remove('hidden');
-          if (settingsBtn) settingsBtn.classList.remove('hidden');
+          if (addClientBtn) {
+            addClientBtn.classList.remove('hidden');
+
+          }
+          if (makePaymentBtn) {
+            makePaymentBtn.classList.remove('hidden');
+
+          }
+          if (sendBillBtn) {
+            sendBillBtn.classList.remove('hidden');
+
+          }
+          if (searchDatabaseBtn) {
+            searchDatabaseBtn.classList.remove('hidden');
+
+          }
+          if (settingsBtn) {
+            settingsBtn.classList.remove('hidden');
+
+          }
 
           // Show logout button and position it above Settings button
           if (logoutBtn) {
@@ -1819,7 +2154,49 @@
       // Function to verify authorized user and log out if not authorized
       async function verifyAdminAndLoad() {
 
-        const user = window.firebaseAuth.getCurrentUser();
+        // Try to get authenticated user from new system first
+        let user = null;
+        let userRole = null;
+
+        // Check localStorage for authenticated user
+        try {
+          const storedUser = localStorage.getItem('authenticatedUser');
+          if (storedUser) {
+            window.authenticatedUser = JSON.parse(storedUser);
+
+          }
+        } catch (e) {
+
+        }
+
+        // Use authenticated user if available
+        if (window.authenticatedUser) {
+          user = window.authenticatedUser;
+          userRole = window.getEffectiveRole ? window.getEffectiveRole(user) : null;
+
+          // Also ensure Firebase Auth is signed in for Firestore rules
+          const firebaseAuthResult = await ensureFirebaseAuthSession(user, window.authenticatedUser.userCode || '');
+          if (!firebaseAuthResult.success) {
+
+            // Show warning to user if Firebase Auth completely failed
+            if (firebaseAuthResult.error && firebaseAuthResult.error.includes('admin-restricted-operation')) {
+
+            } else if (firebaseAuthResult.error && firebaseAuthResult.error.includes('email exists')) {
+
+            }
+            // Continue anyway - custom auth still works, but Firestore may deny access
+          }
+        } else {
+          // Fallback to Firebase Auth (legacy)
+
+          const firebaseUser = window.firebaseAuth.getCurrentUser();
+          if (firebaseUser) {
+            user = firebaseUser;
+            const userEmail = user.email ? user.email.toLowerCase() : '';
+            userRole = getEffectiveRole(userEmail);
+
+          }
+        }
 
         if (!user) {
 
@@ -1828,22 +2205,6 @@
         }
 
         // Check after hours restriction for POS users (even if already authenticated)
-
-        const userEmail = user.email ? user.email.toLowerCase() : '';
-
-        let userRole;
-        try {
-          if (typeof getUserRole === 'function') {
-            userRole = getUserRole(userEmail);
-
-          } else {
-
-            userRole = 'unknown';
-          }
-        } catch (error) {
-
-          userRole = 'unknown';
-        }
 
         if (userRole === 'pos') {
 
@@ -1915,13 +2276,26 @@
         }
 
         // Check if user is authorized (admin, helpdesk, pos, or supervisor)
-        if (!isAuthorized(user)) {
 
-          // Sign out and clear auth
-          await window.firebaseAuth.signOut();
+        const isAuth = isAuthorized(user);
+
+        if (!isAuth) {
+
+          // Clear authenticated user
+          window.authenticatedUser = null;
+          localStorage.removeItem('authenticatedUser');
+
+          // Sign out Firebase Auth (if used)
+          try {
+            await window.firebaseAuth.signOut();
+          } catch (e) {
+
+          }
+
           if (window.auth && window.auth.clearAuthentication) {
             window.auth.clearAuthentication();
           }
+
           alert('Access denied. Only authorized users can access this system.');
           // Reload the page to show login screen
           window.location.reload();
@@ -1929,7 +2303,7 @@
         }
 
         // Update button visibility based on user role
-        updateButtonVisibility(user);
+        await updateButtonVisibility(user);
 
         // Update dashboard title based on user role
         updateDashboardTitle(user);
@@ -1955,126 +2329,143 @@
         firebaseAuthForm.addEventListener('submit', async function(e) {
 
           e.preventDefault();
-          let email = document.getElementById('firebaseEmail').value.trim();
-          const password = document.getElementById('firebasePassword').value;
+
+          const username = document.getElementById('firebaseEmail').value.trim();
+          const userCode = document.getElementById('firebasePassword').value.trim();
           const errorDiv = document.getElementById('firebaseAuthError');
           const submitBtn = document.getElementById('firebaseAuthSubmit');
-
-          // Auto-append @alcowater.com if email doesn't contain @
-          if (email && !email.includes('@')) {
-            email = email + '@alcowater.com';
-            document.getElementById('firebaseEmail').value = email;
-
-          }
 
           errorDiv.classList.add('hidden');
           submitBtn.disabled = true;
           submitBtn.textContent = 'Signing in...';
 
           try {
-            // Check after hours restriction for POS users before signing in
+            // Ensure users are loaded
 
-            const tempEmail = email.toLowerCase();
+            if (users.length === 0) {
 
-            let userRole;
-            try {
-              if (typeof getUserRole === 'function') {
-                userRole = getUserRole(tempEmail);
+              await loadUsersFromFirestore();
 
-              } else {
+              // If still empty after loading, show helpful error
+              if (users.length === 0) {
 
-                // If getUserRole doesn't exist, we can't check role, so skip the check
-                userRole = 'unknown';
+                errorDiv.textContent = 'No users found in system. Please contact administrator.';
+                errorDiv.classList.remove('hidden');
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Sign In';
+                return;
               }
-            } catch (error) {
-
-              userRole = 'unknown';
             }
 
+            // Find user by fullName (case-insensitive) and userCode
+
+            const foundUser = users.find(u => {
+              const nameMatch = (u.fullName || '').toLowerCase().trim() === username.toLowerCase().trim();
+              const codeMatch = (u.userCode || '').toString().trim() === userCode.trim();
+
+              return nameMatch && codeMatch;
+            });
+
+            if (!foundUser) {
+
+              errorDiv.textContent = 'Invalid username or password';
+              errorDiv.classList.remove('hidden');
+              submitBtn.disabled = false;
+              submitBtn.textContent = 'Sign In';
+              return;
+            }
+
+            // Get user role from title
+            const userRole = getUserRole(foundUser);
+
+            if (!userRole) {
+
+              errorDiv.textContent = 'User role not recognized. Please contact administrator.';
+              errorDiv.classList.remove('hidden');
+              submitBtn.disabled = false;
+              submitBtn.textContent = 'Sign In';
+              return;
+            }
+
+            // Check after hours restriction for POS users
             if (userRole === 'pos') {
 
               const togglesSettings = await loadTogglesSettings();
 
               if (togglesSettings && togglesSettings.afterHoursLogoutEnabled) {
-
                 const now = new Date();
-
-                const currentTime = now.getHours() * 60 + now.getMinutes(); // minutes since midnight
-
+                const currentTime = now.getHours() * 60 + now.getMinutes();
                 const startTime = togglesSettings.afterHoursStartTime || '00:00';
                 const endTime = togglesSettings.afterHoursEndTime || '23:59';
 
-                // Parse time strings - handle both 24h format (14:00) and ensure proper parsing
-                // Time input should always return HH:MM format (24-hour)
                 const startTimeParts = startTime.split(':');
                 const endTimeParts = endTime.split(':');
 
                 if (startTimeParts.length < 2 || endTimeParts.length < 2) {
 
-                  // Fall through to allow login if time format is invalid (fail open for safety)
-                }
-
-                const startHours = parseInt(startTimeParts[0], 10);
-                const startMinutes = parseInt(startTimeParts[1] || '0', 10);
-                const endHours = parseInt(endTimeParts[0], 10);
-                const endMinutes = parseInt(endTimeParts[1] || '0', 10);
-
-                // Validate parsed values
-                if (isNaN(startHours) || isNaN(startMinutes) || isNaN(endHours) || isNaN(endMinutes)) {
-
-                  // Fall through to allow login if parsing fails (fail open for safety)
-                }
-
-                if (startHours < 0 || startHours > 23 || startMinutes < 0 || startMinutes > 59 ||
-                    endHours < 0 || endHours > 23 || endMinutes < 0 || endMinutes > 59) {
-
-                  // Fall through to allow login if values are invalid (fail open for safety)
-                }
-
-                const startMinutesTotal = startHours * 60 + startMinutes;
-                const endMinutesTotal = endHours * 60 + endMinutes;
-
-                // Check if current time is within restricted range
-                let isRestricted = false;
-                if (startMinutesTotal <= endMinutesTotal) {
-                  // Normal range (e.g., 09:00 to 17:00)
-
-                  isRestricted = currentTime >= startMinutesTotal && currentTime < endMinutesTotal;
-
                 } else {
-                  // Overnight range (e.g., 14:00 to 09:00) - spans midnight
+                  const startHours = parseInt(startTimeParts[0], 10);
+                  const startMinutes = parseInt(startTimeParts[1] || '0', 10);
+                  const endHours = parseInt(endTimeParts[0], 10);
+                  const endMinutes = parseInt(endTimeParts[1] || '0', 10);
 
-                  isRestricted = currentTime >= startMinutesTotal || currentTime < endMinutesTotal;
+                  if (isNaN(startHours) || isNaN(startMinutes) || isNaN(endHours) || isNaN(endMinutes)) {
 
+                  } else {
+                    const startMinutesTotal = startHours * 60 + startMinutes;
+                    const endMinutesTotal = endHours * 60 + endMinutes;
+
+                    let isRestricted = false;
+                    if (startMinutesTotal <= endMinutesTotal) {
+                      isRestricted = currentTime >= startMinutesTotal && currentTime < endMinutesTotal;
+                    } else {
+                      isRestricted = currentTime >= startMinutesTotal || currentTime < endMinutesTotal;
+                    }
+
+                    if (isRestricted) {
+
+                      errorDiv.textContent = `Login is not allowed during after hours (${startTime} - ${endTime}). Please try again during allowed hours.`;
+                      errorDiv.classList.remove('hidden');
+                      submitBtn.disabled = false;
+                      submitBtn.textContent = 'Sign In';
+                      return;
+                    }
+                  }
                 }
-
-                if (isRestricted) {
-
-                  errorDiv.textContent = `Login is not allowed during after hours (${startTime} - ${endTime}). Please try again during allowed hours.`;
-                  errorDiv.classList.remove('hidden');
-                  submitBtn.disabled = false;
-                  submitBtn.textContent = 'Sign In';
-                  return;
-                } else {
-
-                }
-              } else {
-
               }
-            } else {
+            }
+
+            // Store authenticated user
+
+            const firebaseEmail = `${foundUser.fullName.toLowerCase().replace(/\s+/g, '')}@alcowater.com`;
+            window.authenticatedUser = {
+              ...foundUser,
+              role: userRole,
+              email: firebaseEmail
+            };
+
+            // Store in localStorage for persistence
+            try {
+              localStorage.setItem('authenticatedUser', JSON.stringify(window.authenticatedUser));
+
+            } catch (e) {
 
             }
 
-            const result = await window.firebaseAuth.signIn(email, password);
-            if (result.success) {
-              // Verify authorized user after sign in
-              const authResult = await verifyAdminAndLoad();
-              if (authResult) {
+            // Ensure Firebase Auth session exists for Firestore rules
+
+            await ensureFirebaseAuthSession(window.authenticatedUser, userCode);
+
+            // Verify authorized user after sign in
+            const authResult = await verifyAdminAndLoad();
+
+            if (authResult) {
+
                 // Reload page to initialize with authenticated user
                 window.location.reload();
-              }
             } else {
-              errorDiv.textContent = result.error || 'Invalid email or password';
+
+              errorDiv.textContent = 'Access denied. Only authorized users can access this system.';
               errorDiv.classList.remove('hidden');
               submitBtn.disabled = false;
               submitBtn.textContent = 'Sign In';
@@ -2093,10 +2484,53 @@
       }
 
       // Check authentication status
+
+      // Load users FIRST (before auth check) so login can work
+      // This might fail due to permissions, but we'll try
+
+      try {
+        await loadUsersFromFirestore();
+
+      } catch (e) {
+
+        // Continue - users will be loaded after auth if needed
+      }
+
+      // Try to restore authenticated user from localStorage
+      try {
+        const storedUser = localStorage.getItem('authenticatedUser');
+        if (storedUser) {
+          window.authenticatedUser = JSON.parse(storedUser);
+
+        } else {
+
+        }
+      } catch (e) {
+
+      }
+
       const authResult = await verifyAdminAndLoad();
+
       if (!authResult) {
+
         // Don't load data if not authenticated
         return;
+      }
+
+      const buttonContainerBefore = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+
+      // Ensure Firebase Auth session before data load
+      const initUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+      const initRole = window.getEffectiveRole ? window.getEffectiveRole(initUser) : null;
+
+      const firebaseUserBefore = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
+
+      try {
+        await ensureFirebaseAuthSession(initUser, window.authenticatedUser?.userCode || '');
+        const firebaseUserAfter = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
+
+      } catch (e) {
+
       }
 
       // CRITICAL: Load codes FIRST before customers!
@@ -2104,19 +2538,43 @@
       // it will find existing codes in the array instead of creating new ones with default values
 
       await loadCodesFromFirestore();
+
       await loadSewerChargeFromFirestore();
       await loadLateFeeFromFirestore();
       await loadPucSurchargeFromFirestore();
       await loadHierarchyOrder();
 
       // Now load other data
+
       await loadLocationsFromFirestore();
+
       await loadCustomersFromFirestore();
 
       await loadUsersFromFirestore();
+
       await loadDrawersFromFirestore();
+
       await loadPaymentProcessingSessionsFromFirestore();
+
       await loadTogglesSettings();
+
+      const buttonContainerAfter = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+
+      // Check if drawer count module is visible - if so, don't show buttons
+      const drawerCountModule = document.getElementById('drawerCountModule');
+      const isDrawerCountVisible = drawerCountModule && !drawerCountModule.classList.contains('hidden');
+      
+      // Ensure buttons are visible after data load (but not if drawer count is showing)
+      if (!isDrawerCountVisible && buttonContainerAfter && buttonContainerAfter.classList.contains('hidden')) {
+        console.log('[verifyAdminAndLoad] Button container is hidden and drawer count is not visible, showing buttons');
+        showDashboardButtons();
+      } else if (isDrawerCountVisible) {
+        console.log('[verifyAdminAndLoad] Drawer count module is visible, NOT showing buttons');
+      } else if (!buttonContainerAfter) {
+        console.log('[verifyAdminAndLoad] Button container not found');
+      } else {
+        console.log('[verifyAdminAndLoad] Button container is already visible');
+      }
       // Update customer payment statuses based on past due amounts
       updateAllCustomerPaymentStatuses();
       // Reset bills if it's the first of the month
@@ -2536,33 +2994,227 @@
 
     // Logout function
     window.logout = async function() {
+
+      // Clear authenticated user
+
+      window.authenticatedUser = null;
+      try {
+        localStorage.removeItem('authenticatedUser');
+
+      } catch (e) {
+
+      }
+
+      // Sign out Firebase Auth (if used)
+
       try {
         await window.firebaseAuth.signOut();
-        if (window.auth && window.auth.clearAuthentication) {
-          window.auth.clearAuthentication();
-        }
-        // Reload the page to show login screen
-        window.location.reload();
+
       } catch (error) {
 
-        // Still reload even if sign out fails
-        window.location.reload();
       }
+
+      if (window.auth && window.auth.clearAuthentication) {
+        window.auth.clearAuthentication();
+      }
+
+      // Reload the page to show login screen
+      window.location.reload();
     };
 
     // Function to hide/show dashboard buttons
     window.hideDashboardButtons = function() {
+      console.log('[UI][hideDashboardButtons] ========== FUNCTION CALLED ==========');
+      console.trace('[UI][hideDashboardButtons] Stack trace:');
+      
+      // Try to find button container by class selector
       const buttonContainer = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+      console.log('[UI][hideDashboardButtons] Button container found by selector:', buttonContainer);
+      
+      // Also try to find by individual button IDs
+      const sendBillBtn = document.getElementById('sendBillButton');
+      const searchDatabaseBtn = document.getElementById('searchDatabaseButton');
+      const drawerCountBtn = document.getElementById('drawerCountButton');
+      const endOfDayDrawerCountBtn = document.getElementById('endOfDayDrawerCountButton');
+      const businessEndOfDayBtn = document.getElementById('businessEndOfDayButton');
+      const settingsBtn = document.getElementById('settingsButton');
+      const logoutBtn = document.getElementById('logoutButton');
+      const makePaymentBtn = document.getElementById('makePaymentButton');
+      const closeOutDrawerBtn = document.getElementById('closeOutDrawerButton');
+      
+      console.log('[UI][hideDashboardButtons] Individual buttons found:');
+      console.log('  - sendBillBtn:', sendBillBtn);
+      console.log('  - searchDatabaseBtn:', searchDatabaseBtn);
+      console.log('  - drawerCountBtn:', drawerCountBtn);
+      console.log('  - endOfDayDrawerCountBtn:', endOfDayDrawerCountBtn);
+      console.log('  - businessEndOfDayBtn:', businessEndOfDayBtn);
+      console.log('  - settingsBtn:', settingsBtn);
+      console.log('  - logoutBtn:', logoutBtn);
+      console.log('  - makePaymentBtn:', makePaymentBtn);
+      console.log('  - closeOutDrawerBtn:', closeOutDrawerBtn);
+
+      // Hide individual buttons first (regardless of container)
+      const buttonsToHide = [
+        sendBillBtn, searchDatabaseBtn, drawerCountBtn, endOfDayDrawerCountBtn,
+        businessEndOfDayBtn, settingsBtn, logoutBtn, makePaymentBtn, closeOutDrawerBtn
+      ];
+      buttonsToHide.forEach((btn, index) => {
+        if (btn) {
+          const wasVisible = !btn.classList.contains('hidden');
+          btn.classList.add('hidden');
+          console.log(`[UI][hideDashboardButtons] Button ${index} (${btn.id || 'no-id'}) was visible: ${wasVisible} - Now hidden`);
+        }
+      });
+
       if (buttonContainer) {
+        const wasVisible = !buttonContainer.classList.contains('hidden');
         buttonContainer.classList.add('hidden');
+        console.log('[UI][hideDashboardButtons] Container was visible:', wasVisible, '- Now hidden');
+      } else {
+        console.log('[UI][hideDashboardButtons] No container found by selector, but individual buttons hidden');
+        
+        // Also try to find parent container from any button
+        const firstButton = buttonsToHide.find(btn => btn);
+        if (firstButton && firstButton.parentElement) {
+          const parent = firstButton.parentElement;
+          console.log('[UI][hideDashboardButtons] Found parent container from button:', parent);
+          console.log('[UI][hideDashboardButtons] Parent classes:', parent.className);
+          const wasParentVisible = !parent.classList.contains('hidden');
+          parent.classList.add('hidden');
+          console.log('[UI][hideDashboardButtons] Parent was visible:', wasParentVisible, '- Now hidden');
+        }
       }
+
+      console.log('[UI][hideDashboardButtons] ========== FUNCTION COMPLETED ==========');
     };
 
-    window.showDashboardButtons = function() {
+    window.showDashboardButtons = async function() {
+      console.log('[UI][showDashboardButtons] ========== FUNCTION CALLED ==========');
+      console.trace('[UI][showDashboardButtons] Stack trace:');
+      
+      // Get current user to determine which buttons should be visible
+      const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+      const userRole = window.getEffectiveRole ? window.getEffectiveRole(effectiveUser) : null;
+      console.log('[UI][showDashboardButtons] Current user role:', userRole);
+      
+      // Try to find button container by class selector
       const buttonContainer = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+      console.log('[UI][showDashboardButtons] Button container found by selector:', buttonContainer);
+      
+      // Also try to find by individual button IDs
+      const sendBillBtn = document.getElementById('sendBillButton');
+      const searchDatabaseBtn = document.getElementById('searchDatabaseButton');
+      const drawerCountBtn = document.getElementById('drawerCountButton');
+      const endOfDayDrawerCountBtn = document.getElementById('endOfDayDrawerCountButton');
+      const businessEndOfDayBtn = document.getElementById('businessEndOfDayButton');
+      const settingsBtn = document.getElementById('settingsButton');
+      const logoutBtn = document.getElementById('logoutButton');
+      const makePaymentBtn = document.getElementById('makePaymentButton');
+      const closeOutDrawerBtn = document.getElementById('closeOutDrawerButton');
+      
+      console.log('[UI][showDashboardButtons] Individual buttons found:');
+      console.log('  - sendBillBtn:', sendBillBtn);
+      console.log('  - searchDatabaseBtn:', searchDatabaseBtn);
+      console.log('  - drawerCountBtn:', drawerCountBtn);
+      console.log('  - endOfDayDrawerCountBtn:', endOfDayDrawerCountBtn);
+      console.log('  - businessEndOfDayBtn:', businessEndOfDayBtn);
+      console.log('  - settingsBtn:', settingsBtn);
+      console.log('  - logoutBtn:', logoutBtn);
+      console.log('  - makePaymentBtn:', makePaymentBtn);
+      console.log('  - closeOutDrawerBtn:', closeOutDrawerBtn);
+
+      // Show container
       if (buttonContainer) {
+        const wasHidden = buttonContainer.classList.contains('hidden');
         buttonContainer.classList.remove('hidden');
+        console.log('[UI][showDashboardButtons] Container was hidden:', wasHidden, '- Now visible');
       }
+      
+      // Show individual buttons based on user role
+      if (userRole === 'supervisor') {
+        console.log('[UI][showDashboardButtons] Showing supervisor buttons...');
+        if (sendBillBtn) {
+          sendBillBtn.classList.remove('hidden');
+          console.log('[UI][showDashboardButtons] sendBillBtn shown');
+        }
+        if (searchDatabaseBtn) {
+          searchDatabaseBtn.classList.remove('hidden');
+          console.log('[UI][showDashboardButtons] searchDatabaseBtn shown');
+        }
+        if (drawerCountBtn) {
+          drawerCountBtn.classList.remove('hidden');
+          console.log('[UI][showDashboardButtons] drawerCountBtn shown');
+        }
+        if (endOfDayDrawerCountBtn) {
+          endOfDayDrawerCountBtn.classList.remove('hidden');
+          console.log('[UI][showDashboardButtons] endOfDayDrawerCountBtn shown');
+        }
+        if (businessEndOfDayBtn) {
+          businessEndOfDayBtn.classList.remove('hidden');
+          console.log('[UI][showDashboardButtons] businessEndOfDayBtn shown');
+        }
+        if (logoutBtn) {
+          logoutBtn.classList.remove('hidden');
+          console.log('[UI][showDashboardButtons] logoutBtn shown');
+        }
+        // Hide buttons that shouldn't be visible for supervisor
+        if (makePaymentBtn) makePaymentBtn.classList.add('hidden');
+        if (closeOutDrawerBtn) closeOutDrawerBtn.classList.add('hidden');
+        if (settingsBtn) settingsBtn.classList.add('hidden');
+      } else if (userRole === 'pos') {
+        console.log('[UI][showDashboardButtons] Showing POS buttons...');
+        if (makePaymentBtn) {
+          makePaymentBtn.classList.remove('hidden');
+          console.log('[UI][showDashboardButtons] makePaymentBtn shown');
+        }
+        if (searchDatabaseBtn) {
+          searchDatabaseBtn.classList.remove('hidden');
+          console.log('[UI][showDashboardButtons] searchDatabaseBtn shown');
+        }
+        
+        // Check if "POS Doesn't Close Out" toggle is enabled
+        let hideCloseOutButton = false;
+        try {
+          const togglesSettings = loadTogglesSettings ? await loadTogglesSettings() : null;
+          hideCloseOutButton = togglesSettings && togglesSettings.posDoesntCloseOut === true;
+          console.log('[UI][showDashboardButtons] POS Doesn\'t Close Out toggle:', hideCloseOutButton);
+        } catch (error) {
+          console.error('[UI][showDashboardButtons] Error loading toggles settings:', error);
+        }
+        
+        if (closeOutDrawerBtn) {
+          if (hideCloseOutButton) {
+            closeOutDrawerBtn.classList.add('hidden');
+            console.log('[UI][showDashboardButtons] closeOutDrawerBtn hidden (toggle enabled)');
+          } else {
+            closeOutDrawerBtn.classList.remove('hidden');
+            console.log('[UI][showDashboardButtons] closeOutDrawerBtn shown');
+          }
+        }
+        if (logoutBtn) {
+          logoutBtn.classList.remove('hidden');
+          console.log('[UI][showDashboardButtons] logoutBtn shown');
+        }
+        // Hide buttons that shouldn't be visible for POS
+        if (sendBillBtn) sendBillBtn.classList.add('hidden');
+        if (drawerCountBtn) drawerCountBtn.classList.add('hidden');
+        if (endOfDayDrawerCountBtn) endOfDayDrawerCountBtn.classList.add('hidden');
+        if (businessEndOfDayBtn) businessEndOfDayBtn.classList.add('hidden');
+        if (settingsBtn) settingsBtn.classList.add('hidden');
+      } else {
+        // Admin/Helpdesk - show all buttons
+        console.log('[UI][showDashboardButtons] Showing admin buttons...');
+        const allButtons = [sendBillBtn, searchDatabaseBtn, drawerCountBtn, endOfDayDrawerCountBtn,
+          businessEndOfDayBtn, settingsBtn, logoutBtn, makePaymentBtn, closeOutDrawerBtn];
+        allButtons.forEach((btn) => {
+          if (btn) {
+            btn.classList.remove('hidden');
+            console.log(`[UI][showDashboardButtons] ${btn.id || 'button'} shown`);
+          }
+        });
+      }
+
+      console.log('[UI][showDashboardButtons] ========== FUNCTION COMPLETED ==========');
     };
 
     // Module Management Functions
@@ -4044,6 +4696,11 @@
         // Store user code for this payment (can be used for logging/auditing)
         window.currentPaymentUserCode = userCode.trim();
         window.currentPaymentUserName = user.fullName || userCode;
+      } else {
+        // If user code prompt is not enabled, use the authenticated user's name
+        if (window.authenticatedUser && window.authenticatedUser.fullName) {
+          window.currentPaymentUserName = window.authenticatedUser.fullName;
+        }
       }
 
       const paymentModule = document.getElementById('paymentModule');
@@ -4725,7 +5382,6 @@
         <div id="paymentProcessingEntrySection" class="hidden space-y-6 mt-8">
           <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
-              <p class="text-sm text-slate-500">Active Payment Processing</p>
               <p class="text-lg font-semibold text-slate-800 dark:text-slate-200" id="activePaymentProcessingUser">--</p>
             </div>
             <div class="flex gap-3">
@@ -5342,6 +5998,12 @@
           const sessionJson = JSON.stringify(window.currentPaymentProcessing);
           localStorage.setItem('currentPaymentProcessingSession', sessionJson);
 
+          // Also save to Firestore so supervisors can access it
+          if (typeof savePaymentProcessingSessionToFirestore === 'function') {
+            savePaymentProcessingSessionToFirestore(window.currentPaymentProcessing).catch(err => {
+              console.error('[startNewPayment] Error saving session to Firestore:', err);
+            });
+          }
         } else {
 
         }
@@ -6724,13 +7386,13 @@
           }
         });
         if (initialCount.checks && initialCount.checks.length > 0) {
-          console.log('[EOD RECEIPT] Initial checks raw:', initialCount.checks);
+
           initialCount.checks.forEach((check, idx) => {
             const isObj = typeof check === 'object' && check !== null;
             const rawNumber = isObj ? check.number : null;
             const displayNumber = rawNumber ? `Check #${rawNumber}` : `Check #${idx + 1}`;
             const amount = isObj ? check.amount : check;
-            console.log('[EOD RECEIPT] Initial check parsed:', { idx, rawNumber, displayNumber, amount, raw: check });
+
             receiptHtml += `<tr><td>${displayNumber}</td><td>1</td><td>$${Number(amount || 0).toFixed(2)}</td></tr>`;
           });
         }
@@ -6762,13 +7424,13 @@
           }
         });
         if (paymentCount.checks && paymentCount.checks.length > 0) {
-          console.log('[EOD RECEIPT] Payment checks raw:', paymentCount.checks);
+
           paymentCount.checks.forEach((check, idx) => {
             const isObj = typeof check === 'object' && check !== null;
             const rawNumber = isObj ? check.number : null;
             const displayNumber = rawNumber ? `Check #${rawNumber}` : `Check #${idx + 1}`;
             const amount = isObj ? check.amount : check;
-            console.log('[EOD RECEIPT] Payment check parsed:', { idx, rawNumber, displayNumber, amount, raw: check });
+
             receiptHtml += `<tr><td>${displayNumber}</td><td>1</td><td>$${Number(amount || 0).toFixed(2)}</td></tr>`;
           });
         }
@@ -6891,7 +7553,7 @@
             const rawNumber = isObj ? check.number : null;
             const displayNumber = rawNumber ? `Check #${rawNumber}` : `Check #${idx + 1}`;
             const amount = isObj ? check.amount : check;
-            console.log('[CASHIER RECEIPT] Check parsed:', { idx, rawNumber, displayNumber, amount, raw: check });
+
             html += `<tr><td>${displayNumber}</td><td>$${Number(amount || 0).toFixed(2)}</td></tr>`;
           });
         } else {
@@ -6992,7 +7654,7 @@
         checkOverpaymentHandling: extra.checkOverpaymentHandling || null,
         amountDue: extra.amountDue || null,
         checkNumber: extra.checkNumber || null,
-        processedBy: window.currentPaymentUserName || window.currentPaymentProcessing.username || '—',
+        processedBy: window.currentPaymentUserName || (window.authenticatedUser && window.authenticatedUser.fullName) || window.currentPaymentProcessing.username || '—',
         breakdown: extra.breakdown || null
       };
 
@@ -7004,6 +7666,12 @@
           const sessionJson = JSON.stringify(window.currentPaymentProcessing);
           localStorage.setItem('currentPaymentProcessingSession', sessionJson);
 
+          // Also save to Firestore so supervisors can access it
+          if (typeof savePaymentProcessingSessionToFirestore === 'function') {
+            savePaymentProcessingSessionToFirestore(window.currentPaymentProcessing).catch(err => {
+              console.error('[addEntryToCurrentPaymentProcessing] Error saving session to Firestore:', err);
+            });
+          }
         } else {
 
         }
@@ -7212,7 +7880,11 @@
           ? (entry.changeGiven || 0)
           : (entry.checkChangeGiven || 0);
         const creditGiven = entry.checkCreditGiven || 0;
-        const processedBy = entry.processedBy || window.currentPaymentProcessing.username || '—';
+        // Ensure processedBy is always set - check entry first, then authenticated user, then session username
+        let processedBy = entry.processedBy;
+        if (!processedBy || processedBy === '—' || processedBy.trim() === '') {
+          processedBy = (window.authenticatedUser && window.authenticatedUser.fullName) || window.currentPaymentProcessing.username || '—';
+        }
 
         const checkNumber = entry.checkNumber || (entry.paymentType === 'Check' ? '—' : '');
 
@@ -7263,8 +7935,8 @@
       }
 
       // Check if current user is POS (POS users can't delete)
-      const currentUser = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
-      const userRole = currentUser ? getUserRole(currentUser.email) : null;
+      const currentUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+      const userRole = window.getEffectiveRole ? window.getEffectiveRole(currentUser) : null;
       const canDelete = userRole === 'admin' || userRole === 'supervisor' || userRole === 'helpdesk';
 
       let rows = '';
@@ -7331,7 +8003,7 @@
             ? (entry.changeGiven || 0)
             : (entry.checkChangeGiven || 0);
           const creditGiven = entry.checkCreditGiven || 0;
-          const processedBy = entry.processedBy || session.username || '—';
+          const processedBy = entry.processedBy || window.authenticatedUser?.fullName || session.username || '—';
 
           return '<tr class="border-b border-slate-200">' +
             '<td class="px-4 py-3 text-sm text-slate-700">' + (entry.date || '') + '</td>' +
@@ -7473,7 +8145,7 @@
             ? (entry.changeGiven || 0)
             : (entry.checkChangeGiven || 0);
           const creditGiven = entry.checkCreditGiven || 0;
-          const processedBy = entry.processedBy || session.username || '—';
+          const processedBy = entry.processedBy || window.authenticatedUser?.fullName || session.username || '—';
 
           return `
             <tr>
@@ -9430,17 +10102,17 @@
         const titleDisplay = user.title || '—';
         row.innerHTML = `
           <td class="px-6 py-4 whitespace-nowrap">
-            <div class="text-sm font-medium text-slate-900 dark:text-slate-100">
+            <div id="user-fullname-${user.id}" class="text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20 px-2 py-1 rounded" ondblclick="editUserName('${user.id}')" title="Double-click to edit">
               ${user.fullName || 'Unnamed User'}
             </div>
           </td>
           <td class="px-6 py-4 whitespace-nowrap">
-            <div class="text-sm text-slate-700 dark:text-slate-300">
+            <div id="user-usercode-${user.id}" class="text-sm text-slate-700 dark:text-slate-300 cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20 px-2 py-1 rounded" ondblclick="editUserCode('${user.id}')" title="Double-click to edit">
               ${user.userCode || '—'}
             </div>
           </td>
           <td class="px-6 py-4 whitespace-nowrap">
-            <div class="text-sm text-slate-700 dark:text-slate-300">
+            <div id="user-title-${user.id}" class="text-sm text-slate-700 dark:text-slate-300 cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20 px-2 py-1 rounded" ondblclick="editUserTitle('${user.id}')" title="Double-click to edit">
               ${titleDisplay}
             </div>
           </td>
@@ -9626,8 +10298,6 @@
         return;
       }
 
-      console.log('[DRAWER RESET] Starting reset for all drawers. Count:', drawers.length);
-
       // Preserve drawer properties
       const preserved = drawers.map(d => ({
         name: d.name,
@@ -9648,7 +10318,7 @@
 
       await saveDrawersToFirestore();
       updateSettingsDrawersTable();
-      console.log('[DRAWER RESET] All drawers reset successfully.');
+
       alert('All drawers have been reset successfully!');
     };
 
@@ -9943,13 +10613,54 @@
     }
 
     // Select drawer (for POS users - no cancel option)
-    window.selectDrawer = function(drawer) {
+    window.selectDrawer = async function(drawer) {
       if (!drawer) {
         // This shouldn't happen for POS users, but handle gracefully
         return;
       }
 
       selectedDrawer = drawer;
+
+      // Check if this drawer has been verified today
+      const today = window.getCurrentDate();
+      const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+      
+      // Load payment processing sessions if not already loaded
+      try {
+        if (typeof loadPaymentProcessingSessionsFromFirestore === 'function') {
+          await loadPaymentProcessingSessionsFromFirestore();
+        }
+      } catch (error) {
+        console.error('Error loading payment processing sessions:', error);
+      }
+      
+      // Check if there's a verified session for this drawer today
+      const verifiedSession = (window.paymentProcessingSessions || []).find(session => {
+        if (!session.drawer || !session.drawer.id) return false;
+        if (session.drawer.id !== drawer.id) return false;
+        if (!session.verifiedAt) return false;
+        
+        const verifiedDate = new Date(session.verifiedAt);
+        const verifiedDateStr = verifiedDate.toISOString().split('T')[0];
+        return verifiedDateStr === todayStr;
+      });
+      
+      // If drawer has been verified today, clear the payment processing session
+      if (verifiedSession) {
+        console.log('[selectDrawer] Drawer has been verified today, clearing payment processing session');
+        window.currentPaymentProcessing = null;
+        if (typeof localStorage !== 'undefined') {
+          try {
+            localStorage.removeItem('currentPaymentProcessingSession');
+          } catch (e) {
+            console.error('Error clearing localStorage:', e);
+          }
+        }
+        // Refresh the payment preview to show empty state
+        if (typeof renderPaymentProcessingPreview === 'function') {
+          renderPaymentProcessingPreview();
+        }
+      }
 
       hideDrawerSelectionModal();
       hideFirebaseAuthModal();
@@ -10081,11 +10792,18 @@
     };
 
     window.hideDrawerCountSuccessModal = function() {
+      console.log('[hideDrawerCountSuccessModal] ========== FUNCTION CALLED ==========');
       const modal = document.getElementById('drawerCountSuccessModal');
       if (modal) {
+        console.log('[hideDrawerCountSuccessModal] Hiding success modal');
         modal.classList.add('hidden');
       }
       lastDrawerCountForPrint = null;
+      
+      // Always show dashboard buttons when modal is closed
+      console.log('[hideDrawerCountSuccessModal] Showing dashboard buttons...');
+      showDashboardButtons();
+      console.log('[hideDrawerCountSuccessModal] ========== FUNCTION COMPLETED ==========');
     };
 
     // Drawer Count Mismatch Modal Functions
@@ -10260,17 +10978,61 @@
     };
 
     function showDrawerCountScreen(drawer) {
+      console.log('[showDrawerCountScreen] ========== FUNCTION CALLED ==========');
+      console.log('[showDrawerCountScreen] Drawer:', drawer);
+      
       const module = document.getElementById('drawerCountModule');
       const title = document.getElementById('drawerCountTitle');
       const billsContainer = document.getElementById('drawerCountBillsContainer');
       const coinsContainer = document.getElementById('drawerCountCoinsContainer');
       const subtitle = document.getElementById('drawerCountSubtitle');
 
-      if (!module || !title || !billsContainer || !coinsContainer) return;
+      console.log('[showDrawerCountScreen] Elements found:');
+      console.log('  - module:', module);
+      console.log('  - title:', title);
+      console.log('  - billsContainer:', billsContainer);
+      console.log('  - coinsContainer:', coinsContainer);
+      console.log('  - subtitle:', subtitle);
 
-      // Hide other modules and dashboard buttons
-      hideAllModules();
+      if (!module || !title || !billsContainer || !coinsContainer) {
+        console.error('[showDrawerCountScreen] Missing required elements, returning early');
+        return;
+      }
+
+      // Hide other modules (but not the drawer count module)
+      const paymentModule = document.getElementById('paymentModule');
+      const billModule = document.getElementById('billModule');
+      const addClientModule = document.getElementById('addClientModule');
+      const searchModule = document.getElementById('searchModule');
+      const settingsModule = document.getElementById('settingsModule');
+
+      console.log('[showDrawerCountScreen] Hiding other modules:');
+      if (paymentModule) {
+        paymentModule.classList.add('hidden');
+        paymentModule.style.cssText = 'display: none !important; visibility: hidden !important; opacity: 0 !important;';
+        console.log('  - paymentModule: hidden');
+      }
+      if (billModule) {
+        billModule.classList.add('hidden');
+        console.log('  - billModule: hidden');
+      }
+      if (addClientModule) {
+        addClientModule.classList.add('hidden');
+        console.log('  - addClientModule: hidden');
+      }
+      if (searchModule) {
+        searchModule.classList.add('hidden');
+        console.log('  - searchModule: hidden');
+      }
+      if (settingsModule) {
+        settingsModule.classList.add('hidden');
+        console.log('  - settingsModule: hidden');
+      }
+
+      // Hide dashboard buttons
+      console.log('[showDrawerCountScreen] Calling hideDashboardButtons()...');
       hideDashboardButtons();
+      console.log('[showDrawerCountScreen] hideDashboardButtons() completed');
 
       // Update title with drawer name - this is Start Of Day
       title.textContent = `${drawer.name} Start Of Day Cash Count`;
@@ -10338,18 +11100,64 @@
       });
 
       // Show drawer count module (self-contained, doesn't hide dashboard)
+      console.log('[showDrawerCountScreen] Showing drawer count module...');
       module.classList.remove('hidden');
+      console.log('[showDrawerCountScreen] Drawer count module classes after remove hidden:', module.className);
+      console.log('[showDrawerCountScreen] Drawer count module computed display:', window.getComputedStyle(module).display);
 
       // Scroll module into view
       module.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
       // Update total
       calculateDrawerCountTotal();
+      
+      // Double-check buttons are hidden after a short delay
+      setTimeout(() => {
+        console.log('[showDrawerCountScreen] Double-checking buttons are hidden after delay...');
+        const buttonContainer = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+        const sendBillBtn = document.getElementById('sendBillButton');
+        const drawerCountBtn = document.getElementById('drawerCountButton');
+        console.log('[showDrawerCountScreen] After delay - buttonContainer:', buttonContainer);
+        const searchDatabaseBtn = document.getElementById('searchDatabaseButton');
+        const endOfDayDrawerCountBtn = document.getElementById('endOfDayDrawerCountButton');
+        const businessEndOfDayBtn = document.getElementById('businessEndOfDayButton');
+        const logoutBtn = document.getElementById('logoutButton');
+        
+        console.log('[showDrawerCountScreen] After delay - buttonContainer:', buttonContainer, 'hidden:', buttonContainer?.classList.contains('hidden'));
+        console.log('[showDrawerCountScreen] After delay - sendBillBtn:', sendBillBtn, 'hidden:', sendBillBtn?.classList.contains('hidden'));
+        console.log('[showDrawerCountScreen] After delay - searchDatabaseBtn:', searchDatabaseBtn, 'hidden:', searchDatabaseBtn?.classList.contains('hidden'));
+        console.log('[showDrawerCountScreen] After delay - drawerCountBtn:', drawerCountBtn, 'hidden:', drawerCountBtn?.classList.contains('hidden'));
+        console.log('[showDrawerCountScreen] After delay - endOfDayDrawerCountBtn:', endOfDayDrawerCountBtn, 'hidden:', endOfDayDrawerCountBtn?.classList.contains('hidden'));
+        console.log('[showDrawerCountScreen] After delay - businessEndOfDayBtn:', businessEndOfDayBtn, 'hidden:', businessEndOfDayBtn?.classList.contains('hidden'));
+        console.log('[showDrawerCountScreen] After delay - logoutBtn:', logoutBtn, 'hidden:', logoutBtn?.classList.contains('hidden'));
+        
+        // Hide container if visible
+        if (buttonContainer && !buttonContainer.classList.contains('hidden')) {
+          console.warn('[showDrawerCountScreen] Button container is still visible! Hiding again...');
+          buttonContainer.classList.add('hidden');
+        }
+        
+        // Hide all individual buttons that are visible
+        const buttonsToCheck = [
+          sendBillBtn, searchDatabaseBtn, drawerCountBtn, 
+          endOfDayDrawerCountBtn, businessEndOfDayBtn, logoutBtn
+        ];
+        buttonsToCheck.forEach((btn) => {
+          if (btn && !btn.classList.contains('hidden')) {
+            console.warn(`[showDrawerCountScreen] ${btn.id || 'button'} is still visible! Hiding again...`);
+            btn.classList.add('hidden');
+          }
+        });
+      }, 100);
+      
+      console.log('[showDrawerCountScreen] ========== FUNCTION COMPLETED ==========');
     }
 
     window.cancelDrawerCount = function() {
+      console.log('[cancelDrawerCount] ========== FUNCTION CALLED ==========');
       const module = document.getElementById('drawerCountModule');
       if (module) {
+        console.log('[cancelDrawerCount] Hiding drawer count module');
         module.classList.add('hidden');
       }
       selectedDrawerForCount = null;
@@ -10367,7 +11175,9 @@
       }
 
       // Show dashboard buttons when drawer count module is closed
+      console.log('[cancelDrawerCount] Calling showDashboardButtons()...');
       showDashboardButtons();
+      console.log('[cancelDrawerCount] ========== FUNCTION COMPLETED ==========');
     };
 
     window.calculateDrawerCountTotal = function() {
@@ -10426,21 +11236,48 @@
         return;
       }
 
-      // Prompt for user code
-      const userCode = prompt('Enter your user code:');
-      if (!userCode || !userCode.trim()) {
-        alert('User code is required to save the drawer count.');
-        return;
-      }
+      // Check if "Use username instead of user code" toggle is enabled
+      const togglesSettings = await loadTogglesSettings();
+      const useUsernameInsteadOfUserCode = togglesSettings && (togglesSettings.useUsernameInsteadOfUserCode === true || togglesSettings.useUsernameInsteadOfUserCode === 'true' || togglesSettings.useUsernameInsteadOfUserCode === 1);
 
-      // Find user by code
-      const user = users.find(u => u.userCode && u.userCode.trim().toLowerCase() === userCode.trim().toLowerCase());
-      if (!user) {
-        alert('User code not found. Please enter a valid user code.');
-        return;
-      }
+      let countedByName = null;
+      let user = null;
+      let userCode = null;
 
-      const countedByName = user.fullName || userCode;
+      if (useUsernameInsteadOfUserCode) {
+        // Use logged-in username
+        const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+        if (effectiveUser && effectiveUser.fullName) {
+          countedByName = effectiveUser.fullName;
+          user = users.find(u => u.fullName && u.fullName.trim().toLowerCase() === effectiveUser.fullName.trim().toLowerCase());
+          if (!user) {
+            alert('User not found in system. Please contact an administrator.');
+            return;
+          }
+          // Get userCode from the found user
+          userCode = user.userCode || '';
+        } else {
+          alert('Unable to determine your username. Please contact an administrator.');
+          return;
+        }
+      } else {
+        // Prompt for user code
+        const userCodeInput = prompt('Enter your user code:');
+        if (!userCodeInput || !userCodeInput.trim()) {
+          alert('User code is required to save the drawer count.');
+          return;
+        }
+
+        // Find user by code
+        user = users.find(u => u.userCode && u.userCode.trim().toLowerCase() === userCodeInput.trim().toLowerCase());
+        if (!user) {
+          alert('User code not found. Please enter a valid user code.');
+          return;
+        }
+
+        countedByName = user.fullName || userCodeInput;
+        userCode = userCodeInput.trim();
+      }
 
       // Read the count
       const bills = {};
@@ -10498,7 +11335,7 @@
           checksTotal: 0, // Start of day count doesn't include checks
           total: total,
           countedBy: countedByName,
-          countedByCode: userCode.trim(),
+          countedByCode: userCode ? userCode.trim() : (user?.userCode || ''),
           countedAt: today.toISOString(),
           type: 'SOD' // Start Of Day count
         };
@@ -10512,11 +11349,11 @@
         await saveDrawersToFirestore();
         updateSettingsDrawersTable();
 
-        // Show custom success modal instead of alert
-        showDrawerCountSuccessModal(drawer, countRecord);
-
-        // Hide drawer count screen
+        // Hide drawer count screen first (this will show buttons)
         cancelDrawerCount();
+
+        // Then show custom success modal
+        showDrawerCountSuccessModal(drawer, countRecord);
       }
     };
 
@@ -10575,6 +11412,10 @@
       const today = window.getCurrentDate();
       const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
 
+      // Check if "POS Doesn't Close Out" toggle is enabled
+      const togglesSettings = await loadTogglesSettings();
+      const posDoesntCloseOut = togglesSettings && togglesSettings.posDoesntCloseOut;
+
       // Find all sessions that were submitted today (both verified and unverified)
       const sessionsForTodayRaw = (window.paymentProcessingSessions || []).filter(session => {
         if (!session.submittedAt) return false;
@@ -10587,6 +11428,118 @@
       // Filter out sessions that reference drawers that no longer exist
       const drawerIdSet = new Set((drawers || []).map(d => d.id));
       const sessionsForToday = sessionsForTodayRaw.filter(session => session.drawer?.id && drawerIdSet.has(session.drawer.id));
+
+      // If "POS Doesn't Close Out" is enabled, also show drawers with SOD count but no close-out
+      if (posDoesntCloseOut) {
+        // Find drawers that have SOD count today but no submitted session
+        const drawersWithSODButNoCloseOut = (drawers || []).filter(drawer => {
+          // Check if drawer has SOD count today
+          if (!drawer.lastCountDate) return false;
+          const lastCountDate = new Date(drawer.lastCountDate);
+          const lastCountDateStr = lastCountDate.toISOString().split('T')[0];
+          if (lastCountDateStr !== todayStr) return false;
+
+          // Check if drawer has a submitted session today
+          const hasSessionToday = sessionsForToday.some(session => session.drawer?.id === drawer.id);
+          return !hasSessionToday;
+        });
+
+        // Load active (non-submitted) sessions from Firestore
+        let activeSessions = [];
+        try {
+          const sessionsRef = collection(db, 'paymentProcessingSessions');
+          const snapshot = await getDocs(sessionsRef);
+          snapshot.forEach(sessionDoc => {
+            const sessionData = { id: sessionDoc.id, ...sessionDoc.data() };
+            // Only include sessions that are not submitted and are for today's drawers
+            if (!sessionData.submittedAt && sessionData.drawer) {
+              activeSessions.push(sessionData);
+            }
+          });
+        } catch (error) {
+          console.error('[showEndOfDayDrawerCountSelection] Error loading active sessions:', error);
+        }
+
+        // Add these drawers to the list as "pending" entries
+        drawersWithSODButNoCloseOut.forEach(drawer => {
+          // Find active session for this drawer from Firestore
+          let currentSession = activeSessions.find(s => s.drawer?.id === drawer.id);
+          
+          // Fallback to localStorage if Firestore doesn't have it
+          if (!currentSession) {
+            try {
+              const savedSession = localStorage.getItem('currentPaymentProcessingSession');
+              if (savedSession) {
+                const parsed = JSON.parse(savedSession);
+                if (!parsed.submittedAt && parsed.drawer?.id === drawer.id) {
+                  currentSession = parsed;
+                }
+              }
+            } catch (e) {
+              // Ignore localStorage errors
+            }
+          }
+
+          // Calculate payment total from current session if it exists
+          let paymentTotal = 0;
+          let paymentCash = 0;
+          let paymentChecks = 0;
+          if (currentSession && currentSession.entries && currentSession.entries.length > 0) {
+            currentSession.entries.forEach(entry => {
+              const entryAmount = parseFloat(entry.amount || 0);
+              paymentTotal += entryAmount;
+              if (entry.paymentType === 'Cash') {
+                paymentCash += entryAmount;
+              } else if (entry.paymentType === 'Check') {
+                paymentChecks += entryAmount;
+              }
+            });
+          }
+
+          // Use the actual session if found, otherwise create a pending session
+          // If we found a real session, use it directly (but mark as pending for display)
+          if (currentSession) {
+            // Use the real session but mark it as pending
+            const pendingSession = {
+              ...currentSession,
+              isPending: true // Flag to indicate this is a pending drawer, not a submitted session
+            };
+            sessionsForToday.push(pendingSession);
+          } else {
+            // No active session found, create a minimal pending session with PENDING- prefix
+            // This will trigger the PENDING- handling in selectSessionForVerification
+            const fakeSession = {
+              id: `PENDING-${drawer.id}-${Date.now()}`,
+              drawer: {
+                id: drawer.id,
+                name: drawer.name
+              },
+              username: 'Pending',
+              submittedAt: null,
+              verifiedBy: null,
+              verifiedAt: null,
+              register: {
+                closing: {
+                  initialCount: drawer.lastCount,
+                  paymentCount: {
+                    cashTotal: paymentCash,
+                    checksTotal: paymentChecks,
+                    total: paymentTotal
+                  }
+                },
+                runningTotals: {
+                  cashIn: paymentCash,
+                  cashOut: 0,
+                  checkIn: paymentChecks
+                }
+              },
+              entries: [],
+              isPending: true
+            };
+            sessionsForToday.push(fakeSession);
+          }
+        });
+      }
 
       if (sessionsForToday.length === 0) {
         modal.innerHTML = `
@@ -10624,7 +11577,8 @@
       Object.keys(sessionsByDrawer).forEach(drawerName => {
         const sessions = sessionsByDrawer[drawerName];
         sessions.forEach(session => {
-          const submittedDate = new Date(session.submittedAt);
+          const isPending = session.isPending || false;
+          const submittedDate = session.submittedAt ? new Date(session.submittedAt) : new Date();
           const dateStr = submittedDate.toLocaleString('en-US', { 
             month: 'short', 
             day: 'numeric',
@@ -10632,25 +11586,34 @@
             minute: '2-digit'
           });
 
-          // Get closing count details
-          const closing = session.register?.closing;
-          const posCount = closing?.initialCount || closing?.paymentCount;
+          // Get closing count details (only for non-pending sessions)
           let denominationsInfo = 'No count details available';
-          if (posCount) {
-            const billCounts = [];
-            [1,2,5,10,20,50,100].forEach(v => {
-              const count = posCount.bills?.[v] || 0;
-              if (count > 0) billCounts.push(`$${v}: ${count}`);
-            });
-            const coinCounts = [];
-            [['penny','Pennies'],['nickel','Nickels'],['dime','Dimes'],['quarter','Quarters'],['half','Half Dollars']].forEach(([k,label]) => {
-              const count = posCount.coins?.[k] || 0;
-              if (count > 0) coinCounts.push(`${label}: ${count}`);
-            });
-            const total = (posCount.cashTotal || 0) + (posCount.checksTotal || 0);
-            denominationsInfo = `Total: $${total.toFixed(2)}`;
-            if (billCounts.length > 0) denominationsInfo += ` | Bills: ${billCounts.join(', ')}`;
-            if (coinCounts.length > 0) denominationsInfo += ` | Coins: ${coinCounts.join(', ')}`;
+          if (!isPending) {
+            const closing = session.register?.closing;
+            const posCount = closing?.initialCount || closing?.paymentCount;
+            if (posCount) {
+              const billCounts = [];
+              [1,2,5,10,20,50,100].forEach(v => {
+                const count = posCount.bills?.[v] || 0;
+                if (count > 0) billCounts.push(`$${v}: ${count}`);
+              });
+              const coinCounts = [];
+              [['penny','Pennies'],['nickel','Nickels'],['dime','Dimes'],['quarter','Quarters'],['half','Half Dollars']].forEach(([k,label]) => {
+                const count = posCount.coins?.[k] || 0;
+                if (count > 0) coinCounts.push(`${label}: ${count}`);
+              });
+              const total = (posCount.cashTotal || 0) + (posCount.checksTotal || 0);
+              denominationsInfo = `Total: $${total.toFixed(2)}`;
+              if (billCounts.length > 0) denominationsInfo += ` | Bills: ${billCounts.join(', ')}`;
+              if (coinCounts.length > 0) denominationsInfo += ` | Coins: ${coinCounts.join(', ')}`;
+            }
+          } else {
+            // For pending drawers, show expected payment total from session
+            const paymentCount = session.register?.closing?.paymentCount;
+            if (paymentCount) {
+              const total = (paymentCount.cashTotal || 0) + (paymentCount.checksTotal || 0);
+              denominationsInfo = `Expected Payment Total: $${total.toFixed(2)}`;
+            }
           }
 
           const isVerified = !!session.verifiedBy;
@@ -10669,16 +11632,21 @@
                 <div class="flex-1">
                   <div class="flex items-center gap-2">
                     <span class="font-semibold text-slate-800">${drawerName}</span>
-                    ${isVerified 
-                      ? `<span class="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">Verified</span>`
-                      : `<span class="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">Needs Verifying</span>`
+                    ${isPending
+                      ? `<span class="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">EOD Count Pending</span>`
+                      : isVerified 
+                        ? `<span class="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">Verified</span>`
+                        : `<span class="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">Needs Verifying</span>`
                     }
                   </div>
                   <div class="mt-1 text-xs text-slate-600">
-                    <div>Closed by: ${session.username || 'Unknown'}</div>
-                    <div>Submitted: ${dateStr}</div>
-                    ${isVerified ? `<div>Verified by: ${session.verifiedBy || 'Unknown'}</div>` : ''}
-                    ${isVerified && verifiedDate ? `<div>Verified: ${verifiedDate}</div>` : ''}
+                    ${isPending 
+                      ? `<div>Status: Drawer has SOD count but not yet closed out</div>`
+                      : `<div>Closed by: ${session.username || 'Unknown'}</div>
+                         <div>Submitted: ${dateStr}</div>
+                         ${isVerified ? `<div>Verified by: ${session.verifiedBy || 'Unknown'}</div>` : ''}
+                         ${isVerified && verifiedDate ? `<div>Verified: ${verifiedDate}</div>` : ''}`
+                    }
                   </div>
                 </div>
                 <div class="flex flex-col gap-2">
@@ -10688,12 +11656,14 @@
                   >
                     Start End Of Day Count
                   </button>
+                  ${!isPending && !posDoesntCloseOut ? `
                   <button
                     onclick="printCashierReceipt('${safeSessionId}')"
                     class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold"
                   >
                     View Cashier Receipt
                   </button>
+                  ` : ''}
                   <button
                     onclick="showDrawerCountHistory('${safeDrawerId}', 'EOD')"
                     class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold"
@@ -10788,8 +11758,10 @@
       const sessions = window.paymentProcessingSessions || [];
       const sessionsByDay = {};
       sessions.forEach(session => {
-        if (!session.submittedAt) return;
-        const dateKey = new Date(session.submittedAt).toISOString().split('T')[0];
+        // Include sessions that are either submitted OR verified (for pending drawers verified by supervisor)
+        const dateToUse = session.submittedAt || session.verifiedAt;
+        if (!dateToUse) return;
+        const dateKey = new Date(dateToUse).toISOString().split('T')[0];
         if (!sessionsByDay[dateKey]) sessionsByDay[dateKey] = [];
         sessionsByDay[dateKey].push(session);
       });
@@ -10844,7 +11816,7 @@
               </button>
               <button
                 onclick="showBusinessEndOfDayBreakdown('${dateKey}')"
-                class="flex-1 bg-blue-700 hover:bg-blue-800 text-white font-semibold py-2 px-3 rounded-lg transition-colors text-sm"
+                class="flex-1 bg-white text-blue-700 hover:bg-blue-50 font-semibold py-2 px-3 rounded-lg transition-colors text-sm"
               >
                 Show Breakdown
               </button>
@@ -11550,10 +12522,118 @@
       }
     };
 
-    window.selectSessionForVerification = function(sessionId) {
-      const session = window.paymentProcessingSessions.find(s => s.id === sessionId);
+    window.selectSessionForVerification = async function(sessionId) {
+      // Check if it's a pending session (starts with PENDING- or is marked as pending)
+      let session = null;
+      
+      // First, try to find it in the loaded sessions (it might be a real session marked as pending)
+      session = window.paymentProcessingSessions.find(s => s.id === sessionId);
+      
+      // If not found and it's a PENDING- ID, or if it's marked as pending, load from Firestore
+      if (!session || sessionId.startsWith('PENDING-') || session?.isPending) {
+        let drawerId = null;
+        
+        // Extract drawer ID from sessionId if it's a PENDING- ID
+        if (sessionId.startsWith('PENDING-')) {
+          const parts = sessionId.split('-');
+          if (parts.length >= 2) {
+            drawerId = parts[1];
+          }
+        } else if (session?.drawer?.id) {
+          drawerId = session.drawer.id;
+        }
+        
+        if (drawerId) {
+          const drawer = drawers.find(d => d.id === drawerId);
+          if (drawer && drawer.lastCountDate) {
+            const today = window.getCurrentDate();
+            const todayStr = today.toISOString().split('T')[0];
+            const lastCountDateStr = new Date(drawer.lastCountDate).toISOString().split('T')[0];
+            if (lastCountDateStr === todayStr) {
+              // Load active session from Firestore
+              let currentSession = null;
+              try {
+                const sessionsRef = collection(db, 'paymentProcessingSessions');
+                const snapshot = await getDocs(sessionsRef);
+                snapshot.forEach(sessionDoc => {
+                  const sessionData = { id: sessionDoc.id, ...sessionDoc.data() };
+                  // Find active session for this drawer
+                  if (!sessionData.submittedAt && sessionData.drawer?.id === drawer.id) {
+                    currentSession = sessionData;
+                  }
+                });
+              } catch (error) {
+                console.error('[selectSessionForVerification] Error loading active session from Firestore:', error);
+              }
+              
+              // Fallback to localStorage if Firestore doesn't have it
+              if (!currentSession) {
+                try {
+                  const savedSession = localStorage.getItem('currentPaymentProcessingSession');
+                  if (savedSession) {
+                    const parsed = JSON.parse(savedSession);
+                    if (!parsed.submittedAt && parsed.drawer?.id === drawer.id) {
+                      currentSession = parsed;
+                    }
+                  }
+                } catch (e) {
+                  // Ignore localStorage errors
+                }
+              }
+
+              if (currentSession) {
+                // Use the real session from Firestore
+                session = currentSession;
+              } else {
+                // No session found - calculate payment totals from drawer's lastCount if available
+                let paymentTotal = 0;
+                let paymentCash = 0;
+                let paymentChecks = 0;
+                
+                // Create minimal session for EOD count
+                session = {
+                  id: sessionId,
+                  drawer: {
+                    id: drawer.id,
+                    name: drawer.name
+                  },
+                  username: 'Pending',
+                  submittedAt: null,
+                  verifiedBy: null,
+                  verifiedAt: null,
+                  register: {
+                    closing: {
+                      initialCount: drawer.lastCount,
+                      paymentCount: {
+                        cashTotal: paymentCash,
+                        checksTotal: paymentChecks,
+                        total: paymentTotal
+                      }
+                    },
+                    runningTotals: {
+                      cashIn: paymentCash,
+                      cashOut: 0,
+                      checkIn: paymentChecks
+                    }
+                  },
+                  entries: [],
+                  isPending: true
+                };
+              }
+            }
+          }
+        }
+      }
+      
+      // If still no session found, try regular lookup
       if (!session) {
-        alert('Session not found');
+        session = window.paymentProcessingSessions.find(s => s.id === sessionId);
+      }
+
+      if (!session) {
+        alert('Session not found. The payment processing session may not have been saved yet.');
+        console.error('[selectSessionForVerification] Session not found. SessionId:', sessionId);
+        console.error('[selectSessionForVerification] Available sessions:', window.paymentProcessingSessions.map(s => ({ id: s.id, drawer: s.drawer?.name, submittedAt: s.submittedAt })));
         return;
       }
 
@@ -11615,13 +12695,13 @@
         const checks = countData.checks || [];
         html += `<h4>Checks</h4><table><tr><th>Check #</th><th>Amount</th></tr>`;
         if (checks.length > 0) {
-          console.log('[CASHIER RECEIPT] Checks raw:', checks);
+
           checks.forEach((check, idx) => {
             const isObj = typeof check === 'object' && check !== null;
             const rawNumber = isObj ? check.number : null;
             const displayNumber = rawNumber ? `Check #${rawNumber}` : `Check #${idx + 1}`;
             const amount = isObj ? check.amount : check;
-            console.log('[CASHIER RECEIPT] Check parsed:', { idx, rawNumber, displayNumber, amount, raw: check });
+
             html += `<tr><td>${displayNumber}</td><td>$${Number(amount || 0).toFixed(2)}</td></tr>`;
           });
         } else {
@@ -11780,7 +12860,6 @@
               <p id="eodInitialTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">SOD Fund Total: $0.00</p>
             </div>
             <div class="flex gap-3">
-              <button onclick="printEODSODReceipt()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">Print Receipt</button>
               <button onclick="switchEODStep(2)" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Continue to Step 2</button>
             </div>
           </div>
@@ -11828,7 +12907,6 @@
             <p id="eodPaymentTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">Payment Total: $0.00</p>
             <div class="flex gap-3">
               <button onclick="switchEODStep(1)" class="px-4 py-2 text-sm bg-slate-200 rounded-lg">Back to Step 1</button>
-              <button onclick="printEODPaymentReceipt()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">Print Receipt</button>
               <button onclick="saveEndOfDayDrawerCount()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Verify Drawer Count</button>
             </div>
           </div>
@@ -12249,21 +13327,55 @@
         return;
       }
 
-      // Prompt for user code
-      const userCode = prompt('Enter your user code:');
-      if (!userCode || !userCode.trim()) {
-        alert('User code is required to verify the drawer count.');
-        return;
-      }
+      // Check if "Use username instead of user code" toggle is enabled
+      const togglesSettings = await loadTogglesSettings();
+      console.log('[saveEndOfDayDrawerCount] Toggles settings:', togglesSettings);
+      console.log('[saveEndOfDayDrawerCount] useUsernameInsteadOfUserCode value:', togglesSettings?.useUsernameInsteadOfUserCode);
+      console.log('[saveEndOfDayDrawerCount] useUsernameInsteadOfUserCode type:', typeof togglesSettings?.useUsernameInsteadOfUserCode);
+      const useUsernameInsteadOfUserCode = togglesSettings && (togglesSettings.useUsernameInsteadOfUserCode === true || togglesSettings.useUsernameInsteadOfUserCode === 'true' || togglesSettings.useUsernameInsteadOfUserCode === 1);
+      console.log('[saveEndOfDayDrawerCount] Final useUsernameInsteadOfUserCode check result:', useUsernameInsteadOfUserCode);
 
-      // Find user by code
-      const user = users.find(u => u.userCode && u.userCode.trim().toLowerCase() === userCode.trim().toLowerCase());
-      if (!user) {
-        alert('User code not found. Please enter a valid user code.');
-        return;
-      }
+      let verifiedByName = null;
+      let user = null;
 
-      const verifiedByName = user.fullName || userCode;
+      let userCode = null;
+      if (useUsernameInsteadOfUserCode) {
+        console.log('[saveEndOfDayDrawerCount] Using username instead of user code');
+        // Use logged-in username
+        const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
+        console.log('[saveEndOfDayDrawerCount] Effective user:', effectiveUser);
+        if (effectiveUser && effectiveUser.fullName) {
+          verifiedByName = effectiveUser.fullName;
+          user = users.find(u => u.fullName && u.fullName.trim().toLowerCase() === effectiveUser.fullName.trim().toLowerCase());
+          console.log('[saveEndOfDayDrawerCount] Found user by username:', user);
+          if (!user) {
+            alert('User not found in system. Please contact an administrator.');
+            return;
+          }
+          // Get userCode from the found user
+          userCode = user.userCode || '';
+        } else {
+          alert('Unable to determine your username. Please ensure you are logged in.');
+          return;
+        }
+      } else {
+        console.log('[saveEndOfDayDrawerCount] Prompting for user code');
+        // Prompt for user code
+        userCode = prompt('Enter your user code:');
+        if (!userCode || !userCode.trim()) {
+          alert('User code is required to verify the drawer count.');
+          return;
+        }
+
+        // Find user by code
+        user = users.find(u => u.userCode && u.userCode.trim().toLowerCase() === userCode.trim().toLowerCase());
+        if (!user) {
+          alert('User code not found. Please enter a valid user code.');
+          return;
+        }
+
+        verifiedByName = user.fullName || userCode;
+      }
 
       // Read Step 1: SOD Fund Count
       const initialBills = {};
@@ -12328,13 +13440,18 @@
       const posInitialCount = selectedSessionForVerification.register?.closing?.initialCount;
       const posPaymentCount = selectedSessionForVerification.register?.closing?.paymentCount;
 
-      if (!posInitialCount && !posPaymentCount) {
+      // Check if "POS Doesn't Close Out" toggle is enabled (reuse togglesSettings from earlier)
+      const posDoesntCloseOut = togglesSettings && (togglesSettings.posDoesntCloseOut === true || togglesSettings.posDoesntCloseOut === 'true' || togglesSettings.posDoesntCloseOut === 1);
+
+      // If POS doesn't close out toggle is enabled, skip POS count validation
+      // The supervisor will do the count without POS validation
+      if (!posDoesntCloseOut && !posInitialCount && !posPaymentCount) {
         alert('POS count data not found for this session.');
         return;
       }
 
-      // Validate Step 1: Initial Count
-      if (posInitialCount) {
+      // Validate Step 1: Initial Count (only if POS count exists and toggle is off)
+      if (posInitialCount && !posDoesntCloseOut) {
         let posInitialTotal = 0;
         [1,2,5,10,20,50,100].forEach(v => {
           const count = posInitialCount.bills?.[v] || 0;
@@ -12354,8 +13471,8 @@
         }
       }
 
-      // Validate Step 2: Payment Count
-      if (posPaymentCount) {
+      // Validate Step 2: Payment Count (only if POS count exists and toggle is off)
+      if (posPaymentCount && !posDoesntCloseOut) {
         let posPaymentTotal = 0;
         [1,2,5,10,20,50,100].forEach(v => {
           const count = posPaymentCount.bills?.[v] || 0;
@@ -12426,8 +13543,24 @@
 
       // Counts match - mark as verified
       selectedSessionForVerification.verifiedBy = verifiedByName;
-      selectedSessionForVerification.verifiedByCode = userCode.trim();
+      selectedSessionForVerification.verifiedByCode = userCode ? userCode.trim() : (user?.userCode || '');
       selectedSessionForVerification.verifiedAt = new Date().toISOString();
+      
+      // If session doesn't have submittedAt (pending drawer), set it to verifiedAt for BEOD reporting
+      if (!selectedSessionForVerification.submittedAt) {
+        selectedSessionForVerification.submittedAt = selectedSessionForVerification.verifiedAt;
+      }
+      
+      // Set username to supervisor's name if it's a pending drawer (POS doesn't close out)
+      if (!selectedSessionForVerification.username && verifiedByName) {
+        selectedSessionForVerification.username = verifiedByName;
+      }
+      
+      // Ensure totalAmount is calculated from entries if missing
+      if (!selectedSessionForVerification.totalAmount && selectedSessionForVerification.entries && selectedSessionForVerification.entries.length > 0) {
+        selectedSessionForVerification.totalAmount = selectedSessionForVerification.entries.reduce((sum, entry) => sum + (parseFloat(entry.amount) || 0), 0);
+      }
+      
       selectedSessionForVerification.supervisorCount = {
         initialCount: {
           bills: initialBills,
@@ -13902,6 +15035,15 @@
         return;
       }
 
+      // Check if a user with this code AND full name already exists (users can have same code, but not same code + name)
+      if (users.some(u => 
+        (u.fullName || '').toLowerCase() === fullName.toLowerCase() &&
+        (u.userCode || '').toLowerCase() === (userCode || '').toLowerCase()
+      )) {
+        alert('A user with this full name and user code already exists. Users can share the same code, but not the same code and name combination.');
+        return;
+      }
+
       const timestamp = Date.now();
       const newUser = {
         id: `USR-${String(timestamp).slice(-6)}`,
@@ -13935,6 +15077,212 @@
       }
       await saveUsersToFirestore();
       alert('User deleted successfully!');
+    };
+
+    // Edit user full name inline
+    window.editUserName = function(userId) {
+      const user = users.find(u => u.id === userId);
+      if (!user) return;
+
+      const cell = document.getElementById(`user-fullname-${userId}`);
+      if (!cell) return;
+
+      const currentName = user.fullName || '';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = currentName;
+      input.className = 'text-sm font-medium text-slate-900 dark:text-slate-100 w-full px-2 py-1 border border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800';
+
+      const saveEdit = async () => {
+        const newName = input.value.trim();
+        if (newName === currentName) {
+          cell.innerHTML = currentName || 'Unnamed User';
+          cell.setAttribute('ondblclick', `editUserName('${userId}')`);
+          cell.setAttribute('title', 'Double-click to edit');
+          return;
+        }
+
+        if (!newName) {
+          alert('Full name cannot be empty.');
+          cell.innerHTML = currentName || 'Unnamed User';
+          cell.setAttribute('ondblclick', `editUserName('${userId}')`);
+          cell.setAttribute('title', 'Double-click to edit');
+          return;
+        }
+
+        // Check if another user with this name AND user code exists (users can have same name, but not same code + name)
+        const currentUserCode = user.userCode || '';
+        if (users.some(u => 
+          u.id !== userId && 
+          (u.fullName || '').toLowerCase() === newName.toLowerCase() &&
+          (u.userCode || '').toLowerCase() === currentUserCode.toLowerCase()
+        )) {
+          alert('A user with this full name and user code already exists. Users can share the same name, but not the same code and name combination.');
+          cell.innerHTML = currentName || 'Unnamed User';
+          cell.setAttribute('ondblclick', `editUserName('${userId}')`);
+          cell.setAttribute('title', 'Double-click to edit');
+          return;
+        }
+
+        user.fullName = newName;
+        await saveUsersToFirestore();
+        updateSettingsUsersTable();
+      };
+
+      const cancelEdit = () => {
+        cell.innerHTML = currentName || 'Unnamed User';
+        cell.setAttribute('ondblclick', `editUserName('${userId}')`);
+        cell.setAttribute('title', 'Double-click to edit');
+      };
+
+      input.addEventListener('blur', saveEdit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          input.blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelEdit();
+        }
+      });
+
+      cell.innerHTML = '';
+      cell.appendChild(input);
+      input.focus();
+      input.select();
+    };
+
+    // Edit user code inline
+    window.editUserCode = function(userId) {
+      const user = users.find(u => u.id === userId);
+      if (!user) return;
+
+      const cell = document.getElementById(`user-usercode-${userId}`);
+      if (!cell) return;
+
+      const currentCode = user.userCode || '';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = currentCode;
+      input.className = 'text-sm text-slate-700 dark:text-slate-300 w-full px-2 py-1 border border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800';
+
+      const saveEdit = async () => {
+        const newCode = input.value.trim();
+        if (newCode === currentCode) {
+          cell.innerHTML = currentCode || '—';
+          cell.setAttribute('ondblclick', `editUserCode('${userId}')`);
+          cell.setAttribute('title', 'Double-click to edit');
+          return;
+        }
+
+        if (!newCode) {
+          alert('User code cannot be empty.');
+          cell.innerHTML = currentCode || '—';
+          cell.setAttribute('ondblclick', `editUserCode('${userId}')`);
+          cell.setAttribute('title', 'Double-click to edit');
+          return;
+        }
+
+        // Check if another user with this code AND full name exists (users can have same code, but not same code + name)
+        const currentFullName = user.fullName || '';
+        if (users.some(u => 
+          u.id !== userId && 
+          u.userCode && 
+          u.userCode.toLowerCase() === newCode.toLowerCase() &&
+          (u.fullName || '').toLowerCase() === currentFullName.toLowerCase()
+        )) {
+          alert('A user with this code and full name already exists. Users can share the same code, but not the same code and name combination.');
+          cell.innerHTML = currentCode || '—';
+          cell.setAttribute('ondblclick', `editUserCode('${userId}')`);
+          cell.setAttribute('title', 'Double-click to edit');
+          return;
+        }
+
+        user.userCode = newCode;
+        await saveUsersToFirestore();
+        updateSettingsUsersTable();
+      };
+
+      const cancelEdit = () => {
+        cell.innerHTML = currentCode || '—';
+        cell.setAttribute('ondblclick', `editUserCode('${userId}')`);
+        cell.setAttribute('title', 'Double-click to edit');
+      };
+
+      input.addEventListener('blur', saveEdit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          input.blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelEdit();
+        }
+      });
+
+      cell.innerHTML = '';
+      cell.appendChild(input);
+      input.focus();
+      input.select();
+    };
+
+    // Edit user title inline
+    window.editUserTitle = function(userId) {
+      const user = users.find(u => u.id === userId);
+      if (!user) return;
+
+      const cell = document.getElementById(`user-title-${userId}`);
+      if (!cell) return;
+
+      const currentTitle = user.title || '';
+      const validTitles = ['Admin', 'Supervisor', 'Point Of Sale', 'Helpdesk'];
+
+      const select = document.createElement('select');
+      select.className = 'text-sm text-slate-700 dark:text-slate-300 w-full px-2 py-1 border border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800';
+
+      // Add options
+      validTitles.forEach(title => {
+        const option = document.createElement('option');
+        option.value = title;
+        option.textContent = title;
+        if (title === currentTitle) {
+          option.selected = true;
+        }
+        select.appendChild(option);
+      });
+
+      const saveEdit = async () => {
+        const newTitle = select.value;
+        if (newTitle === currentTitle) {
+          cell.innerHTML = newTitle || '—';
+          cell.setAttribute('ondblclick', `editUserTitle('${userId}')`);
+          cell.setAttribute('title', 'Double-click to edit');
+          return;
+        }
+
+        user.title = newTitle;
+        await saveUsersToFirestore();
+        updateSettingsUsersTable();
+      };
+
+      const cancelEdit = () => {
+        cell.innerHTML = currentTitle || '—';
+        cell.setAttribute('ondblclick', `editUserTitle('${userId}')`);
+        cell.setAttribute('title', 'Double-click to edit');
+      };
+
+      select.addEventListener('blur', saveEdit);
+      select.addEventListener('change', saveEdit);
+      select.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelEdit();
+        }
+      });
+
+      cell.innerHTML = '';
+      cell.appendChild(select);
+      select.focus();
     };
 
     // Update location dropdowns and select the new location
@@ -14503,19 +15851,19 @@
 
       // Clear all submitted payment processing sessions in Firestore
       try {
-        console.log('[PAYMENT RESET] Fetching submitted sessions for deletion...');
+
         const sessionsRef = collection(db, 'paymentProcessingSessions');
         const snapshot = await getDocs(sessionsRef);
-        console.log('[PAYMENT RESET] Sessions found:', snapshot.size);
+
         const deletePromises = [];
         snapshot.forEach(docSnap => {
-          console.log('[PAYMENT RESET] Deleting session:', docSnap.id);
+
           deletePromises.push(deleteDoc(doc(sessionsRef, docSnap.id)));
         });
         await Promise.all(deletePromises);
-        console.log('[PAYMENT RESET] All submitted sessions deleted');
+
       } catch (error) {
-        console.warn('[PAYMENT RESET] Failed to delete submitted sessions:', error);
+
       }
 
       customers.forEach(customer => {
@@ -14564,11 +15912,9 @@
 
     // Reset all payment history (clear paymentHistory and set lastPayment to 'Never')
     window.resetPayments = async function() {
-      console.log('[PAYMENT RESET] ====== Reset Payments START ======');
-      console.log('[PAYMENT RESET] currentPaymentProcessing before reset:', window.currentPaymentProcessing ? 'EXISTS' : 'NULL');
 
       if (!confirm('This will reset all customers who have past payments so the data looks like they never paid any past payments. This will clear all payment history and reset lastPayment to "Never". This will also clear the current payment processing session. This action cannot be undone. Continue?')) {
-        console.log('[PAYMENT RESET] User cancelled reset');
+
         return;
       }
 
@@ -14592,34 +15938,34 @@
 
       // Clear submitted sessions list in UI
       if (Array.isArray(window.paymentProcessingSessions)) {
-        console.log('[PAYMENT RESET] Clearing submitted sessions list. Count:', window.paymentProcessingSessions.length);
+
         window.paymentProcessingSessions = [];
       } else {
-        console.warn('[PAYMENT RESET] paymentProcessingSessions not available or not an array');
+
       }
 
       if (typeof renderPaymentProcessingSessionsList === 'function') {
-        console.log('[PAYMENT RESET] Re-rendering submitted sessions list');
+
         renderPaymentProcessingSessionsList();
       } else {
-        console.warn('[PAYMENT RESET] renderPaymentProcessingSessionsList not available');
+
       }
 
       // Clear all submitted payment processing sessions in Firestore
       try {
-        console.log('[PAYMENT RESET] Fetching submitted sessions for deletion...');
+
         const sessionsRef = collection(db, 'paymentProcessingSessions');
         const snapshot = await getDocs(sessionsRef);
-        console.log('[PAYMENT RESET] Sessions found:', snapshot.size);
+
         const deletePromises = [];
         snapshot.forEach(docSnap => {
-          console.log('[PAYMENT RESET] Deleting session:', docSnap.id);
+
           deletePromises.push(deleteDoc(doc(sessionsRef, docSnap.id)));
         });
         await Promise.all(deletePromises);
-        console.log('[PAYMENT RESET] All submitted sessions deleted');
+
       } catch (error) {
-        console.warn('[PAYMENT RESET] Failed to delete submitted sessions:', error);
+
       }
 
       let reset = 0;
@@ -14677,21 +16023,17 @@
         // Save all updated customers to Firestore
         await saveCustomersToFirestore();
 
-        console.log('[PAYMENT RESET] Reset complete:', { reset, errors });
         alert(`Reset complete! Cleared payment history for ${reset} customer(s) and cleared the current payment processing session.${errors > 0 ? `\n${errors} error(s) occurred.` : ''}`);
       } else {
 
-        console.log('[PAYMENT RESET] No payment history found:', { reset, errors });
         alert(`No customers with payment history found. Payment processing session has been cleared.${errors > 0 ? `\n${errors} error(s) occurred.` : ''}`);
       }
 
       // Reload sessions list after deletion
       if (typeof loadPaymentProcessingSessionsFromFirestore === 'function') {
-        console.log('[PAYMENT RESET] Reloading sessions list after deletion');
+
         await loadPaymentProcessingSessionsFromFirestore();
       }
-
-      console.log('[PAYMENT RESET] ====== Reset Payments END ======');
 
     };
 
@@ -16993,7 +18335,7 @@
           </svg>
         </div>
         <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">Drawer Count Verified Successfully!</h2>
-        <div id="eodVerificationSuccessContent" class="text-slate-600 dark:text-slate-400 space-y-2 text-left mt-4">
+        <div id="eodVerificationSuccessContent" class="text-slate-600 dark:text-slate-400 space-y-2 text-center mt-4">
           <!-- Content will be populated dynamically -->
         </div>
       </div>
@@ -18316,6 +19658,46 @@
                       onchange="saveTogglesSettings()"
                     />
                   </div>
+                </div>
+              </div>
+
+              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                <div class="flex items-center justify-between">
+                  <div class="flex-1">
+                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">POS Doesn't Close Out</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-300">
+                      When enabled, the "Close Out Drawer" button will be hidden for POS users, preventing them from closing out their drawer.
+                    </p>
+                  </div>
+                  <label class="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      id="togglePOSDoesntCloseOut" 
+                      class="sr-only peer"
+                      onchange="saveTogglesSettings(); if (window.updateButtonVisibility) { window.updateButtonVisibility(window.getEffectiveUser ? window.getEffectiveUser() : null); }"
+                    />
+                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+              </div>
+
+              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                <div class="flex items-center justify-between">
+                  <div class="flex-1">
+                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Use username instead of user code</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-300">
+                      When enabled, supervisors will not be asked to enter their user code when closing out a drawer. Instead, the system will use their logged-in username.
+                    </p>
+                  </div>
+                  <label class="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      id="toggleUseUsernameInsteadOfUserCode" 
+                      class="sr-only peer"
+                      onchange="saveTogglesSettings()"
+                    />
+                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
+                  </label>
                 </div>
               </div>
             </div>

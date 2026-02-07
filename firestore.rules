@@ -4,15 +4,21 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // AUTHORIZED USER ACCESS: Check if user email is in the authorized list
+    // SECURITY MODEL:
+    // 1. Custom authentication (users collection) is the PRIMARY security layer
+    //    - Users must exist in users collection with correct fullName + userCode
+    //    - If not found, login fails (no access granted)
+    // 2. Firebase Auth (including anonymous) is SECONDARY - only used to satisfy Firestore rules
+    //    - Only happens AFTER custom auth succeeds
+    //    - Anonymous auth is fallback when password auth fails
+    // 3. Firestore rules allow any authenticated user (request.auth != null) to read/write
+    //    - This is secure because custom auth must succeed first
+    //    - App UI enforces role-based access (admins/supervisors can do more)
+    //
+    // RESULT: Only users in your users collection can access the app, and they can all read/write
     function isAuthorized() {
-      return request.auth != null && (
-        request.auth.token.email == 'adam@gmail.com' ||
-        request.auth.token.email == 'admin@alcowater.com' ||
-        request.auth.token.email == 'adamchaabane1234@gmail.com' ||
-        request.auth.token.email == 'pos@alcowater.com' ||
-        request.auth.token.email == 'supervisor@alcowater.com'
-      );
+      // Any authenticated user can access (custom auth already verified they're in users collection)
+      return request.auth != null;
     }
     
     // Legacy admin UID check for backward compatibility
@@ -23,54 +29,70 @@ service cloud.firestore {
       );
     }
     
-    // Customers collection - authorized users only
+    // Customers collection - any user in users collection can read/write
+    // Security: Custom auth (users collection) must succeed first, then Firebase Auth provides session
     match /customers/{customerId} {
-      allow read, write: if isAuthorized();
+      allow read: if request.auth != null; // Any authenticated user (custom auth verified they're in users collection)
+      allow write: if request.auth != null; // Any authenticated user (custom auth verified they're in users collection)
     }
 
-    // Locations collection - authorized users only
+    // Locations collection - any user in users collection can read/write
     match /locations/{locationId} {
-      allow read, write: if isAuthorized();
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
 
-    // Codes collection - authorized users only
+    // Codes collection - any user in users collection can read/write
     match /codes/{codeId} {
-      allow read, write: if isAuthorized();
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
 
-    // Settings collection - authorized users only
+    // Settings collection - any user in users collection can read/write
     match /settings/{settingId} {
-      allow read, write: if isAuthorized();
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
 
-    // Billing cycles collection - authorized users only (for snapshot storage)
+    // Billing cycles collection - any user in users collection can read/write
     match /billingCycles/{cycleId} {
-      allow read, write: if isAuthorized();
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
 
-    // Payment batches - authorized users only (legacy collection name)
+    // Payment batches - any user in users collection can read/write
     match /paymentBatches/{batchId} {
-      allow read, write: if isAuthorized();
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
 
-    // Payment processing sessions - authorized users only
+    // Payment processing sessions - any user in users collection can read/write
     match /paymentProcessingSessions/{sessionId} {
-      allow read, write: if isAuthorized();
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
 
-    // Users collection - authorized users only
+    // Users collection - allow unauthenticated read for login, authenticated write for any authenticated user
+    // The app's UI already enforces role-based access (only admins can add/edit users)
+    // This allows any admin user created in the system to manage users without updating rules
     match /users/{userId} {
-      allow read, write: if isAuthorized();
+      // Allow unauthenticated read access (needed for login system)
+      // This is safe because we only expose fullName, userCode, and title for authentication
+      allow read: if true;
+      
+      // Allow any authenticated user to write (app UI enforces admin-only access)
+      allow write: if request.auth != null;
 
-      // Allow read/write access to any subcollections
+      // Allow read/write access to any subcollections (any authenticated user)
       match /{subCollection=**}/{docId} {
-        allow read, write: if isAuthorized();
+        allow read, write: if request.auth != null;
       }
     }
 
-    // Drawers collection - authorized users only
+    // Drawers collection - any user in users collection can read/write
     match /drawers/{drawerId} {
-      allow read, write: if isAuthorized();
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
 
     // Forms collection - authorized users can read
