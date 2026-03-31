@@ -1,0 +1,6 @@
+Date & Time,Type,Subtype,Sewer,Past Due,Surcharges,Late Fee,Amount Paid,Balance After
+03/30/2026 12:00 AM,Payment,Fresh start (full pay),168.36,0.00,10.13,0.00,178.49,0.00
+03/30/2026 12:00 AM,Charge,Billed Customer,168.36,0.00,10.13,0.00,0.00,178.49
+04/30/2026 12:00 AM,Charge,Late fee added (23 days late),0.00,0.00,0.00,5.00,0.00,183.49
+05/30/2026 12:00 AM,Charge,Late fee added (53 days late),0.00,0.00,0.00,5.00,0.00,188.49
+06/29/2026 12:00 AM,Charge,Late fee added (83 days late),0.00,0.00,0.00,5.00,0.00,193.49

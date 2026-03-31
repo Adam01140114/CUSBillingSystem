@@ -3024,12 +3024,11 @@
       return Math.max(0, dsp - graceDays);
     }
 
-    /** Number of 30-day late-fee cycles (1–3) from days past grace. */
+    /** Number of 30-day late-fee cycles from days past grace (continues indefinitely). */
     function getLateFeeCycleCount(daysLate) {
       if (!autoApplyLateFees || daysLate <= 0) return 0;
       let cycles = 1 + Math.floor((daysLate - 1) / 30);
       if (cycles < 0) cycles = 0;
-      if (cycles > 3) cycles = 3;
       return cycles;
     }
 
@@ -3098,6 +3097,18 @@
         pucSurchargeAmount = subtotalBeforePuc * (pucSurcharge / 100);
       }
       return { subtotalBeforePuc, pucSurchargeAmount, adjustedServiceCost, totalSurcharge };
+    }
+
+    /**
+     * City / state / ZIP line for bill PDF (address_city_state_zip). Prefers explicit mailing* fields (set via Data Cleanup "City zip").
+     */
+    function getAddressCityStateZipForBill(customer) {
+      if (!customer) return '';
+      const imp = customer.importData || {};
+      const city = customer.mailingCity || imp['Mailing City'] || imp['City'] || imp['PremiseCity'] || '';
+      const state = customer.mailingState || imp['Mailing State'] || imp['State'] || imp['PremiseState'] || '';
+      const zip = customer.mailingZip || imp['Mailing ZIP'] || imp['ZIP'] || imp['Zip'] || imp['PremiseZip'] || '';
+      return [city, state, zip].filter(Boolean).join(', ');
     }
 
     /**
@@ -4088,11 +4099,71 @@
       return fee;
     }
 
+    // Add charge-history rows when a new late-fee cycle is reached for the current bill.
+    function maybeAppendLateFeeChargeHistory(customer) {
+      if (!customer || !customer.lastBillPrintDate) return;
+      if (!Array.isArray(customer.chargeHistory)) customer.chargeHistory = [];
+      const calLate = getCalendarDaysLateAfterGrace(customer, 20);
+      const cycles = getLateFeeCycleCount(calLate);
+      if (cycles <= 0) return;
+
+      const totalOwedForFees = getTotalOwedForLateTracking(customer, calLate);
+      if (totalOwedForFees <= 0.005) return;
+
+      const billKey = customer.lastBillPrintDate;
+      const now = window.getCurrentDate ? window.getCurrentDate() : new Date();
+      const formattedDate = (now.getMonth() + 1).toString().padStart(2, '0') + '/' +
+        now.getDate().toString().padStart(2, '0') + '/' + now.getFullYear();
+
+      let addedAny = false;
+      for (let cycle = 1; cycle <= cycles; cycle++) {
+        const alreadyLogged = customer.chargeHistory.some(e =>
+          e &&
+          e.source === 'lateFeeAdded' &&
+          e.billPrintDate === billKey &&
+          parseInt(e.lateFeeCycle || 0, 10) === cycle
+        );
+        if (alreadyLogged) continue;
+
+        const daysAtCycle = 1 + ((cycle - 1) * 30);
+        const feeAtCycle = Math.round(Math.max(0, getLateFeeAmountForCustomerAndDaysLate(customer, daysAtCycle)) * 100) / 100;
+        const prevFee = cycle > 1
+          ? Math.round(Math.max(0, getLateFeeAmountForCustomerAndDaysLate(customer, 1 + ((cycle - 2) * 30))) * 100) / 100
+          : 0;
+        const feeIncrement = Math.round(Math.max(0, feeAtCycle - prevFee) * 100) / 100;
+        if (feeIncrement <= 0) continue;
+        const runningDueAfterCycle = Math.round(Math.max(0, getTotalOwedForLateTracking(customer, daysAtCycle)) * 100) / 100;
+
+        customer.chargeHistory.push({
+          date: formattedDate,
+          timestamp: now.toISOString(),
+          source: 'lateFeeAdded',
+          billPrintDate: billKey,
+          lateFeeCycle: cycle,
+          calendarDaysLate: calLate,
+          chargeType: 'Late fee added',
+          chargeSubtype: `Late fee added (${calLate} days late)`,
+          sewerChargeOnBill: 0,
+          pastDueOnBill: 0,
+          surchargesOnBill: 0,
+          lateFeeAmount: feeIncrement,
+          currentDue: runningDueAfterCycle
+        });
+        addedAny = true;
+      }
+
+      if (addedAny && typeof saveSingleCustomerToFirestore === 'function') {
+        saveSingleCustomerToFirestore(customer).catch(() => {});
+      }
+    }
+
     // Shared function to calculate customer total amount breakdown
     // Returns an object with all calculated values
     function calculateCustomerTotal(customer) {
 
-      // Apply 60‑day deposit rule before calculating totals
+      // Log new late-fee charge rows while there is still a balance, then apply deposit.
+      // If deposit ran first, the balance could hit $0 and we'd skip logging the fee cycle that triggered deposit day.
+      maybeAppendLateFeeChargeHistory(customer);
       maybeApplyDepositAt60Days(customer);
 
       const baseServiceCost = calculateProratedServiceCost(customer);
@@ -4199,31 +4270,40 @@
     }
 
     /**
-     * After a bill is printed: roll balances forward, append a ledger row (Amount Paid $0 for the cycle close),
-     * and set last bill print fields. Keeps paymentHistory aligned with billing cycles.
+     * After a bill is printed: add a charge-history row, roll balances forward, and set bill print fields.
+     * Payment history records only actual payments; billing events are tracked in chargeHistory.
      */
     function pushBillingCycleClosedLedgerRow(customer, calcBeforeRoll, options = {}) {
       if (!customer || !calcBeforeRoll) return;
       const now = options.now || (window.getCurrentDate ? window.getCurrentDate() : new Date());
-      const statementTotal = Math.round(Math.max(0, parseFloat(calcBeforeRoll.total) || 0) * 100) / 100;
-      const lateFee = Math.round(Math.max(0, parseFloat(calcBeforeRoll.lateFeeAmount) || 0) * 100) / 100;
-      if (!Array.isArray(customer.paymentHistory)) customer.paymentHistory = [];
-      applyBillProductionRollForward(customer, calcBeforeRoll);
-      const calcAfter = calculateCustomerTotal(customer);
-      const newDue = Math.round(Math.max(0, parseFloat(calcAfter.total) || 0) * 100) / 100;
+      if (!Array.isArray(customer.chargeHistory)) customer.chargeHistory = [];
+
+      const sewerChargeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.adjustedServiceCost) || 0) * 100) / 100;
+      const pastDueOnBill = Math.round(Math.max(0, parseFloat(customer.pastDue || 0)) * 100) / 100;
+      const surchargesOnBill = Math.round(Math.max(0, (parseFloat(calcBeforeRoll.totalSurcharge) || 0) + (parseFloat(calcBeforeRoll.pucSurchargeAmount) || 0)) * 100) / 100;
+      const lateFeeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.lateFeeAmount) || 0) * 100) / 100;
+      // For charge history, "Current Due" is the billed statement subtotal for that row
+      // (sum of displayed charge columns), not the net owed after prior payments.
+      const currentDueOnBill = Math.round(
+        Math.max(0, sewerChargeOnBill + pastDueOnBill + surchargesOnBill + lateFeeOnBill) * 100
+      ) / 100;
+
       const formattedDate = (now.getMonth() + 1).toString().padStart(2, '0') + '/' +
         now.getDate().toString().padStart(2, '0') + '/' + now.getFullYear();
-      customer.paymentHistory.push({
+      customer.chargeHistory.push({
         date: formattedDate,
         timestamp: now.toISOString(),
-        source: 'billingCycleClosed',
-        amountDue: statementTotal,
-        amountPaid: 0,
-        creditGiven: null,
-        lateFeeAmount: lateFee,
-        newAmountDue: newDue,
-        paymentMethod: options.paymentMethod || 'Billing cycle closed (bill printed)'
+        source: 'billingCharge',
+        chargeType: 'Billed Customer',
+        chargeSubtype: 'Billed Customer',
+        sewerChargeOnBill,
+        pastDueOnBill,
+        surchargesOnBill,
+        lateFeeAmount: lateFeeOnBill,
+        currentDue: currentDueOnBill
       });
+
+      applyBillProductionRollForward(customer, calcBeforeRoll);
       if (options.setBillDates !== false) {
         customer.lastBillPrintDate = now.toISOString();
         customer.lastBill60DayDepositApplied = false;
@@ -4231,6 +4311,19 @@
     }
 
     /** Tax/PDF line items for bill (codes + PUC), consistent with calculateCustomerTotal. */
+    /** Bill PDF current_due = sewer_charge_amount + tax_charge1..4 (first 4 tax rows). */
+    function getPdfCurrentDueFromSewerAndTaxCharges(sewerAmount, taxCodeDetails) {
+      const sewer = Math.max(0, Math.round((parseFloat(sewerAmount) || 0) * 100) / 100);
+      let taxSum = 0;
+      for (let i = 0; i < 4; i++) {
+        if (taxCodeDetails && i < taxCodeDetails.length) {
+          taxSum += Math.max(0, parseFloat(taxCodeDetails[i].amount) || 0);
+        }
+      }
+      taxSum = Math.round(taxSum * 100) / 100;
+      return Math.max(0, Math.round((sewer + taxSum) * 100) / 100);
+    }
+
     function buildTaxCodeDetailsForPdf(customer, calc) {
       const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
       const adjustedServiceCost = calc.adjustedServiceCost;
@@ -4302,7 +4395,10 @@
       return baseServiceCost;
     }
 
-    // Apply deposit automatically when a bill reaches the 60‑day late bucket
+    /** Calendar days late (after print + grace) before security deposit auto-pay runs. */
+    const DEPOSIT_AUTO_APPLY_DAYS_LATE = 60;
+
+    // Apply deposit automatically when a bill reaches the configured days-late threshold
     function maybeApplyDepositAt60Days(customer) {
       try {
         if (!customer) return;
@@ -4325,13 +4421,13 @@
         }
 
         const calendarLate = getCalendarDaysLateAfterGrace(customer, 20);
-        // 60‑day bucket starts at 31 days late (calendar, not gated on old pastDue-only logic)
-        if (calendarLate < 31) {
+        if (calendarLate < DEPOSIT_AUTO_APPLY_DAYS_LATE) {
           if (shouldLogDeposit) {
             console.log('[LateLogic] maybeApplyDepositAt60Days SKIP (not late enough)', {
               customerId: customer.id,
               accountNumber: customer.accountNumber,
-              calendarLate
+              calendarLate,
+              requiredDaysLate: DEPOSIT_AUTO_APPLY_DAYS_LATE
             });
           }
           return;
@@ -4380,8 +4476,13 @@
         let paidTax = parseFloat(customer.currentMonthPaidTaxCodes || 0);
         let paidPuc = parseFloat(customer.currentMonthPaidPuc || 0);
         let paidLate = parseFloat(customer.currentMonthPaidLateFee || 0);
-        const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, lateFeeAmt, parts);
+        const beforeSewer = paidSewer;
+        const beforeTax = paidTax;
+        const beforePuc = paidPuc;
+        const beforeLate = paidLate;
         let pastDueNum = parseFloat(customer.pastDue || 0);
+        const beforePastDue = pastDueNum;
+        const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, lateFeeAmt, parts);
 
         if (shouldLogDeposit) {
           console.log('[LateLogic] maybeApplyDepositAt60Days CHECK', {
@@ -4464,6 +4565,12 @@
         customer.deposit = Math.round((deposit - applied) * 100) / 100;
         customer.lastBill60DayDepositApplied = true;
 
+        const allocSewer = Math.round((parseFloat(customer.currentMonthPaidSewer || 0) - beforeSewer) * 100) / 100;
+        const allocTax = Math.round((parseFloat(customer.currentMonthPaidTaxCodes || 0) - beforeTax) * 100) / 100;
+        const allocPuc = Math.round((parseFloat(customer.currentMonthPaidPuc || 0) - beforePuc) * 100) / 100;
+        const allocLate = Math.round((parseFloat(customer.currentMonthPaidLateFee || 0) - beforeLate) * 100) / 100;
+        const allocPastDue = Math.round((beforePastDue - Math.max(0, parseFloat(customer.pastDue || 0))) * 100) / 100;
+
         const calcAfterDeposit = calculateCustomerTotal(customer);
         customer.paymentHistory.push({
           date: depDateStr,
@@ -4472,6 +4579,10 @@
           amountPaid: applied,
           creditGiven: null,
           lateFeeAmount: Math.round((lateFeeAmt || 0) * 100) / 100,
+          lateFeePaidFromPayment: allocLate,
+          sewerChargeOnBill: allocSewer,
+          surchargesOnBill: Math.round((allocTax + allocPuc) * 100) / 100,
+          pastDueOnBill: allocPastDue,
           newAmountDue: Math.round(Math.max(0, calcAfterDeposit.total) * 100) / 100,
           paymentMethod: 'Security deposit (auto)',
           source: 'depositAutoApply'
@@ -4588,7 +4699,7 @@
       }
       box.innerHTML = matches.map(c => `
         <button type="button" class="w-full text-left px-4 py-3 text-sm text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 border-b border-slate-100 dark:border-slate-700 last:border-0"
-          onclick="selectBillCustomerFromSearch(${JSON.stringify(c.id)})">
+          onclick='selectBillCustomerFromSearch(${JSON.stringify(c.id)})'>
           <span class="font-medium">${c.name || ''}</span>
           <span class="text-slate-500 dark:text-slate-400"> — ${c.accountNumber || c.id}</span>
         </button>
@@ -4834,12 +4945,7 @@
 
         // Create FormData with all the required fields
         const formData = new FormData();
-        // Build address_city_state_zip (e.g. "Salinas, CA, 93907")
-        const imp = customer.importData || {};
-        const mailingCity = customer.mailingCity || imp['Mailing City'] || imp['City'] || imp['PremiseCity'] || '';
-        const mailingState = customer.mailingState || imp['Mailing State'] || imp['State'] || imp['PremiseState'] || '';
-        const mailingZip = customer.mailingZip || imp['Mailing ZIP'] || imp['ZIP'] || imp['Zip'] || imp['PremiseZip'] || '';
-        const addressCityStateZip = [mailingCity, mailingState, mailingZip].filter(Boolean).join(', ');
+        const addressCityStateZip = getAddressCityStateZipForBill(customer);
 
         const daysInCycle = lastDayOfMonth.getDate();
 
@@ -4851,8 +4957,18 @@
         formData.append('cycle_period', cyclePeriod);
         formData.append('days_in_cycle', String(daysInCycle));
         formData.append('print_date', formatDateMMDDYYYY(now));
-        formData.append('current_charges', `$${adjustedServiceCost.toFixed(2)}`);
-        formData.append('previous_charges', `$${customer.pastDue.toFixed(2)}`);
+        const pdfSewerChargeAmount = Math.max(0, Math.round(adjustedServiceCost * 100) / 100);
+        const pdfPreviousCharges = Math.max(0, Math.round((parseFloat(customer.pastDue || 0)) * 100) / 100);
+        const pdfLateFee = Math.max(0, Math.round((lateFeeAmount || 0) * 100) / 100);
+        const pdfCurrentDue = getPdfCurrentDueFromSewerAndTaxCharges(pdfSewerChargeAmount, taxCodeDetails);
+        const pdfTotalAmount = Math.max(0, Math.round((pdfCurrentDue + pdfPreviousCharges + pdfLateFee) * 100) / 100);
+
+        // New PDF field mapping
+        formData.append('sewer_charge', 'Sewer Charge');
+        formData.append('sewer_charge_amount', `$${pdfSewerChargeAmount.toFixed(2)}`);
+        formData.append('current_due', `$${pdfCurrentDue.toFixed(2)}`);
+        formData.append('previous_charges', `$${pdfPreviousCharges.toFixed(2)}`);
+        formData.append('late_fee', `$${pdfLateFee.toFixed(2)}`);
 
         const totalAmountRecalc = Math.max(0, calc.total);
 
@@ -4871,8 +4987,7 @@
           totalAmountRecalc
         });
 
-        formData.append('taxes_charges', `$${totalSurcharge.toFixed(2)}`);
-        formData.append('total_amount', `$${totalAmountRecalc.toFixed(2)}`);
+        formData.append('total_amount', `$${pdfTotalAmount.toFixed(2)}`);
         formData.append('due_date', dueDateStr);
 
         // Bill status text for PDF ("Status: Current" or "Status: X days late")
@@ -5138,6 +5253,13 @@
             const currentDue = calc.currentDue;
             const totalAmount = Math.max(0, calc.total);
 
+            const taxCodeDetails = buildTaxCodeDetailsForPdf(customer, calc);
+            const pdfCurrentDueNum = getPdfCurrentDueFromSewerAndTaxCharges(adjustedServiceCost, taxCodeDetails);
+            const pdfTotalNum = Math.max(
+              0,
+              Math.round((pdfCurrentDueNum + pastDueOpening + lateFeeAmount) * 100) / 100
+            );
+
             // Save customer snapshot (pre–roll-forward, matches PDF)
             const customerSnapshot = {
               customerId: customer.id,
@@ -5158,27 +5280,22 @@
                 account_no: customer.accountNumber || '',
                 account_name: customer.name || '',
                 account_address: customer.address || '',
-                address_city_state_zip: (() => {
-                  const imp = customer.importData || {};
-                  const c = customer.mailingCity || imp['Mailing City'] || imp['City'] || imp['PremiseCity'] || '';
-                  const s = customer.mailingState || imp['Mailing State'] || imp['State'] || imp['PremiseState'] || '';
-                  const z = customer.mailingZip || imp['Mailing ZIP'] || imp['ZIP'] || imp['Zip'] || imp['PremiseZip'] || '';
-                  return [c, s, z].filter(Boolean).join(', ');
-                })(),
+                address_city_state_zip: getAddressCityStateZipForBill(customer),
                 statement_date: statementDate,
                 cycle_period: cyclePeriod,
                 days_in_cycle: lastDayOfMonth.getDate(),
                 print_date: formatDateMMDDYYYY(now),
-                current_charges: `$${adjustedServiceCost.toFixed(2)}`,
-                previous_charges: `$${pastDueOpening.toFixed(2)}`,
-                taxes_charges: `$${totalSurcharge.toFixed(2)}`,
-                total_amount: `$${totalAmount.toFixed(2)}`,
+                sewer_charge: 'Sewer Charge',
+                sewer_charge_amount: `$${Math.max(0, adjustedServiceCost).toFixed(2)}`,
+                current_due: `$${pdfCurrentDueNum.toFixed(2)}`,
+                previous_charges: `$${Math.max(0, pastDueOpening).toFixed(2)}`,
+                late_fee: `$${Math.max(0, lateFeeAmount).toFixed(2)}`,
+                total_amount: `$${pdfTotalNum.toFixed(2)}`,
                 due_date: dueDateStr
               }
             };
             billingCycleSnapshot.customerSnapshots.push(customerSnapshot);
 
-            const taxCodeDetails = buildTaxCodeDetailsForPdf(customer, calc);
             const formData = new FormData();
             formData.append('account_no', customerSnapshot.pdfData.account_no);
             formData.append('account_name', customerSnapshot.pdfData.account_name);
@@ -5188,9 +5305,11 @@
             formData.append('cycle_period', customerSnapshot.pdfData.cycle_period);
             formData.append('days_in_cycle', String(customerSnapshot.pdfData.days_in_cycle || ''));
             formData.append('print_date', customerSnapshot.pdfData.print_date || '');
-            formData.append('current_charges', customerSnapshot.pdfData.current_charges);
+            formData.append('sewer_charge', customerSnapshot.pdfData.sewer_charge || 'Sewer Charge');
+            formData.append('sewer_charge_amount', customerSnapshot.pdfData.sewer_charge_amount || '$0.00');
+            formData.append('current_due', customerSnapshot.pdfData.current_due || '$0.00');
             formData.append('previous_charges', customerSnapshot.pdfData.previous_charges);
-            formData.append('taxes_charges', customerSnapshot.pdfData.taxes_charges);
+            formData.append('late_fee', customerSnapshot.pdfData.late_fee || '$0.00');
             formData.append('total_amount', customerSnapshot.pdfData.total_amount);
             formData.append('due_date', customerSnapshot.pdfData.due_date);
 
@@ -17092,6 +17211,40 @@
     };
 
     /**
+     * Data Cleanup: set bill mailing city/state/zip on every customer (PDF address_city_state_zip).
+     */
+    window.applyDefaultCityStateZipAllCustomers = async function() {
+      const n = customers.length;
+      if (
+        !confirm(
+          `Set City, State, and Zip on all ${n} customers for bills and data profile?\n\n` +
+            'City: Salinas\nState: California\nZip: 93907\n\n' +
+            'Existing mailing city/state/zip values will be overwritten.'
+        )
+      ) {
+        return;
+      }
+      customers.forEach(c => {
+        c.mailingCity = 'Salinas';
+        c.mailingState = 'California';
+        c.mailingZip = '93907';
+      });
+      try {
+        await saveCustomersToFirestore();
+        alert(`Updated ${n} customer(s). Bill PDFs will use "Salinas, California, 93907" for address_city_state_zip.`);
+        const modal = document.getElementById('customerDataProfileModal');
+        if (modal && !modal.classList.contains('hidden')) {
+          const customerId = modal.getAttribute('data-customer-id');
+          if (customerId) showCustomerDataProfile(customerId);
+        }
+        if (typeof updateCustomerTable === 'function') updateCustomerTable();
+        if (typeof updateSettingsCustomerTable === 'function') updateSettingsCustomerTable();
+      } catch (e) {
+        alert('Error saving customers: ' + (e && e.message ? e.message : e));
+      }
+    };
+
+    /**
      * Resolve past-due dollars from an import row.
      * Order: PrevBal → "Past Due" column → PastDue as dollar if > 1 → PastDue flag (1/Y) + PrevAmt when PrevBal empty.
      * Many spreadsheets use PastDue=1 as a flag and put the amount in PrevAmt.
@@ -17318,6 +17471,7 @@
       customer.currentMonthPaidLateFee = late;
       customer.currentMonthPaid = Math.round((sewer + taxOnly + pucOnly + late) * 100) / 100;
 
+      const surchargesCombined = Math.round((taxOnly + pucOnly) * 100) / 100;
       customer.paymentHistory = [{
         date: payDateStr,
         timestamp: timestamp,
@@ -17327,7 +17481,10 @@
         lateFeeAmount: Math.round((calc.lateFeeAmount || 0) * 100) / 100,
         newAmountDue: 0,
         paymentMethod: 'Fresh start (full pay)',
-        source: 'testFreshStart'
+        source: 'testFreshStart',
+        sewerChargeOnBill: sewer,
+        pastDueOnBill: Math.round(Math.max(0, parseFloat(calc.pastDue || 0)) * 100) / 100,
+        surchargesOnBill: surchargesCombined
       }];
       customer.lastPayment = payDateStr;
       customer.lastPrintedStatementTotalDue = totalDue;
@@ -17400,6 +17557,7 @@
           customer.deposit = 1000;
           customer.pastDue = 0;
           customer.paymentHistory = [];
+          customer.chargeHistory = [];
           customer.lastPayment = 'Never';
           customer.currentMonthPaid = 0;
           customer.currentMonthPaidSewer = 0;
@@ -17509,6 +17667,7 @@
         try {
           // Check if customer has payment history, lastPayment, or currentMonthPaid set
           const hasPaymentHistory = customer.paymentHistory && Array.isArray(customer.paymentHistory) && customer.paymentHistory.length > 0;
+          const hasChargeHistory = customer.chargeHistory && Array.isArray(customer.chargeHistory) && customer.chargeHistory.length > 0;
           const hasLastPayment = customer.lastPayment && customer.lastPayment !== 'Never' && customer.lastPayment !== '';
           const hasCurrentMonthPaid = customer.currentMonthPaid && parseFloat(customer.currentMonthPaid || 0) > 0;
           const hasPerCategoryPaid = (customer.currentMonthPaidSewer || 0) > 0 || 
@@ -17520,10 +17679,11 @@
                                     customer.currentMonthPaymentHistory.length > 0;
 
           // Only reset if customer has any payment data
-          if (hasPaymentHistory || hasLastPayment || hasCurrentMonthPaid || hasPerCategoryPaid || hasMonthlyHistory) {
+          if (hasPaymentHistory || hasChargeHistory || hasLastPayment || hasCurrentMonthPaid || hasPerCategoryPaid || hasMonthlyHistory) {
 
             // Clear payment history
             customer.paymentHistory = [];
+            customer.chargeHistory = [];
 
             // Reset lastPayment to 'Never'
             customer.lastPayment = 'Never';
@@ -18606,7 +18766,7 @@
             `;
             lateFeeDetailsEl.appendChild(baseRow);
 
-            // Explain 30/60/90 cycles so deposit at 31+ days past due doesn’t look like “double late fee”
+            // Explain 30/60/90 cycles; deposit auto-pay starts at DEPOSIT_AUTO_APPLY_DAYS_LATE days late
             const calLateLbl = getCalendarDaysLateAfterGrace(customer, 20);
             const feeCycles = getLateFeeCycleCount(calLateLbl);
             if (autoApplyLateFees && feeCycles > 0) {
@@ -18614,14 +18774,17 @@
               hint.className = 'text-xs text-slate-500 dark:text-slate-400 py-1';
               if (lateFeeMode === 'flat') {
                 hint.textContent =
-                  `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (adds every 30 calendar days past the due date, max 3). ` +
-                  `Per cycle: $${Number(lateFeeFlat).toFixed(2)} → total late fee $${(calc.lateFeeAmount || 0).toFixed(2)}.`;
+                  `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (adds every 30 calendar days past the due date). ` +
+                  `Per cycle: $${Number(lateFeeFlat).toFixed(2)} → total late fee $${(calc.lateFeeAmount || 0).toFixed(2)}. ` +
+                  `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
               } else if (lateFeeMode === 'percent') {
                 hint.textContent =
-                  `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (percent mode: % applies to balance before late fees, max 3 cycles).`;
+                  `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (percent mode: % applies to balance before late fees). ` +
+                  `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
               } else {
                 hint.textContent =
-                  `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (combination: each cycle uses the greater of $${Number(lateFeeFlat).toFixed(2)} or ${Number(lateFeePercent).toFixed(2)}% of balance before late fees).`;
+                  `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (combination: each cycle uses the greater of $${Number(lateFeeFlat).toFixed(2)} or ${Number(lateFeePercent).toFixed(2)}% of balance before late fees). ` +
+                  `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
               }
               lateFeeDetailsEl.appendChild(hint);
             }
@@ -18857,15 +19020,11 @@
         lastAmountDueEl.textContent = lastAmountDue;
       }
 
-      // Show/hide "View All Previous Payments" button
-      const viewAllPaymentsBtn = document.getElementById('viewAllPaymentsBtn');
-      if (viewAllPaymentsBtn) {
-        if (customer.paymentHistory && Array.isArray(customer.paymentHistory) && customer.paymentHistory.length > 0) {
-          viewAllPaymentsBtn.style.display = 'block';
-          viewAllPaymentsBtn.setAttribute('data-customer-id', customerId);
-        } else {
-          viewAllPaymentsBtn.style.display = 'none';
-        }
+      // Combined ledger button (payments + charges)
+      const viewAllLedgerBtn = document.getElementById('viewAllLedgerBtn');
+      if (viewAllLedgerBtn) {
+        viewAllLedgerBtn.style.display = 'block';
+        viewAllLedgerBtn.setAttribute('data-customer-id', customerId);
       }
 
       document.getElementById('amountDetailsModal').classList.remove('hidden');
@@ -18881,9 +19040,9 @@
       showAmountDetails(customerId);
     };
 
-    // Show all payments modal
-    window.showAllPaymentsModal = function() {
-      const btn = document.getElementById('viewAllPaymentsBtn');
+    // Show combined previous payments/charges modal
+    window.showAllPreviousPaymentsChargesModal = function() {
+      const btn = document.getElementById('viewAllLedgerBtn');
       const customerId = btn ? btn.getAttribute('data-customer-id') : null;
       if (!customerId) {
         // Try to get from amountDetailsModal
@@ -18894,7 +19053,7 @@
             const customerName = customerNameEl.textContent;
             const customer = customers.find(c => c.name === customerName);
             if (customer) {
-              displayAllPaymentsModal(customer);
+              displayAllLedgerModal(customer);
               return;
             }
           }
@@ -18909,8 +19068,12 @@
         return;
       }
 
-      displayAllPaymentsModal(customer);
+      displayAllLedgerModal(customer);
     };
+
+    // Backward-compatible wrappers
+    window.showAllPaymentsModal = function() { window.showAllPreviousPaymentsChargesModal(); };
+    window.showAllChargesModal = function() { window.showAllPreviousPaymentsChargesModal(); };
 
     function getLedgerEntrySortMs(p) {
       if (!p) return 0;
@@ -18922,6 +19085,199 @@
       if (pd && !isNaN(pd.getTime())) return pd.getTime();
       return 0;
     }
+
+    function formatLedgerDateTime(entry) {
+      let dateTimeDisplay = entry.date || '—';
+      const d = entry.timestamp ? new Date(entry.timestamp) : (entry.date ? parsePaymentDate(entry.date) : null);
+      if (d && !isNaN(d.getTime())) {
+        const month = (d.getMonth() + 1).toString().padStart(2, '0');
+        const day = d.getDate().toString().padStart(2, '0');
+        const year = d.getFullYear();
+        const hours = d.getHours();
+        const minutes = d.getMinutes().toString().padStart(2, '0');
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        const displayHours = hours % 12 || 12;
+        dateTimeDisplay = `${month}/${day}/${year} ${displayHours}:${minutes} ${ampm}`;
+      }
+      return dateTimeDisplay;
+    }
+
+    function displayAllLedgerModal(customer) {
+      let modal = document.getElementById('allLedgerModal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'allLedgerModal';
+        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden';
+        document.body.appendChild(modal);
+      }
+
+      const paymentHistory = Array.isArray(customer.paymentHistory) ? customer.paymentHistory : [];
+      const paymentSortedAsc = [...paymentHistory].sort((a, b) => getLedgerEntrySortMs(a) - getLedgerEntrySortMs(b));
+      const currentTotalDue =
+        typeof calculateCustomerTotal === 'function'
+          ? Math.round(Math.max(0, calculateCustomerTotal(customer).total) * 100) / 100
+          : 0;
+
+      const resolvedNewDue = new Array(paymentSortedAsc.length);
+      for (let i = 0; i < paymentSortedAsc.length; i++) {
+        let nd = paymentSortedAsc[i].newAmountDue;
+        if (nd === undefined || nd === null) {
+          if (i < paymentSortedAsc.length - 1 && paymentSortedAsc[i + 1].amountDue != null && paymentSortedAsc[i + 1].amountDue !== '') {
+            nd = parseFloat(paymentSortedAsc[i + 1].amountDue);
+          } else if (i === paymentSortedAsc.length - 1) {
+            nd = currentTotalDue;
+          }
+        }
+        resolvedNewDue[i] = nd != null && !isNaN(parseFloat(nd)) ? Math.round(parseFloat(nd) * 100) / 100 : null;
+      }
+
+      const paymentRows = paymentSortedAsc.map((p, i) => {
+        const lateFee = Math.round(
+          Math.max(
+            0,
+            parseFloat(
+              p.lateFeePaidFromPayment != null && p.lateFeePaidFromPayment !== ''
+                ? p.lateFeePaidFromPayment
+                : p.lateFeeAmount || 0
+            )
+          ) * 100
+        ) / 100;
+        const amountPaid = Math.round(Math.max(0, parseFloat(p.amountPaid || 0)) * 100) / 100;
+        const amountDue = Math.round(Math.max(0, parseFloat(p.amountDue || 0)) * 100) / 100;
+        const sewer = Math.round(Math.max(0, parseFloat(p.sewerChargeOnBill || p.sewerCharge || 0)) * 100) / 100;
+        const pastDue = Math.round(Math.max(0, parseFloat(p.pastDueOnBill || p.pastDue || 0)) * 100) / 100;
+        let surcharges = Math.round(Math.max(0, parseFloat(p.surchargesOnBill || p.surcharges || 0)) * 100) / 100;
+        if (sewer === 0 && pastDue === 0 && surcharges === 0 && amountDue > 0) {
+          const base = Math.max(0, Math.round((amountDue - lateFee) * 100) / 100);
+          const nextBill = (Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [])
+            .filter(c => c && c.source === 'billingCharge' && getLedgerEntrySortMs(c) > getLedgerEntrySortMs(p))
+            .sort((a, b) => getLedgerEntrySortMs(a) - getLedgerEntrySortMs(b))[0];
+          if (nextBill) {
+            const bs = Math.round(Math.max(0, parseFloat(nextBill.sewerChargeOnBill || 0)) * 100) / 100;
+            const su = Math.round(Math.max(0, parseFloat(nextBill.surchargesOnBill || 0)) * 100) / 100;
+            if (bs + su > 0.005 && Math.abs(bs + su - base) < 0.05) {
+              sewer = bs;
+              surcharges = su;
+            } else {
+              surcharges = base;
+            }
+          } else {
+            surcharges = base;
+          }
+        }
+        const subtype =
+          p.paymentMethod ||
+          (p.source === 'depositAutoApply' ? 'Security deposit (auto)' : 'Payment');
+        return {
+          sourceKind: 'payment',
+          sortMs: getLedgerEntrySortMs(p),
+          dateTime: formatLedgerDateTime(p),
+          type: 'Payment',
+          subtype,
+          sewer,
+          pastDue,
+          surcharges,
+          lateFee,
+          amountPaid,
+          balanceAfter: resolvedNewDue[i]
+        };
+      });
+
+      const chargeHistory = Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [];
+      const chargeRows = chargeHistory.map((c) => ({
+        sourceKind: 'charge',
+        sortMs: getLedgerEntrySortMs(c),
+        dateTime: formatLedgerDateTime(c),
+        type: 'Charge',
+        subtype: c.chargeSubtype ||
+          (c.source === 'lateFeeAdded' && c.calendarDaysLate != null && !isNaN(parseInt(c.calendarDaysLate, 10))
+            ? `Late fee added (${parseInt(c.calendarDaysLate, 10)} days late)`
+            : null) ||
+          c.chargeType ||
+          (c.source === 'lateFeeAdded' ? 'Late fee added' : 'Billed Customer'),
+        sewer: Math.round(Math.max(0, parseFloat(c.sewerChargeOnBill || 0)) * 100) / 100,
+        pastDue: Math.round(Math.max(0, parseFloat(c.pastDueOnBill || 0)) * 100) / 100,
+        surcharges: Math.round(Math.max(0, parseFloat(c.surchargesOnBill || 0)) * 100) / 100,
+        lateFee: Math.round(Math.max(0, parseFloat(c.lateFeeAmount || 0)) * 100) / 100,
+        amountPaid: 0,
+        balanceAfter: Math.round(Math.max(0, parseFloat(c.currentDue || 0)) * 100) / 100
+      }));
+
+      const rows = [...paymentRows, ...chargeRows].sort((a, b) => {
+        if (a.sortMs !== b.sortMs) return a.sortMs - b.sortMs;
+        if (a.sourceKind === b.sourceKind) return 0;
+        // Same timestamp: charges before payments (e.g. late fee logged, then deposit applied same day)
+        return a.sourceKind === 'charge' ? -1 : 1;
+      });
+
+      let htmlRows = '';
+      if (rows.length === 0) {
+        htmlRows = '<tr><td colspan="9" class="text-center text-slate-500 dark:text-slate-400 py-8">No activity yet.</td></tr>';
+      } else {
+        rows.forEach((r) => {
+          const bal = (r.balanceAfter != null && !isNaN(r.balanceAfter)) ? `$${r.balanceAfter.toFixed(2)}` : '—';
+          htmlRows += `
+            <tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.dateTime}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.type}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.subtype}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.sewer.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.pastDue.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.surcharges.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.lateFee.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.amountPaid.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-slate-100">${bal}</td>
+            </tr>
+          `;
+        });
+      }
+
+      modal.innerHTML = `
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-7xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">All Previous Payments/Charges</h2>
+            <button onclick="hideAllLedgerModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="mb-4 text-sm text-slate-600 dark:text-slate-400">
+            <strong>Customer:</strong> ${customer.name} (${customer.accountNumber || customer.id})
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+              <thead class="bg-slate-50 dark:bg-slate-700">
+                <tr>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Date & Time</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Type</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Subtype</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Sewer</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Past Due</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Surcharges</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Late Fee</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Paid</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Balance After</th>
+                </tr>
+              </thead>
+              <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
+                ${htmlRows}
+              </tbody>
+            </table>
+          </div>
+          <div class="mt-6 flex justify-end">
+            <button onclick="hideAllLedgerModal()" class="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-blue-700 transition-colors">Close</button>
+          </div>
+        </div>
+      `;
+
+      modal.classList.remove('hidden');
+    }
+
+    window.hideAllLedgerModal = function() {
+      const modal = document.getElementById('allLedgerModal');
+      if (modal) modal.classList.add('hidden');
+    };
 
     function displayAllPaymentsModal(customer) {
       let modal = document.getElementById('allPaymentsModal');
@@ -18978,56 +19334,54 @@
             dateTimeDisplay = `${month}/${day}/${year} ${displayHours}:${minutes} ${ampm}`;
           }
 
-          const creditGiven = parseFloat(payment.creditGiven) || 0;
-          const methodLabel =
-            payment.paymentMethod ||
-            (payment.source === 'depositAutoApply'
-              ? 'Security deposit (auto)'
-              : payment.source === 'billingCycleClosed'
-                ? 'Billing cycle'
-                : '—');
           const fixAmtDue = Math.round((parseFloat(payment.amountDue) || 0) * 100) / 100;
           const fixAmtPaid = Math.round((parseFloat(payment.amountPaid) || 0) * 100) / 100;
 
           const lfRaw = payment.lateFeeAmount;
-          const lateFeeCell =
+          const lateFeeNum =
             lfRaw !== undefined && lfRaw !== null && !isNaN(parseFloat(lfRaw))
-              ? `$${parseFloat(lfRaw).toFixed(2)}`
-              : '—';
+              ? Math.round(parseFloat(lfRaw) * 100) / 100
+              : 0;
 
           const newDueVal = resolvedNewDue[index];
           const newDueCell =
             newDueVal !== null && !isNaN(newDueVal) ? `$${newDueVal.toFixed(2)}` : '—';
 
-          let chainNote = '';
-          if (index > 0) {
-            const prevNew = resolvedNewDue[index - 1];
-            const curDue = fixAmtDue;
-            if (prevNew != null && !isNaN(prevNew) && !isNaN(curDue)) {
-              if (Math.abs(prevNew - curDue) > 0.02) {
-                chainNote =
-                  ' title="Does not match previous row New Amount Due (older data or other balance changes)"';
-              }
-            }
+          // Prefer stored per-entry breakdown (new rows), then fall back to a best-effort split for legacy rows.
+          const legacyBaseNoLate = Math.max(0, fixAmtDue - lateFeeNum);
+          let sewerCharge = parseFloat(payment.sewerChargeOnBill ?? payment.sewerCharge ?? payment.sewer_charge_amount ?? payment.sewerChargeAmount);
+          let pastDueCharge = parseFloat(payment.pastDueOnBill ?? payment.pastDue ?? payment.previous_charges);
+          let surchargeCharge = parseFloat(payment.surchargesOnBill ?? payment.surcharges ?? payment.taxes_charges ?? payment.taxCodesOnBill);
+
+          if (isNaN(sewerCharge)) sewerCharge = NaN;
+          if (isNaN(pastDueCharge)) pastDueCharge = NaN;
+          if (isNaN(surchargeCharge)) surchargeCharge = NaN;
+
+          if (isNaN(sewerCharge) && isNaN(pastDueCharge) && isNaN(surchargeCharge)) {
+            sewerCharge = legacyBaseNoLate;
+            pastDueCharge = 0;
+            surchargeCharge = 0;
+          } else {
+            sewerCharge = isNaN(sewerCharge) ? 0 : sewerCharge;
+            pastDueCharge = isNaN(pastDueCharge) ? 0 : pastDueCharge;
+            surchargeCharge = isNaN(surchargeCharge)
+              ? Math.max(0, legacyBaseNoLate - sewerCharge - pastDueCharge)
+              : surchargeCharge;
           }
 
-          const dueCellClass =
-            index > 0 &&
-            resolvedNewDue[index - 1] != null &&
-            !isNaN(fixAmtDue) &&
-            Math.abs(resolvedNewDue[index - 1] - fixAmtDue) > 0.02
-              ? 'text-amber-700 dark:text-amber-300 font-medium'
-              : 'text-slate-900 dark:text-slate-100';
+          sewerCharge = Math.max(0, Math.round(sewerCharge * 100) / 100);
+          pastDueCharge = Math.max(0, Math.round(pastDueCharge * 100) / 100);
+          surchargeCharge = Math.max(0, Math.round(surchargeCharge * 100) / 100);
 
           paymentsHtml += `
             <tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${dateTimeDisplay}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm ${dueCellClass}"${chainNote}>$${fixAmtDue.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${sewerCharge.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${pastDueCharge.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${surchargeCharge.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${lateFeeNum.toFixed(2)}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${fixAmtPaid.toFixed(2)}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${lateFeeCell}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm ${creditGiven > 0 ? 'text-green-600 dark:text-green-400' : 'text-slate-500 dark:text-slate-400'}">${creditGiven > 0 ? `$${creditGiven.toFixed(2)}` : '—'}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${newDueCell}</td>
-              <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">${methodLabel}</td>
             </tr>
           `;
         });
@@ -19048,7 +19402,7 @@
               <strong>Customer:</strong> ${customer.name} (${customer.accountNumber || customer.id})
             </p>
             <p class="text-xs text-slate-500 dark:text-slate-400">
-              Oldest entries first. Each <strong>New Amount Due</strong> is the total owed after that row (should match the next row's <strong>Amount Due</strong> when the ledger is continuous). Billing cycle closes show <strong>$0.00</strong> paid when no payment was applied for that cycle close.
+              Oldest entries first. <strong>Current Due</strong> is the running balance after each row (what is still owed after that payment event). For older legacy rows, sewer/past due/surcharges may use a best-effort split if detailed components were not stored.
             </p>
           </div>
           <div class="overflow-x-auto">
@@ -19056,12 +19410,12 @@
               <thead class="bg-slate-50 dark:bg-slate-700">
                 <tr>
                   <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Date & Time</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Due</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Sewer Charge</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Past Due</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Surcharges</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Late Fee</th>
                   <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Paid</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Late fee (on bill)</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Credit Given</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">New Amount Due</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Method</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Current Due</th>
                 </tr>
               </thead>
               <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
@@ -19090,6 +19444,116 @@
         modal.classList.add('hidden');
       }
     }
+
+    function displayAllChargesModal(customer) {
+      let modal = document.getElementById('allChargesModal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'allChargesModal';
+        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden';
+        document.body.appendChild(modal);
+      }
+
+      const chargeHistory = Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [];
+      const sortedAsc = [...chargeHistory].sort((a, b) => getLedgerEntrySortMs(a) - getLedgerEntrySortMs(b));
+      let chargesHtml = '';
+      if (sortedAsc.length === 0) {
+        chargesHtml = '<tr><td colspan="6" class="text-center text-slate-500 dark:text-slate-400 py-8">No charge entries yet. A new row is added each time a bill is produced.</td></tr>';
+      } else {
+        sortedAsc.forEach((entry) => {
+          let dateTimeDisplay = entry.date || '—';
+          const rowDate = entry.timestamp ? new Date(entry.timestamp) : (entry.date ? parsePaymentDate(entry.date) : null);
+          if (rowDate && !isNaN(rowDate.getTime())) {
+            const month = (rowDate.getMonth() + 1).toString().padStart(2, '0');
+            const day = rowDate.getDate().toString().padStart(2, '0');
+            const year = rowDate.getFullYear();
+            const hours = rowDate.getHours();
+            const minutes = rowDate.getMinutes().toString().padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            const displayHours = hours % 12 || 12;
+            dateTimeDisplay = `${month}/${day}/${year} ${displayHours}:${minutes} ${ampm}`;
+          }
+
+          const sewerCharge = Math.round(Math.max(0, parseFloat(entry.sewerChargeOnBill || 0)) * 100) / 100;
+          const pastDue = Math.round(Math.max(0, parseFloat(entry.pastDueOnBill || 0)) * 100) / 100;
+          const surcharges = Math.round(Math.max(0, parseFloat(entry.surchargesOnBill || 0)) * 100) / 100;
+          const lateFee = Math.round(Math.max(0, parseFloat(entry.lateFeeAmount || 0)) * 100) / 100;
+          const currentDue = Math.round(Math.max(0, parseFloat(entry.currentDue || 0)) * 100) / 100;
+          const chargeType = entry.chargeSubtype ||
+            (entry.source === 'lateFeeAdded' && entry.calendarDaysLate != null && !isNaN(parseInt(entry.calendarDaysLate, 10))
+              ? `Late fee added (${parseInt(entry.calendarDaysLate, 10)} days late)`
+              : null) ||
+            entry.chargeType ||
+            (entry.source === 'lateFeeAdded' ? 'Late fee added' : 'Billed Customer');
+
+          chargesHtml += `
+            <tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${dateTimeDisplay}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${chargeType}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${sewerCharge.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${pastDue.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${surcharges.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${lateFee.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${currentDue.toFixed(2)}</td>
+            </tr>
+          `;
+        });
+      }
+
+      modal.innerHTML = `
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-6xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">All Previous Charges</h2>
+            <button onclick="hideAllChargesModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="mb-4 space-y-1">
+            <p class="text-sm text-slate-600 dark:text-slate-400">
+              <strong>Customer:</strong> ${customer.name} (${customer.accountNumber || customer.id})
+            </p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+              Oldest entries first. Charge Type shows whether the row came from billing ("Billed Customer") or a new overdue cycle ("Late fee added").
+            </p>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+              <thead class="bg-slate-50 dark:bg-slate-700">
+                <tr>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Date & Time</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Charge Type</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Sewer Charge</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Past Due</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Surcharges</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Late Fee</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Current Due</th>
+                </tr>
+              </thead>
+              <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
+                ${chargesHtml}
+              </tbody>
+            </table>
+          </div>
+          <div class="mt-6 flex justify-end">
+            <button 
+              onclick="hideAllChargesModal()" 
+              class="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      `;
+
+      modal.classList.remove('hidden');
+    }
+
+    window.hideAllChargesModal = function() {
+      const modal = document.getElementById('allChargesModal');
+      if (modal) modal.classList.add('hidden');
+    };
 
     // Helper function to parse payment date (MM/DD/YYYY format)
     function parsePaymentDate(dateString) {
@@ -19590,14 +20054,12 @@
         return;
       }
 
-      // Check if customer has importData
-      if (!customer.importData) {
-        alert('No imported data available for this customer. Please import customer data first.');
-        return;
-      }
-
       const modalContent = document.getElementById('customerDataProfileContent');
-      const headers = Object.keys(customer.importData);
+      const importHeaders = customer.importData && typeof customer.importData === 'object'
+        ? Object.keys(customer.importData)
+        : [];
+      const billAddrHeaders = ['City', 'State', 'Zip'];
+      const headers = importHeaders.length ? [...importHeaders, ...billAddrHeaders] : [...billAddrHeaders];
 
       // Build Excel-like table
       let tableHTML = `
@@ -19636,13 +20098,23 @@
 
       // Add data row
       headers.forEach(header => {
-        let value = customer.importData[header];
-        // Check if it's a date field and value is a number (Excel serial date)
-        const headerLower = String(header || '').toLowerCase();
-        if ((headerLower.includes('date') || headerLower.includes('billdate')) && typeof value === 'number') {
-          value = excelSerialToDate(value);
+        let value;
+        if (header === 'City') value = customer.mailingCity || '';
+        else if (header === 'State') value = customer.mailingState || '';
+        else if (header === 'Zip') value = customer.mailingZip || '';
+        else value = customer.importData ? customer.importData[header] : '';
+        if (
+          header !== 'City' &&
+          header !== 'State' &&
+          header !== 'Zip' &&
+          customer.importData
+        ) {
+          const headerLower = String(header || '').toLowerCase();
+          if ((headerLower.includes('date') || headerLower.includes('billdate')) && typeof value === 'number') {
+            value = excelSerialToDate(value);
+          }
         }
-        tableHTML += `<td class="px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400">${value || ''}</td>`;
+        tableHTML += `<td class="px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-400">${value !== undefined && value !== null ? value : ''}</td>`;
       });
 
       tableHTML += `
@@ -19668,7 +20140,7 @@
       const customerId = document.getElementById('customerDataProfileModal').getAttribute('data-customer-id');
       const customer = customers.find(c => c.id === customerId);
 
-      if (!customer || !customer.importData) {
+      if (!customer) {
         alert('No data available to copy');
         return;
       }
@@ -19676,13 +20148,22 @@
       // Build a readable text format of all the data
       let textToCopy = 'Customer Data Profile (Excel Preview)\n\n';
 
-      const headers = Object.keys(customer.importData);
+      const importHeaders = customer.importData && typeof customer.importData === 'object'
+        ? Object.keys(customer.importData)
+        : [];
+      const billAddrHeaders = ['City', 'State', 'Zip'];
+      const headers = importHeaders.length ? [...importHeaders, ...billAddrHeaders] : [...billAddrHeaders];
 
       // Add header row
       textToCopy += headers.join('\t') + '\n';
 
       // Add data row
-      const values = headers.map(header => customer.importData[header] || '');
+      const values = headers.map(header => {
+        if (header === 'City') return customer.mailingCity || '';
+        if (header === 'State') return customer.mailingState || '';
+        if (header === 'Zip') return customer.mailingZip || '';
+        return customer.importData ? (customer.importData[header] || '') : '';
+      });
       textToCopy += values.join('\t') + '\n';
 
       // Copy to clipboard
@@ -21221,6 +21702,21 @@
                 </button>
               </div>
 
+              <div class="bg-teal-50 dark:bg-teal-900/20 p-4 rounded-xl border border-teal-200 dark:border-teal-700">
+                <h3 class="font-semibold text-teal-800 dark:text-teal-200 mb-2">City / state / zip (bill PDF)</h3>
+                <p class="text-sm text-teal-700 dark:text-teal-300 mb-4">
+                  Set <strong>City</strong> (Salinas), <strong>State</strong> (California), and <strong>Zip</strong> (93907) on every customer. These fields appear as extra columns in each customer&apos;s data profile and feed the <code class="text-xs bg-teal-100 dark:bg-teal-900/40 px-1 rounded">address_city_state_zip</code> line on generated bill PDFs.
+                </p>
+                <button
+                  type="button"
+                  onclick="applyDefaultCityStateZipAllCustomers()"
+                  class="bg-teal-600 text-white px-6 py-3 rounded-lg hover:bg-teal-700 transition-colors font-medium"
+                  title="Set mailing city, state, and zip for all customers (bill PDF)"
+                >
+                  City zip
+                </button>
+              </div>
+
               <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-200 dark:border-blue-700">
                 <h3 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Data Synchronization</h3>
                 <p class="text-sm text-blue-600 dark:text-blue-300 mb-4">
@@ -22457,12 +22953,12 @@
               </div>
               <div class="flex justify-center mt-2">
                 <button 
-                  id="viewAllPaymentsBtn"
-                  onclick="showAllPaymentsModal()" 
+                  id="viewAllLedgerBtn"
+                  onclick="showAllPreviousPaymentsChargesModal()" 
                   class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium underline"
                   style="display: none;"
                 >
-                  View All Previous Payments
+                  View All Previous Payments/Charges
                 </button>
               </div>
             </div>
