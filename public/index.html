@@ -630,6 +630,7 @@
           if (customer.currentMonthPaid === undefined || customer.currentMonthPaid === null) {
             customer.currentMonthPaid = 0;
           }
+          syncLedgerOrderCounterFromHistory(customer);
           customers.push(customer);
         });
         filteredCustomers = [...customers];
@@ -1531,65 +1532,242 @@
       return realNow;
     };
 
-    // Set test date (called from Data Cleanup input)
-    window.setTestDate = async function(dateString) {
+    /** Parse YYYY-MM-DD as local calendar date (avoids UTC off-by-one). */
+    function parseLocalYMD(ymdStr) {
+      if (!ymdStr || typeof ymdStr !== 'string') return null;
+      const t = ymdStr.trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
+      const [y, m, d] = t.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    }
 
-      if (dateString && dateString.trim() !== '') {
-        const parsed = new Date(dateString);
-        if (!isNaN(parsed.getTime())) {
+    function formatLocalYMD(d) {
+      const y = d.getFullYear();
+      const mo = (d.getMonth() + 1).toString().padStart(2, '0');
+      const day = d.getDate().toString().padStart(2, '0');
+      return `${y}-${mo}-${day}`;
+    }
 
-          testDate = dateString;
+    function sameLocalCalendarDay(a, b) {
+      return (
+        a.getFullYear() === b.getFullYear() &&
+        a.getMonth() === b.getMonth() &&
+        a.getDate() === b.getDate()
+      );
+    }
 
-          // Save to Firestore settings
-          try {
+    function getEffectiveTestCalendarDate() {
+      const d = window.getCurrentDate();
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
 
-            const settingsRef = doc(db, 'settings', 'toggles');
-            await updateDoc(settingsRef, { testDate: dateString });
+    /**
+     * First local calendar date on which "days late after grace" reaches the start of cycle N
+     * (cycle 1 → 1 day late, cycle 2 → 31, …), matching getLateFeeCycleCount tiers.
+     */
+    function getFirstCalendarDateWhenLateFeeCycleStarts(customer, cycle) {
+      if (!customer || cycle < 1) return null;
+      const anchorIso = customer.lateFeeAnchorPrintDate || customer.lastBillPrintDate;
+      if (!anchorIso) return null;
+      try {
+        const a = new Date(anchorIso);
+        if (isNaN(a.getTime())) return null;
+        const anchorLocal = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+        const graceDays = 20;
+        const firstCalLateInCycle = 1 + (cycle - 1) * 30;
+        const daysSincePrintForFirstDayOfCycle = graceDays + firstCalLateInCycle;
+        const d = new Date(anchorLocal.getFullYear(), anchorLocal.getMonth(), anchorLocal.getDate());
+        d.setDate(d.getDate() + daysSincePrintForFirstDayOfCycle);
+        return d;
+      } catch (e) {
+        return null;
+      }
+    }
 
-          } catch (error) {
+    function formatSlashMDYFromDate(d) {
+      if (!d || isNaN(d.getTime())) return '';
+      const month = (d.getMonth() + 1).toString().padStart(2, '0');
+      const day = d.getDate().toString().padStart(2, '0');
+      const year = d.getFullYear();
+      return `${month}/${day}/${year}`;
+    }
 
-          }
-
-          updateTestDateDisplay();
-          // Refresh UI to reflect new date
-
-          updateDashboard();
-          if (document.getElementById('settingsModule') && !document.getElementById('settingsModule').classList.contains('hidden')) {
-
-            updateSettingsCustomerTable();
-          }
-        } else {
-          alert('Invalid date format. Please use YYYY-MM-DD format.');
-
-        }
-      } else {
-
-        testDate = null;
-
-        // Save null to Firestore settings
+    /**
+     * Run billing / late-fee / deposit rules for every customer at the current (test) date.
+     * Required when advancing the test date so ledger rows get the correct simulated day.
+     */
+    function runSimulatedDayForAllCustomers() {
+      if (!Array.isArray(customers) || customers.length === 0) return;
+      for (let i = 0; i < customers.length; i++) {
         try {
-
-          const settingsRef = doc(db, 'settings', 'toggles');
-          await updateDoc(settingsRef, { testDate: null });
-
-        } catch (error) {
-
-        }
-
-        updateTestDateDisplay();
-        // Refresh UI
-
-        updateDashboard();
-        if (document.getElementById('settingsModule') && !document.getElementById('settingsModule').classList.contains('hidden')) {
-
-          updateSettingsCustomerTable();
+          calculateCustomerTotal(customers[i]);
+        } catch (e) {
+          console.warn('[TestDate] calculateCustomerTotal', customers[i] && customers[i].id, e);
         }
       }
+    }
 
+    function refreshUiAfterTestDateChange() {
+      runSimulatedDayForAllCustomers();
+      updateTestDateDisplay();
+      updateDashboard();
+      if (
+        document.getElementById('settingsModule') &&
+        !document.getElementById('settingsModule').classList.contains('hidden')
+      ) {
+        updateSettingsCustomerTable();
+      }
+    }
+
+    function ensureTestDateAdvanceOverlayEl() {
+      let el = document.getElementById('testDateAdvanceOverlay');
+      if (el) return el;
+      el = document.createElement('div');
+      el.id = 'testDateAdvanceOverlay';
+      el.className =
+        'hidden fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/70 backdrop-blur-sm px-4';
+      el.innerHTML = `
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-lg w-full border border-slate-200 dark:border-slate-600">
+          <div class="flex flex-col items-center gap-4">
+            <div class="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent" aria-hidden="true"></div>
+            <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100 text-center">Advancing simulated calendar</h3>
+            <p id="testDateAdvanceOverlayHint" class="text-sm text-slate-600 dark:text-slate-300 text-center"></p>
+            <p id="testDateAdvanceOverlayCurrent" class="text-base font-mono font-medium text-blue-700 dark:text-blue-300 min-h-[1.5rem]"></p>
+            <p class="text-xs text-slate-500 dark:text-slate-400 text-center">Running billing rules for every account for each day. Please wait until this finishes.</p>
+          </div>
+        </div>
+      `;
+      el.setAttribute('role', 'dialog');
+      el.setAttribute('aria-modal', 'true');
+      el.setAttribute('aria-live', 'polite');
+      document.body.appendChild(el);
+      return el;
+    }
+
+    function showTestDateAdvanceOverlay(targetYmd) {
+      const el = ensureTestDateAdvanceOverlayEl();
+      const hint = el.querySelector('#testDateAdvanceOverlayHint');
+      if (hint) {
+        hint.textContent =
+          `Advancing toward ${targetYmd}, one calendar day at a time. ` +
+          'Late fees, deposits, and balances are recalculated for every account on each day.';
+      }
+      const cur = el.querySelector('#testDateAdvanceOverlayCurrent');
+      if (cur) cur.textContent = '';
+      el.classList.remove('hidden');
+    }
+
+    function updateTestDateAdvanceOverlay(currentYmd) {
+      const el = document.getElementById('testDateAdvanceOverlay');
+      const cur = el && el.querySelector('#testDateAdvanceOverlayCurrent');
+      if (cur) {
+        cur.textContent = currentYmd ? `Now simulating: ${currentYmd}` : '';
+      }
+    }
+
+    function hideTestDateAdvanceOverlay() {
+      const el = document.getElementById('testDateAdvanceOverlay');
+      if (el) el.classList.add('hidden');
+    }
+
+    let testDateAdvanceToken = 0;
+    const TEST_DATE_STEP_DELAY_MS = 280;
+
+    async function persistTestDateToFirestore(ymdOrNull) {
+      try {
+        const settingsRef = doc(db, 'settings', 'toggles');
+        await updateDoc(settingsRef, { testDate: ymdOrNull });
+      } catch (error) {
+        /* ignore */
+      }
+    }
+
+    /**
+     * Set test date. By default, walks one calendar day at a time from the current effective date
+     * to the target (inclusive) so time advances visibly. Use { skipAnimation: true } for instant jump.
+     * @param {string} dateString - YYYY-MM-DD or empty to clear
+     * @param {{ skipAnimation?: boolean, stepDelayMs?: number }} [options]
+     */
+    window.setTestDate = async function(dateString, options) {
+      options = options || {};
+
+      if (!dateString || String(dateString).trim() === '') {
+        testDateAdvanceToken++;
+        testDate = null;
+        await persistTestDateToFirestore(null);
+        const input = document.getElementById('testDateInput');
+        if (input) input.value = '';
+        refreshUiAfterTestDateChange();
+        return;
+      }
+
+      const targetStr = String(dateString).trim();
+      const targetD = parseLocalYMD(targetStr);
+      if (!targetD || isNaN(targetD.getTime())) {
+        alert('Invalid date format. Please use YYYY-MM-DD format.');
+        return;
+      }
+      const targetNorm = formatLocalYMD(targetD);
+
+      if (options.skipAnimation === true) {
+        testDateAdvanceToken++;
+        testDate = targetNorm;
+        await persistTestDateToFirestore(targetNorm);
+        const input = document.getElementById('testDateInput');
+        if (input) input.value = targetNorm;
+        refreshUiAfterTestDateChange();
+        return;
+      }
+
+      const startD = getEffectiveTestCalendarDate();
+      const tgt = new Date(targetD.getFullYear(), targetD.getMonth(), targetD.getDate());
+
+      if (sameLocalCalendarDay(startD, tgt)) {
+        testDateAdvanceToken++;
+        testDate = targetNorm;
+        await persistTestDateToFirestore(targetNorm);
+        const input = document.getElementById('testDateInput');
+        if (input) input.value = targetNorm;
+        refreshUiAfterTestDateChange();
+        return;
+      }
+
+      const myToken = ++testDateAdvanceToken;
+      const step = tgt > startD ? 1 : -1;
+      const delayMs =
+        typeof options.stepDelayMs === 'number' && options.stepDelayMs >= 0
+          ? options.stepDelayMs
+          : TEST_DATE_STEP_DELAY_MS;
+
+      let cur = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
+
+      showTestDateAdvanceOverlay(targetNorm);
+      try {
+        while (true) {
+          if (myToken !== testDateAdvanceToken) return;
+          cur.setDate(cur.getDate() + step);
+          const ymd = formatLocalYMD(cur);
+          testDate = ymd;
+          const input = document.getElementById('testDateInput');
+          if (input) input.value = ymd;
+          updateTestDateAdvanceOverlay(ymd);
+          refreshUiAfterTestDateChange();
+
+          if (sameLocalCalendarDay(cur, tgt)) break;
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          if (myToken !== testDateAdvanceToken) return;
+        }
+      } finally {
+        hideTestDateAdvanceOverlay();
+      }
+
+      if (myToken !== testDateAdvanceToken) return;
+      await persistTestDateToFirestore(formatLocalYMD(cur));
     };
 
     // Clear test date
     window.clearTestDate = async function() {
+      testDateAdvanceToken++;
 
       testDate = null;
       const input = document.getElementById('testDateInput');
@@ -1608,6 +1786,8 @@
       }
 
       updateTestDateDisplay();
+
+      runSimulatedDayForAllCustomers();
 
       // Refresh UI
 
@@ -3217,6 +3397,17 @@
       return `${month}/${day}/${year}`;
     }
 
+    function formatIsoDateStringToMMDDYYYY(isoStr) {
+      if (!isoStr) return '';
+      try {
+        const d = new Date(isoStr);
+        if (isNaN(d.getTime())) return '';
+        return formatDateMMDDYYYY(d);
+      } catch (e) {
+        return '';
+      }
+    }
+
     // Single source of truth for "Due Date":
     //   dueDate = bill print date + 20-day grace period (day 21 is first late day).
     // If we don't have a bill print date (older data), fall back to prior behavior.
@@ -4206,7 +4397,7 @@
 
       const billKey = customer.lateFeeAnchorPrintDate || customer.lastBillPrintDate;
       const now = window.getCurrentDate ? window.getCurrentDate() : new Date();
-      const formattedDate = (now.getMonth() + 1).toString().padStart(2, '0') + '/' +
+      const formattedFallback = (now.getMonth() + 1).toString().padStart(2, '0') + '/' +
         now.getDate().toString().padStart(2, '0') + '/' + now.getFullYear();
 
       let addedAny = false;
@@ -4228,15 +4419,22 @@
         if (feeIncrement <= 0) continue;
         const runningDueAfterCycle = Math.round(Math.max(0, getTotalOwedForLateTracking(customer, daysAtCycle)) * 100) / 100;
 
+        const eventDate = getFirstCalendarDateWhenLateFeeCycleStarts(customer, cycle);
+        const rowDateStr = eventDate ? formatSlashMDYFromDate(eventDate) : formattedFallback;
+        const rowTs = eventDate
+          ? new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate(), 12, 0, 0).toISOString()
+          : now.toISOString();
+
         customer.chargeHistory.push({
-          date: formattedDate,
-          timestamp: now.toISOString(),
+          date: rowDateStr,
+          timestamp: rowTs,
+          ledgerOrder: nextLedgerOrder(customer),
           source: 'lateFeeAdded',
           billPrintDate: billKey,
           lateFeeCycle: cycle,
-          calendarDaysLate: calLate,
+          calendarDaysLate: daysAtCycle,
           chargeType: 'Late fee added',
-          chargeSubtype: `Late fee added (${calLate} days late)`,
+          chargeSubtype: `Late fee added (${daysAtCycle} days late)`,
           sewerChargeOnBill: 0,
           pastDueOnBill: 0,
           surchargesOnBill: 0,
@@ -4430,6 +4628,7 @@
       customer.chargeHistory.push({
         date: formattedDate,
         timestamp: now.toISOString(),
+        ledgerOrder: nextLedgerOrder(customer),
         source: 'billingCharge',
         chargeType: 'Billed Customer',
         chargeSubtype: 'Billed Customer',
@@ -4545,6 +4744,31 @@
 
     /** Calendar days late (after print + grace) before security deposit auto-pay runs. */
     const DEPOSIT_AUTO_APPLY_DAYS_LATE = 60;
+
+    /**
+     * Shown on the next bill PDF after deposit auto-apply (see pendingDepositBillExplanation).
+     * Threshold is DEPOSIT_AUTO_APPLY_DAYS_LATE days after the 20-day grace period.
+     */
+    const DEPOSIT_AUTO_APPLY_BILL_LATE_PHRASE = '91+';
+
+    function getPendingDepositAutoApplyExplanationText(customer) {
+      const pending = customer && customer.pendingDepositBillExplanation;
+      if (!pending || typeof pending !== 'object') return '';
+      const anchor = formatIsoDateStringToMMDDYYYY(pending.anchorPrintDateIso);
+      if (!anchor || !pending.triggerDateStr) return '';
+      const amt = Math.round((parseFloat(pending.amountApplied) || 0) * 100) / 100;
+      return (
+        `You were marked as ${DEPOSIT_AUTO_APPLY_BILL_LATE_PHRASE} days late on ${pending.triggerDateStr} ` +
+        `due to you not paying your bill since ${anchor}. As a result, an amount of $${amt.toFixed(2)} was ` +
+        'taken from your deposit and used to pay your amount due.'
+      );
+    }
+
+    function clearPendingDepositBillExplanationIfPresent(customer) {
+      if (customer && Object.prototype.hasOwnProperty.call(customer, 'pendingDepositBillExplanation')) {
+        delete customer.pendingDepositBillExplanation;
+      }
+    }
 
     // Apply deposit automatically when a bill reaches the configured days-late threshold
     function maybeApplyDepositAt60Days(customer) {
@@ -4713,6 +4937,15 @@
         customer.deposit = Math.round((deposit - applied) * 100) / 100;
         customer.lastBill60DayDepositApplied = true;
 
+        const anchorIsoForBill =
+          customer.lateFeeAnchorPrintDate || customer.lastBillPrintDate || null;
+        customer.pendingDepositBillExplanation = {
+          triggerDateStr: depDateStr,
+          anchorPrintDateIso: anchorIsoForBill,
+          amountApplied: applied,
+          daysLateAfterGraceAtTrigger: calendarLate
+        };
+
         const allocSewer = Math.round((parseFloat(customer.currentMonthPaidSewer || 0) - beforeSewer) * 100) / 100;
         const allocTax = Math.round((parseFloat(customer.currentMonthPaidTaxCodes || 0) - beforeTax) * 100) / 100;
         const allocPuc = Math.round((parseFloat(customer.currentMonthPaidPuc || 0) - beforePuc) * 100) / 100;
@@ -4723,6 +4956,7 @@
         customer.paymentHistory.push({
           date: depDateStr,
           timestamp: today.toISOString(),
+          ledgerOrder: nextLedgerOrder(customer),
           amountDue: Math.round(totalOwed * 100) / 100,
           amountPaid: applied,
           creditGiven: null,
@@ -5168,6 +5402,11 @@
           statusText
         });
 
+        const hadPendingDepositExplanation = !!customer.pendingDepositBillExplanation;
+        const depositExplanationPdf = getPendingDepositAutoApplyExplanationText(customer);
+        formData.append('deposit_explaination', depositExplanationPdf || '');
+        formData.append('deposit_explanation', depositExplanationPdf || '');
+
         // Populate tax code fields (tax1, tax2, tax3, etc. and tax_charge1, tax_charge2, tax_charge3, etc.)
         // Limit to first 10 tax codes to match PDF field limits
         const maxTaxCodes = 10;
@@ -5258,6 +5497,10 @@
 
         // Real-world billing: roll forward + ledger row (Amount Paid $0) for this billing cycle
         try {
+          if (hadPendingDepositExplanation) {
+            clearPendingDepositBillExplanationIfPresent(customer);
+          }
+
           pushBillingCycleClosedLedgerRow(customer, calc, { now });
 
           console.log('[LateLogic] produceBill AFTER PDF:', {
@@ -5412,6 +5655,9 @@
               Math.round((pdfCurrentDueNum + pastDueOpening + lateFeeAmount) * 100) / 100
             );
 
+            const depositExplainForSnapshot =
+              getPendingDepositAutoApplyExplanationText(customer) || '';
+
             // Save customer snapshot (pre–roll-forward, matches PDF)
             const customerSnapshot = {
               customerId: customer.id,
@@ -5444,7 +5690,9 @@
                 previous_charges: `$${Math.max(0, pastDueOpening).toFixed(2)}`,
                 late_fee: `$${Math.max(0, lateFeeAmount).toFixed(2)}`,
                 total_amount: `$${pdfTotalNum.toFixed(2)}`,
-                due_date: dueDateStr
+                due_date: dueDateStr,
+                deposit_explaination: depositExplainForSnapshot,
+                deposit_explanation: depositExplainForSnapshot
               }
             };
             billingCycleSnapshot.customerSnapshots.push(customerSnapshot);
@@ -5466,6 +5714,14 @@
             formData.append('late_fee', customerSnapshot.pdfData.late_fee || '$0.00');
             formData.append('total_amount', customerSnapshot.pdfData.total_amount);
             formData.append('due_date', customerSnapshot.pdfData.due_date);
+            formData.append(
+              'deposit_explaination',
+              customerSnapshot.pdfData.deposit_explaination || ''
+            );
+            formData.append(
+              'deposit_explanation',
+              customerSnapshot.pdfData.deposit_explanation || ''
+            );
 
             const calLateBatch = getCalendarDaysLateAfterGrace(customer, 20);
             const daysLateForBill = getCustomerDaysLate(customer);
@@ -5505,6 +5761,13 @@
             }
 
             const blob = await response.blob();
+
+            if (
+              customerSnapshot.pdfData.deposit_explaination ||
+              customerSnapshot.pdfData.deposit_explanation
+            ) {
+              clearPendingDepositBillExplanationIfPresent(customer);
+            }
 
             pushBillingCycleClosedLedgerRow(customer, calc, {
               now,
@@ -6184,6 +6447,7 @@
         const paymentRecord = {
           date: formattedDate,
           timestamp: timestamp, // Full timestamp for date/time display
+          ledgerOrder: nextLedgerOrder(customer),
           amountPaid: paymentAmount,
           amountDue: totalOwedBeforePayment,
           creditGiven: totalCreditGiven > 0 ? totalCreditGiven : null,
@@ -17644,6 +17908,7 @@
       customer.paymentHistory = [{
         date: payDateStr,
         timestamp: timestamp,
+        ledgerOrder: nextLedgerOrder(customer),
         amountDue: totalDue,
         amountPaid: totalDue,
         creditGiven: null,
@@ -17688,7 +17953,7 @@
       if (testDateInput) {
         testDateInput.value = todayStr;
       }
-      await window.setTestDate(todayStr);
+      await window.setTestDate(todayStr, { skipAnimation: true });
 
       if (typeof window.clearPaymentProcessingSession === 'function') {
         window.clearPaymentProcessingSession('test306090FreshStart');
@@ -17727,6 +17992,7 @@
           customer.pastDue = 0;
           customer.paymentHistory = [];
           customer.chargeHistory = [];
+          customer.ledgerOrderCounter = 0;
           customer.lastPayment = 'Never';
           customer.currentMonthPaid = 0;
           customer.currentMonthPaidSewer = 0;
@@ -17739,6 +18005,7 @@
           delete customer.lastPrintedStatementTotalDue;
           customer.lastBill60DayDepositApplied = false;
           delete customer.daysLate;
+          delete customer.pendingDepositBillExplanation;
 
           // Pay current-cycle charges in full on the (test) “today” so breakdown shows paid + $0 due
           applyTestFreshStartFullPayForCustomer(customer);
@@ -17854,6 +18121,7 @@
             // Clear payment history
             customer.paymentHistory = [];
             customer.chargeHistory = [];
+            customer.ledgerOrderCounter = 0;
 
             // Reset lastPayment to 'Never'
             customer.lastPayment = 'Never';
@@ -19256,6 +19524,39 @@
       return 0;
     }
 
+    /** Monotonic sequence for payment + charge rows so same-moment events sort in true creation order. */
+    function getLedgerEntryOrder(entry) {
+      if (!entry || entry.ledgerOrder == null || entry.ledgerOrder === '') return 0;
+      const n = Number(entry.ledgerOrder);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    function nextLedgerOrder(customer) {
+      if (!customer) return 1;
+      const cur = Number(customer.ledgerOrderCounter);
+      const base = Number.isFinite(cur) && cur >= 0 ? cur : 0;
+      const next = base + 1;
+      customer.ledgerOrderCounter = next;
+      return next;
+    }
+
+    function syncLedgerOrderCounterFromHistory(customer) {
+      if (!customer) return;
+      let max = 0;
+      const scan = (arr) => {
+        if (!Array.isArray(arr)) return;
+        arr.forEach(e => {
+          if (e && e.ledgerOrder != null && Number.isFinite(Number(e.ledgerOrder))) {
+            max = Math.max(max, Number(e.ledgerOrder));
+          }
+        });
+      };
+      scan(customer.chargeHistory);
+      scan(customer.paymentHistory);
+      const curCo = Number(customer.ledgerOrderCounter);
+      customer.ledgerOrderCounter = Math.max(max, Number.isFinite(curCo) && curCo >= 0 ? curCo : 0);
+    }
+
     function formatLedgerDateTime(entry) {
       let dateTimeDisplay = entry.date || '—';
       const d = entry.timestamp ? new Date(entry.timestamp) : (entry.date ? parsePaymentDate(entry.date) : null);
@@ -19282,7 +19583,12 @@
       }
 
       const paymentHistory = Array.isArray(customer.paymentHistory) ? customer.paymentHistory : [];
-      const paymentSortedAsc = [...paymentHistory].sort((a, b) => getLedgerEntrySortMs(a) - getLedgerEntrySortMs(b));
+      const paymentSortedAsc = [...paymentHistory].sort((a, b) => {
+        const ma = getLedgerEntrySortMs(a);
+        const mb = getLedgerEntrySortMs(b);
+        if (ma !== mb) return ma - mb;
+        return getLedgerEntryOrder(a) - getLedgerEntryOrder(b);
+      });
       const currentTotalDue =
         typeof calculateCustomerTotal === 'function'
           ? Math.round(Math.max(0, calculateCustomerTotal(customer).total) * 100) / 100
@@ -19341,6 +19647,7 @@
         return {
           sourceKind: 'payment',
           sortMs: getLedgerEntrySortMs(p),
+          ledgerOrder: getLedgerEntryOrder(p),
           dateTime: formatLedgerDateTime(p),
           type: 'Payment',
           subtype,
@@ -19357,6 +19664,7 @@
       const chargeRows = chargeHistory.map((c) => ({
         sourceKind: 'charge',
         sortMs: getLedgerEntrySortMs(c),
+        ledgerOrder: getLedgerEntryOrder(c),
         dateTime: formatLedgerDateTime(c),
         type: 'Charge',
         subtype: c.chargeSubtype ||
@@ -19375,8 +19683,11 @@
 
       const rows = [...paymentRows, ...chargeRows].sort((a, b) => {
         if (a.sortMs !== b.sortMs) return a.sortMs - b.sortMs;
+        const oa = a.ledgerOrder != null ? a.ledgerOrder : 0;
+        const ob = b.ledgerOrder != null ? b.ledgerOrder : 0;
+        if (oa !== ob) return oa - ob;
         if (a.sourceKind === b.sourceKind) return 0;
-        // Same timestamp: charges before payments (e.g. late fee logged, then deposit applied same day)
+        // Legacy rows without ledgerOrder: charges before payments (late fee row, then deposit same day)
         return a.sourceKind === 'charge' ? -1 : 1;
       });
 
@@ -19459,7 +19770,12 @@
       }
 
       const paymentHistory = customer.paymentHistory || [];
-      const sortedAsc = [...paymentHistory].sort((a, b) => getLedgerEntrySortMs(a) - getLedgerEntrySortMs(b));
+      const sortedAsc = [...paymentHistory].sort((a, b) => {
+        const ma = getLedgerEntrySortMs(a);
+        const mb = getLedgerEntrySortMs(b);
+        if (ma !== mb) return ma - mb;
+        return getLedgerEntryOrder(a) - getLedgerEntryOrder(b);
+      });
       const currentTotalDue =
         typeof calculateCustomerTotal === 'function'
           ? Math.round(Math.max(0, calculateCustomerTotal(customer).total) * 100) / 100
@@ -19625,7 +19941,12 @@
       }
 
       const chargeHistory = Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [];
-      const sortedAsc = [...chargeHistory].sort((a, b) => getLedgerEntrySortMs(a) - getLedgerEntrySortMs(b));
+      const sortedAsc = [...chargeHistory].sort((a, b) => {
+        const ma = getLedgerEntrySortMs(a);
+        const mb = getLedgerEntrySortMs(b);
+        if (ma !== mb) return ma - mb;
+        return getLedgerEntryOrder(a) - getLedgerEntryOrder(b);
+      });
       let chargesHtml = '';
       if (sortedAsc.length === 0) {
         chargesHtml = '<tr><td colspan="6" class="text-center text-slate-500 dark:text-slate-400 py-8">No charge entries yet. A new row is added each time a bill is produced.</td></tr>';
@@ -20183,6 +20504,7 @@
         customer.deposit = parsed;
         // Reset deposit application flag when deposit changes (so we can re-test)
         customer.lastBill60DayDepositApplied = false;
+        delete customer.pendingDepositBillExplanation;
 
         const customersRef = collection(db, 'customers');
         const customerRef = doc(customersRef, customerId);
@@ -20419,6 +20741,7 @@
       const paymentRecord = {
         date: paymentDate,
         timestamp: today.toISOString(),
+        ledgerOrder: nextLedgerOrder(customer),
         amountDue: currentAmount,
         amountPaid: paymentAmount,
         remainingBalance: currentAmount - paymentAmount,
