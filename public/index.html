@@ -5247,34 +5247,58 @@
       hideCustomerBillInfo();
     }
 
+    /**
+     * Single source of truth for Process Bill customer info + Amount Breakdown (frozen snapshot from Produce Bill, else live calc + PDF lines).
+     */
+    function getProcessBillPanelAmounts(customer) {
+      if (!customer) {
+        return {
+          total: 0,
+          pastDue: 0,
+          lateFee: 0,
+          dueDateStr: '',
+          fromFrozen: false
+        };
+      }
+      const frozen = customer.processBillPanelFrozenSnapshot;
+      if (frozen && typeof frozen.amountDue === 'number') {
+        return {
+          total: Math.max(0, frozen.amountDue),
+          pastDue: Math.max(0, parseFloat(frozen.pastDue) || 0),
+          lateFee: Math.max(0, parseFloat(frozen.lateFee) || 0),
+          dueDateStr: frozen.dueDateStr || getBillDueDateStr(customer, 20),
+          fromFrozen: true
+        };
+      }
+      const calc = calculateCustomerTotal(customer, { billUiSnapshot: true });
+      const pastDue =
+        customer.lastBillPdfPastDueLine !== undefined && customer.lastBillPdfPastDueLine !== null
+          ? Math.max(0, parseFloat(customer.lastBillPdfPastDueLine) || 0)
+          : Math.max(0, calc.pastDue || 0);
+      return {
+        total: Math.max(0, calc.total),
+        pastDue,
+        lateFee: Math.max(0, calc.lateFeeAmount || 0),
+        dueDateStr: getBillDueDateStr(customer, 20),
+        fromFrozen: false
+      };
+    }
+
     function showCustomerBillInfo(customerId) {
       const customer = customers.find(c => c.id === customerId);
       if (customer) {
         const frozen = customer.processBillPanelFrozenSnapshot;
-        let totalAmount;
-        let pastDueDisplay;
-        let lateFeeAmount;
-        let dueDateStr;
+        const amts = getProcessBillPanelAmounts(customer);
+        const totalAmount = amts.total;
+        const pastDueDisplay = amts.pastDue;
+        const lateFeeAmount = amts.lateFee;
+        const dueDateStr = amts.dueDateStr || getBillDueDateStr(customer, 20);
         let statusClass;
         let statusLabel;
-
         if (frozen && typeof frozen.amountDue === 'number') {
-          totalAmount = Math.max(0, frozen.amountDue);
-          pastDueDisplay = Math.max(0, frozen.pastDue);
-          lateFeeAmount = Math.max(0, frozen.lateFee);
-          dueDateStr = frozen.dueDateStr || getBillDueDateStr(customer, 20);
           statusClass = frozen.statusClass || getPaymentStatusBadgeClass(customer);
           statusLabel = frozen.statusLabel != null ? frozen.statusLabel : getPaymentStatusBadgeLabel(customer);
         } else {
-          // billUiSnapshot: skip late-fee charge-history rows only.
-          const calc = calculateCustomerTotal(customer, { billUiSnapshot: true });
-          totalAmount = Math.max(0, calc.total);
-          lateFeeAmount = calc.lateFeeAmount;
-          pastDueDisplay =
-            customer.lastBillPdfPastDueLine !== undefined && customer.lastBillPdfPastDueLine !== null
-              ? Math.max(0, parseFloat(customer.lastBillPdfPastDueLine) || 0)
-              : calc.pastDue;
-          dueDateStr = getBillDueDateStr(customer, 20);
           statusClass = getPaymentStatusBadgeClass(customer);
           statusLabel = getPaymentStatusBadgeLabel(customer);
         }
@@ -19153,17 +19177,15 @@
       if (!customer) return;
 
       opts = opts || {};
-      // Process Bill "View Details" uses billUiSnapshot so amounts match the panel (no calendar late fees until Produce Bill).
-      const calc = calculateCustomerTotal(
-        customer,
-        opts.billUiSnapshot ? { billUiSnapshot: true } : {}
-      );
+      // Same dollars as Process Bill customer info (frozen snapshot or billUiSnapshot calc + PDF past-due line).
+      const panel = getProcessBillPanelAmounts(customer);
+      const calc = calculateCustomerTotal(customer, { billUiSnapshot: true });
       const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
 
       // Check if customer has actually paid their bill in full
       // Show "paid" message if Total Due = $0.00 AND they have made payments
       const currentMonthPaid = parseFloat(customer.currentMonthPaid || 0);
-      const totalDue = Math.max(0, calc.total); // Clamp to 0 to avoid negative
+      const totalDue = Math.max(0, panel.total); // Clamp to 0 to avoid negative
       const hasPaymentHistory = customer.paymentHistory && Array.isArray(customer.paymentHistory) && customer.paymentHistory.length > 0;
       const isCurrentBillPaid = totalDue === 0 && (currentMonthPaid > 0 || hasPaymentHistory);
 
@@ -19365,18 +19387,18 @@
         }
       }
 
-      // Late Fee
+      // Late Fee (panel.lateFee matches Process Bill customer info / last PDF)
       if (lateFeeSummaryRow) {
-        if (calc.lateFeeAmount > 0 || (customer.currentMonthPaidLateFee || 0) > 0) {
+        if (panel.lateFee > 0 || (customer.currentMonthPaidLateFee || 0) > 0) {
           lateFeeSummaryRow.classList.remove('hidden');
-          const lateRemaining = Math.max(0, (calc.lateFeeAmount || 0) - (customer.currentMonthPaidLateFee || 0));
+          const lateRemaining = Math.max(0, (panel.lateFee || 0) - (customer.currentMonthPaidLateFee || 0));
           if (lateFeeTotalEl) lateFeeTotalEl.textContent = `$${lateRemaining.toFixed(2)}`;
           if (lateFeeDetailsEl) {
             const baseRow = document.createElement('div');
             baseRow.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600 last:border-b-0';
             baseRow.innerHTML = `
               <span class="text-slate-600 dark:text-slate-300">Late Fee (base)</span>
-              <span class="font-medium text-slate-800 dark:text-slate-100">$${(calc.lateFeeAmount || 0).toFixed(2)}</span>
+              <span class="font-medium text-slate-800 dark:text-slate-100">$${(panel.lateFee || 0).toFixed(2)}</span>
             `;
             lateFeeDetailsEl.appendChild(baseRow);
 
@@ -19389,7 +19411,7 @@
               if (lateFeeMode === 'flat') {
                 hint.textContent =
                   `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (adds every 30 calendar days past the due date). ` +
-                  `Per cycle: $${Number(lateFeeFlat).toFixed(2)} → total late fee $${(calc.lateFeeAmount || 0).toFixed(2)}. ` +
+                  `Per cycle: $${Number(lateFeeFlat).toFixed(2)} → total late fee $${(panel.lateFee || 0).toFixed(2)}. ` +
                   `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
               } else if (lateFeeMode === 'percent') {
                 hint.textContent =
@@ -19420,10 +19442,10 @@
         }
       }
 
-      // Past Due
+      // Past Due (panel.pastDue matches Process Bill customer info / last PDF)
       if (pastDueSummaryRow) {
         // Show only if past due is positive or payments exist
-        const pastDueDisplay = Math.max(0, calc.pastDue || 0);
+        const pastDueDisplay = Math.max(0, panel.pastDue || 0);
         const pdPays = paymentsByCategory('Past due amount');
         if (pastDueDisplay > 0 || pdPays.length > 0) {
           pastDueSummaryRow.classList.remove('hidden');
@@ -19453,9 +19475,11 @@
         }
       }
 
-      // Due date is bill print date + 20-day grace (day 21 is first late day)
+      // Due date is bill print date + 20-day grace (day 21 is first late day); prefer panel string to match Process Bill
       const dueDateObj = getBillDueDateObj(customer, 20);
-      const dueDateStr = formatDateMMDDYYYY(dueDateObj);
+      const dueDateStr = panel.dueDateStr && String(panel.dueDateStr).trim()
+        ? panel.dueDateStr
+        : formatDateMMDDYYYY(dueDateObj);
 
       // Calculate billing cycle (month after due date)
       // If due date is in March, billing cycle is April.
@@ -19531,15 +19555,15 @@
         }
       }
 
-      // Display past due (only if positive)
+      // Display past due (only if positive) — panel.pastDue matches Process Bill
       const pastDueElement = document.getElementById('amountDetailsPastDue');
       const pastDueRow = document.getElementById('amountDetailsPastDueRow');
       if (pastDueElement && pastDueRow) {
-        if (calc.pastDue > 0) {
+        if (panel.pastDue > 0) {
           pastDueRow.style.display = 'flex';
-          pastDueElement.textContent = `$${calc.pastDue.toFixed(2)}`;
+          pastDueElement.textContent = `$${panel.pastDue.toFixed(2)}`;
       pastDueElement.setAttribute('data-customer-id', customerId);
-          pastDueElement.setAttribute('data-past-due', calc.pastDue.toFixed(2));
+          pastDueElement.setAttribute('data-past-due', panel.pastDue.toFixed(2));
         } else {
           pastDueRow.style.display = 'none';
           pastDueElement.setAttribute('data-customer-id', customerId);
@@ -19565,26 +19589,25 @@
 
       }
 
-      // Display current due (Sewer + Tax Codes only, NOT including Late Fee)
-      // Current Due = sewer remaining + tax codes remaining
+      // Current cycle portion after past due + late fee — matches panel total (same as Process Bill)
       const currentDueElement = document.getElementById('amountDetailsCurrentDue');
       if (currentDueElement) {
-        const sewerRemainingForCurrentDue = Math.max(0, (calc.adjustedServiceCost || 0) - (customer.currentMonthPaidSewer || 0));
-        const taxOnlyRem = Math.max(0, (calc.totalSurcharge || 0) - (customer.currentMonthPaidTaxCodes || 0));
-        const pucOnlyRem = Math.max(0, (calc.pucSurchargeAmount || 0) - (customer.currentMonthPaidPuc || 0));
-        const taxCodesRemainingForCurrentDue = taxOnlyRem + pucOnlyRem;
-        const currentDueDisplay = sewerRemainingForCurrentDue + taxCodesRemainingForCurrentDue;
-
-        currentDueElement.textContent = `$${currentDueDisplay.toFixed(2)}`;
+        const paidLateForPanel = parseFloat(customer.currentMonthPaidLateFee || 0) || 0;
+        const lateFeeRemainingPanel = Math.max(0, panel.lateFee - paidLateForPanel);
+        const currentDueFromPanel = Math.max(
+          0,
+          Math.round((panel.total - panel.pastDue - lateFeeRemainingPanel) * 100) / 100
+        );
+        currentDueElement.textContent = `$${currentDueFromPanel.toFixed(2)}`;
       }
 
-      // Show/hide Late Fee based on amount - show REMAINING late fee, not base
+      // Show/hide Late Fee — remaining vs panel late fee (matches Process Bill)
       const lateFeeRow = document.getElementById('amountDetailsLateFeeRow');
       const lateFeeElement = document.getElementById('amountDetailsLateFee');
       if (lateFeeRow && lateFeeElement) {
-        const lateFeeRemaining = Math.max(0, (calc.lateFeeAmount || 0) - (customer.currentMonthPaidLateFee || 0));
+        const lateFeeRemaining = Math.max(0, (panel.lateFee || 0) - (customer.currentMonthPaidLateFee || 0));
 
-        if (calc.lateFeeAmount > 0) {
+        if (panel.lateFee > 0) {
           lateFeeRow.style.display = 'flex';
           lateFeeElement.textContent = `$${lateFeeRemaining.toFixed(2)}`;
         } else {
@@ -19592,8 +19615,7 @@
         }
       }
 
-      // Use total from shared calculation function, but never show negative (clamp at 0)
-      const clampedTotal = Math.max(0, calc.total);
+      const clampedTotal = Math.max(0, panel.total);
 
       document.getElementById('amountDetailsTotal').textContent = `$${clampedTotal.toFixed(2)}`;
       document.getElementById('amountDetailsDueDate').textContent = dueDateStr;
