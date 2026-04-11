@@ -4939,16 +4939,32 @@
           return;
         }
 
-        // Use the same total as customer info / bills (calculateCustomerTotal), not getTotalOwedForLateTracking alone —
-        // the latter can double-count (statement total + current cycle) when stmt vs current-due dedupe does not match.
-        const calcBalance = calculateCustomerTotal(customer, { skipDepositAutoApply: true });
-        const balanceOwed = Math.max(0, parseFloat(calcBalance.total) || 0);
+        // Same dollars as Process Bill "Total Amount Due": frozen snapshot from last Produce Bill when present,
+        // else calculateCustomerTotal with billUiSnapshot (matches showCustomerBillInfo). Do not use the path that
+        // runs maybeAppendLateFeeChargeHistory without billUiSnapshot — it can inflate total vs the customer panel.
+        const frozenSnap = customer.processBillPanelFrozenSnapshot;
+        const hasFrozenDue = frozenSnap && typeof frozenSnap.amountDue === 'number';
+        const hasFrozenLate = frozenSnap && typeof frozenSnap.lateFee === 'number';
+        let calcUi = null;
+        if (!hasFrozenDue || !hasFrozenLate) {
+          calcUi = calculateCustomerTotal(customer, {
+            billUiSnapshot: true,
+            skipDepositAutoApply: true
+          });
+        }
+        const balanceOwed = hasFrozenDue
+          ? Math.max(0, frozenSnap.amountDue)
+          : Math.max(0, parseFloat(calcUi.total) || 0);
+        const lateFeeAmtForAlloc = hasFrozenLate
+          ? Math.max(0, frozenSnap.lateFee)
+          : Math.max(0, parseFloat(calcUi.lateFeeAmount) || 0);
         if (balanceOwed <= 0.005) {
           if (shouldLogDeposit) {
             console.log('[LateLogic] maybeApplyDepositAt60Days SKIP (nothing owed)', {
               customerId: customer.id,
               accountNumber: customer.accountNumber,
-              balanceOwed
+              balanceOwed,
+              usedFrozenDue: hasFrozenDue
             });
           }
           return;
@@ -4968,7 +4984,7 @@
         }
 
         const parts = getSubtotalBeforePucAndPucSurcharge(customer);
-        const lateFeeAmt = parseFloat(calcBalance.lateFeeAmount) || 0;
+        const lateFeeAmt = lateFeeAmtForAlloc;
         const { subtotalBeforePuc, pucSurchargeAmount, adjustedServiceCost, totalSurcharge } = parts;
         let paidSewer = parseFloat(customer.currentMonthPaidSewer || 0);
         let paidTax = parseFloat(customer.currentMonthPaidTaxCodes || 0);
