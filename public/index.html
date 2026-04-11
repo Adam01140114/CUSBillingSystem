@@ -123,7 +123,7 @@
     let sewerCharge = 170;
 
     // Late fee settings (loaded from Firebase)
-    // lateFeeMode: 'flat' | 'percent' | 'combination' — combination uses max(flat per cycle, % of base) × cycles.
+    // lateFeeMode: 'flat' | 'percent' | 'combination' — flat-only uses $ × 30-day cycles; percent = % of past due once; combination = max(flat $, % of past due), both once (matches typical bill language).
     let lateFeeFlat = 20;
     let lateFeePercent = 0;
     let lateFeeMode = 'flat';
@@ -1600,7 +1600,7 @@
       if (!Array.isArray(customers) || customers.length === 0) return;
       for (let i = 0; i < customers.length; i++) {
         try {
-          calculateCustomerTotal(customers[i]);
+          calculateCustomerTotal(customers[i], { billUiSnapshot: true });
         } catch (e) {
           console.warn('[TestDate] calculateCustomerTotal', customers[i] && customers[i].id, e);
         }
@@ -1797,6 +1797,28 @@
         updateSettingsCustomerTable();
       }
 
+    };
+
+    /** Move simulated calendar 21 days forward (same animation as Save with a future date). */
+    window.advanceTestDateBy21Days = async function() {
+      const startD = getEffectiveTestCalendarDate();
+      const tgt = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
+      tgt.setDate(tgt.getDate() + 21);
+      await window.setTestDate(formatLocalYMD(tgt), {});
+    };
+
+    /** Wall-clock today (not the simulated date) — for Reset. */
+    window.resetTestDateToRealToday = async function() {
+      const r = new Date();
+      const ymd = formatLocalYMD(new Date(r.getFullYear(), r.getMonth(), r.getDate()));
+      await window.setTestDate(ymd, { skipAnimation: true });
+    };
+
+    /** Persist whenever the date input changes (picker or keyboard). */
+    window.applyTestDateFromInput = async function() {
+      const input = document.getElementById('testDateInput');
+      if (!input) return;
+      await window.setTestDate((input.value || '').trim(), { skipAnimation: true });
     };
 
     // Update test date display
@@ -3223,23 +3245,91 @@
     }
 
     /**
-     * Amount due (current bill + past due) before late fees — used as the base for percentage late fees.
+     * Unpaid balance from the last printed bill (lastPrintedStatementTotalDue minus payments after that bill).
+     * Used when pastDue has not yet been rolled forward but the prior statement is still owed (e.g. before 2nd bill).
+     */
+    function getOutstandingLastStatementUnpaid(customer) {
+      if (!customer || !customer.lastBillPrintDate) return 0;
+      const lastStmt = parseFloat(customer.lastPrintedStatementTotalDue || 0);
+      if (isNaN(lastStmt) || lastStmt <= 0.005) return 0;
+      const billTime = new Date(customer.lastBillPrintDate).getTime();
+      if (isNaN(billTime)) return Math.max(0, lastStmt);
+      let paidAfter = 0;
+      const hist = customer.paymentHistory || [];
+      for (let i = 0; i < hist.length; i++) {
+        const p = hist[i];
+        if (!p || p.source === 'testFreshStart') continue;
+        const ts = p.timestamp ? new Date(p.timestamp).getTime() : 0;
+        if (ts > billTime) {
+          paidAfter += parseFloat(p.amountPaid || 0) || 0;
+        }
+      }
+      return Math.max(0, Math.round((lastStmt - paidAfter) * 100) / 100);
+    }
+
+    /** Persist PDF line items so Process Bill customer info matches the last generated bill (past due ≠ rolled pastDue+late lump). */
+    function setLastBillPdfLineSnapshots(customer, pastDueLine, lateFeeLine) {
+      if (!customer) return;
+      customer.lastBillPdfPastDueLine = Math.round(Math.max(0, parseFloat(pastDueLine) || 0) * 100) / 100;
+      customer.lastBillPdfLateFeeLine = Math.round(Math.max(0, parseFloat(lateFeeLine) || 0) * 100) / 100;
+    }
+
+    function clearLastBillPdfLineSnapshots(customer) {
+      if (!customer) return;
+      delete customer.lastBillPdfPastDueLine;
+      delete customer.lastBillPdfLateFeeLine;
+    }
+
+    /**
+     * Process Bill modal amounts + due date + status: frozen from the last Produce Bill only.
+     * Cleared on payment / fresh start so the panel can show live balances again.
+     */
+    function syncProcessBillPanelFrozenSnapshot(customer, pdfTotalAmount, pdfPreviousCharges, pdfLateFee) {
+      if (!customer) return;
+      const amountDue = Math.round(Math.max(0, parseFloat(pdfTotalAmount) || 0) * 100) / 100;
+      const pastDue = Math.round(Math.max(0, parseFloat(pdfPreviousCharges) || 0) * 100) / 100;
+      const lateFee = Math.round(Math.max(0, parseFloat(pdfLateFee) || 0) * 100) / 100;
+      const dueDateStr = getBillDueDateStr(customer, 20);
+      const statusClass = getPaymentStatusBadgeClass(customer);
+      const statusLabel = getPaymentStatusBadgeLabel(customer);
+      customer.processBillPanelFrozenSnapshot = {
+        amountDue,
+        pastDue,
+        lateFee,
+        dueDateStr,
+        statusClass,
+        statusLabel
+      };
+    }
+
+    function clearProcessBillPanelFrozenSnapshot(customer) {
+      if (!customer) return;
+      delete customer.processBillPanelFrozenSnapshot;
+    }
+
+    function clearProcessBillPanelDisplayData(customer) {
+      clearLastBillPdfLineSnapshots(customer);
+      clearProcessBillPanelFrozenSnapshot(customer);
+    }
+
+    /**
+     * Net past-due balance (after credit) — used as the base for percentage / combination late fees.
+     * Includes unpaid last statement when pastDue field is still zero (first bill did not roll into pastDue yet).
      */
     function getLateFeeBaseAmountBeforeFees(customer) {
       if (!customer) return 0;
-      const { subtotalBeforePuc, pucSurchargeAmount } = getSubtotalBeforePucAndPucSurcharge(customer);
       const pastDueRaw = parseFloat(customer.pastDue || 0);
       const pastDue = Math.max(0, pastDueRaw);
       const credit = Math.abs(Math.min(0, pastDueRaw));
-      const currentMonthPaid = parseFloat(customer.currentMonthPaid || 0);
-      const currentNoLate = Math.max(0, subtotalBeforePuc + pucSurchargeAmount - currentMonthPaid);
-      return Math.max(0, currentNoLate + pastDue - credit);
+      const fieldNet = Math.max(0, pastDue - credit);
+      const stmtUnpaid = getOutstandingLastStatementUnpaid(customer);
+      return Math.max(fieldNet, stmtUnpaid);
     }
 
     /**
      * Late fee $ for a customer given calendar days late (past grace).
-     * Flat: flatPerCycle × cycles. Percent: base × (percent/100) × cycles.
-     * Combination: max(flatPerCycle, base × percent/100) × cycles per cycle equivalently max(flat×c, pct×c).
+     * Flat: flatPerCycle × cycles (30-day tiers). Percent: past-due base × (percent/100) once — not multiplied by cycles.
+     * Combination: max(minimum flat $, % of past due) — same as “whichever is greater” on the bill; do not multiply flat by cycles.
      */
     function getLateFeeAmountForCustomerAndDaysLate(customer, calendarDaysLate) {
       const cycles = getLateFeeCycleCount(calendarDaysLate);
@@ -3247,11 +3337,11 @@
       const base = getLateFeeBaseAmountBeforeFees(customer);
       if (lateFeeMode === 'percent') {
         if (base <= 0) return 0;
-        return Math.round(base * (lateFeePercent / 100) * cycles * 100) / 100;
+        return Math.round(base * (lateFeePercent / 100) * 100) / 100;
       }
       if (lateFeeMode === 'combination') {
-        const flatPart = lateFeeFlat * cycles;
-        const pctPart = base > 0 ? base * (lateFeePercent / 100) * cycles : 0;
+        const pctPart = base > 0 ? base * (lateFeePercent / 100) : 0;
+        const flatPart = lateFeeFlat;
         return Math.round(Math.max(flatPart, pctPart) * 100) / 100;
       }
       return Math.round(lateFeeFlat * cycles * 100) / 100;
@@ -3352,7 +3442,12 @@
       const pastDue = Math.max(0, pastDueRaw);
       const credit = Math.abs(Math.min(0, pastDueRaw));
       const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, lateFeeAmt, parts);
-      return currentDue + pastDue - credit;
+      const stmtUnpaid = getOutstandingLastStatementUnpaid(customer);
+      const priorChain = stmtUnpaid > 0.005 ? stmtUnpaid : pastDue;
+      if (stmtUnpaid > 0.005 && Math.abs(stmtUnpaid - currentDue) < 0.02) {
+        return Math.max(0, Math.round((stmtUnpaid - credit) * 100) / 100);
+      }
+      return Math.max(0, Math.round((currentDue + priorChain - credit) * 100) / 100);
     }
 
     // Days late for UI + 30/60/90 search: calendar days *after* the 20-day grace from lateFeeAnchorPrintDate (or last bill if no anchor).
@@ -4451,12 +4546,21 @@
 
     // Shared function to calculate customer total amount breakdown
     // Returns an object with all calculated values
-    function calculateCustomerTotal(customer) {
+    // billUiSnapshot: when true (Process Bill UI + simulated date pass), skip appending late-fee ledger rows only.
+    // skipDepositAutoApply: when true, skip security-deposit auto-pay (avoids recursion when deposit logic needs the balance).
+    function calculateCustomerTotal(customer, opts) {
+      opts = opts || {};
+      const billUiSnapshot = opts.billUiSnapshot === true;
+      const skipDepositAutoApply = opts.skipDepositAutoApply === true;
 
       // Log new late-fee charge rows while there is still a balance, then apply deposit.
       // If deposit ran first, the balance could hit $0 and we'd skip logging the fee cycle that triggered deposit day.
-      maybeAppendLateFeeChargeHistory(customer);
-      maybeApplyDepositAt60Days(customer);
+      if (!billUiSnapshot) {
+        maybeAppendLateFeeChargeHistory(customer);
+      }
+      if (!skipDepositAutoApply) {
+        maybeApplyDepositAt60Days(customer);
+      }
 
       const baseServiceCost = calculateProratedServiceCost(customer);
       const pastDueRaw = parseFloat(customer.pastDue || 0);
@@ -4511,7 +4615,15 @@
       };
       const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, lateFeeAmount, subtotalParts);
 
-      const total = currentDue + pastDue - credit;
+      const stmtUnpaid = getOutstandingLastStatementUnpaid(customer);
+      const priorChain = stmtUnpaid > 0.005 ? stmtUnpaid : pastDue;
+      let total;
+      // When last statement unpaid equals current cycle remaining (same billing period, not yet a second bill), count once — avoids doubling 178.49+178.49.
+      if (stmtUnpaid > 0.005 && Math.abs(stmtUnpaid - currentDue) < 0.02) {
+        total = Math.round((stmtUnpaid - credit) * 100) / 100;
+      } else {
+        total = Math.round((currentDue + priorChain - credit) * 100) / 100;
+      }
 
       if (customer.lateFeeAnchorPrintDate && total <= 0.005) {
         delete customer.lateFeeAnchorPrintDate;
@@ -4553,10 +4665,13 @@
     /**
      * After a successful bill PDF: unpaid current-cycle balance (after payments) rolls into pastDue,
      * and current-month payment buckets reset — next view shows prior balance + a new period's charges.
+     * First-ever bill for this account does not roll current charges into pastDue (nothing is "past due" until
+     * a later bill runs while the prior statement was still unpaid).
      * @param {object} customer - mutated in place
      * @param {object} calc - result of calculateCustomerTotal(customer) for the bill that was just printed
+     * @param {boolean} rollUnpaidCurrentIntoPastDue - false on the first bill after no prior print date
      */
-    function applyBillProductionRollForward(customer, calc) {
+    function applyBillProductionRollForward(customer, calc, rollUnpaidCurrentIntoPastDue) {
       if (!customer || !calc) return;
       const prevPastDueRaw = parseFloat(customer.pastDue || 0);
       const prevPastDuePositive = Math.max(0, prevPastDueRaw);
@@ -4584,7 +4699,9 @@
       }
       customer.lastPrintedStatementTotalDue = Math.round(statementTotal * 100) / 100;
 
-      customer.pastDue = Math.round((prevPastDueRaw + unpaidCurrent) * 100) / 100;
+      if (rollUnpaidCurrentIntoPastDue !== false) {
+        customer.pastDue = Math.round((prevPastDueRaw + unpaidCurrent) * 100) / 100;
+      }
 
       customer.currentMonthPaid = 0;
       customer.currentMonthPaidSewer = 0;
@@ -4600,6 +4717,7 @@
         accountNumber: customer.accountNumber,
         grossCurrentOwed,
         unpaidCurrentRolledIntoPastDue: unpaidCurrent,
+        rollUnpaidCurrentIntoPastDue: rollUnpaidCurrentIntoPastDue !== false,
         newPastDue: customer.pastDue
       });
     }
@@ -4614,7 +4732,12 @@
       if (!Array.isArray(customer.chargeHistory)) customer.chargeHistory = [];
 
       const sewerChargeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.adjustedServiceCost) || 0) * 100) / 100;
-      const pastDueOnBill = Math.round(Math.max(0, parseFloat(customer.pastDue || 0)) * 100) / 100;
+      const pastDueOnBill = Math.round(
+        Math.max(
+          parseFloat(customer.pastDue || 0) || 0,
+          getOutstandingLastStatementUnpaid(customer)
+        ) * 100
+      ) / 100;
       const surchargesOnBill = Math.round(Math.max(0, (parseFloat(calcBeforeRoll.totalSurcharge) || 0) + (parseFloat(calcBeforeRoll.pucSurchargeAmount) || 0)) * 100) / 100;
       const lateFeeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.lateFeeAmount) || 0) * 100) / 100;
       // For charge history, "Current Due" is the billed statement subtotal for that row
@@ -4642,7 +4765,7 @@
       const openingPastDueForAnchor = parseFloat(customer.pastDue || 0);
       const previousLastBillPrintDate = customer.lastBillPrintDate;
 
-      applyBillProductionRollForward(customer, calcBeforeRoll);
+      applyBillProductionRollForward(customer, calcBeforeRoll, !!previousLastBillPrintDate);
       if (options.setBillDates !== false) {
         const printIso = now.toISOString();
         if (!customer.lateFeeAnchorPrintDate) {
@@ -4816,19 +4939,22 @@
           return;
         }
 
-        const totalOwed = getTotalOwedForLateTracking(customer, calendarLate);
-        if (totalOwed <= 0.005) {
+        // Use the same total as customer info / bills (calculateCustomerTotal), not getTotalOwedForLateTracking alone —
+        // the latter can double-count (statement total + current cycle) when stmt vs current-due dedupe does not match.
+        const calcBalance = calculateCustomerTotal(customer, { skipDepositAutoApply: true });
+        const balanceOwed = Math.max(0, parseFloat(calcBalance.total) || 0);
+        if (balanceOwed <= 0.005) {
           if (shouldLogDeposit) {
             console.log('[LateLogic] maybeApplyDepositAt60Days SKIP (nothing owed)', {
               customerId: customer.id,
               accountNumber: customer.accountNumber,
-              totalOwed
+              balanceOwed
             });
           }
           return;
         }
 
-        const appliedRaw = Math.min(deposit, totalOwed);
+        const appliedRaw = Math.min(deposit, balanceOwed);
         const applied = Math.round(appliedRaw * 100) / 100;
         if (applied <= 0) {
           if (shouldLogDeposit) {
@@ -4842,7 +4968,7 @@
         }
 
         const parts = getSubtotalBeforePucAndPucSurcharge(customer);
-        const lateFeeAmt = getLateFeeAmountForCustomerAndDaysLate(customer, calendarLate);
+        const lateFeeAmt = parseFloat(calcBalance.lateFeeAmount) || 0;
         const { subtotalBeforePuc, pucSurchargeAmount, adjustedServiceCost, totalSurcharge } = parts;
         let paidSewer = parseFloat(customer.currentMonthPaidSewer || 0);
         let paidTax = parseFloat(customer.currentMonthPaidTaxCodes || 0);
@@ -4861,7 +4987,7 @@
             customerId: customer.id,
             accountNumber: customer.accountNumber,
             calendarLate,
-            totalOwed,
+            balanceOwed,
             currentDue,
             pastDueNum,
             deposit,
@@ -4873,7 +4999,7 @@
           customerId: customer.id,
           accountNumber: customer.accountNumber,
           calendarLate,
-          totalOwed,
+          balanceOwed,
           currentDue,
           pastDueNum,
           deposit,
@@ -4932,7 +5058,7 @@
           customer.paymentHistory = [];
         }
         customer.lastPayment = depDateStr;
-        customer.lastPrintedStatementTotalDue = Math.round(totalOwed * 100) / 100;
+        customer.lastPrintedStatementTotalDue = Math.round(balanceOwed * 100) / 100;
 
         customer.deposit = Math.round((deposit - applied) * 100) / 100;
         customer.lastBill60DayDepositApplied = true;
@@ -4957,7 +5083,7 @@
           date: depDateStr,
           timestamp: today.toISOString(),
           ledgerOrder: nextLedgerOrder(customer),
-          amountDue: Math.round(totalOwed * 100) / 100,
+          amountDue: Math.round(balanceOwed * 100) / 100,
           amountPaid: applied,
           creditGiven: null,
           lateFeeAmount: Math.round((lateFeeAmt || 0) * 100) / 100,
@@ -4969,6 +5095,7 @@
           paymentMethod: 'Security deposit (auto)',
           source: 'depositAutoApply'
         });
+        clearProcessBillPanelDisplayData(customer);
 
         // Persist asynchronously; don't block UI
         if (typeof saveSingleCustomerToFirestore === 'function') {
@@ -5107,35 +5234,53 @@
     function showCustomerBillInfo(customerId) {
       const customer = customers.find(c => c.id === customerId);
       if (customer) {
-        // Single source of truth with Amount Breakdown modal, payments, and PDF (see calculateCustomerTotal)
-        const calc = calculateCustomerTotal(customer);
-        const totalAmount = Math.max(0, calc.total);
-        const lateFeeAmount = calc.lateFeeAmount;
+        const frozen = customer.processBillPanelFrozenSnapshot;
+        let totalAmount;
+        let pastDueDisplay;
+        let lateFeeAmount;
+        let dueDateStr;
+        let statusClass;
+        let statusLabel;
+
+        if (frozen && typeof frozen.amountDue === 'number') {
+          totalAmount = Math.max(0, frozen.amountDue);
+          pastDueDisplay = Math.max(0, frozen.pastDue);
+          lateFeeAmount = Math.max(0, frozen.lateFee);
+          dueDateStr = frozen.dueDateStr || getBillDueDateStr(customer, 20);
+          statusClass = frozen.statusClass || getPaymentStatusBadgeClass(customer);
+          statusLabel = frozen.statusLabel != null ? frozen.statusLabel : getPaymentStatusBadgeLabel(customer);
+        } else {
+          // billUiSnapshot: skip late-fee charge-history rows only.
+          const calc = calculateCustomerTotal(customer, { billUiSnapshot: true });
+          totalAmount = Math.max(0, calc.total);
+          lateFeeAmount = calc.lateFeeAmount;
+          pastDueDisplay =
+            customer.lastBillPdfPastDueLine !== undefined && customer.lastBillPdfPastDueLine !== null
+              ? Math.max(0, parseFloat(customer.lastBillPdfPastDueLine) || 0)
+              : calc.pastDue;
+          dueDateStr = getBillDueDateStr(customer, 20);
+          statusClass = getPaymentStatusBadgeClass(customer);
+          statusLabel = getPaymentStatusBadgeLabel(customer);
+        }
 
         console.log('[LateLogic] showCustomerBillInfo:', {
           customerId: customer.id,
           accountNumber: customer.accountNumber,
+          frozen: !!frozen,
           totalAmount,
           lateFeeAmount,
-          subtotalBeforePuc: calc.subtotalBeforePuc,
-          pucSurchargeAmount: calc.pucSurchargeAmount,
-          pastDue: calc.pastDue
+          pastDueDisplay
         });
 
-        const dueDateStr = getBillDueDateStr(customer, 20);
-
-        // Set up status indicator
-        const statusClass = getPaymentStatusBadgeClass(customer);
-
         document.getElementById('billAmountDue').textContent = `$${totalAmount.toFixed(2)}`;
-        document.getElementById('billPastDue').textContent = `$${parseFloat(customer.pastDue || 0).toFixed(2)}`;
+        document.getElementById('billPastDue').textContent = `$${pastDueDisplay.toFixed(2)}`;
         document.getElementById('billDueDate').textContent = dueDateStr;
         document.getElementById('billLateFee').textContent = `$${lateFeeAmount.toFixed(2)}`;
 
         // Update status indicator
         const statusIndicator = document.getElementById('billStatusIndicator');
         statusIndicator.className = `inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusClass}`;
-        statusIndicator.textContent = getPaymentStatusBadgeLabel(customer);
+        statusIndicator.textContent = statusLabel;
 
         // Update property location
         document.getElementById('billPropertyLocation').textContent = customer.address;
@@ -5213,7 +5358,7 @@
           <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
-                <p class="text-sm text-slate-600 dark:text-slate-400">Current Amount Due</p>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Total Amount Due</p>
                 <p id="billAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
                 <button id="viewBillDetailsBtn" onclick="showBillDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
                   View Details
@@ -5257,7 +5402,7 @@
             <!-- PDF Display Container -->
             <div id="billPdfDisplay" class="hidden mt-4">
               <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Generated Bill PDF</h4>
-              <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: 600px;" title="Bill PDF Preview"></iframe>
+              <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 720px;" title="Bill PDF Preview"></iframe>
             </div>
           </div>
         </div>
@@ -5292,8 +5437,8 @@
           lastBill60DayDepositApplied: customer.lastBill60DayDepositApplied
         });
 
-        // Same totals as Amount Breakdown modal (PUC on sewer + codes, factor on codes, late fee, payments, 60-day deposit)
-        const calc = calculateCustomerTotal(customer);
+        // Full accrual: late fees and prior-statement balance apply at bill generation only (not while browsing / sim date).
+        const calc = calculateCustomerTotal(customer, { billUiSnapshot: false });
         const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
         const adjustedServiceCost = calc.adjustedServiceCost;
         const pastDue = parseFloat(customer.pastDue || 0);
@@ -5344,7 +5489,7 @@
         formData.append('days_in_cycle', String(daysInCycle));
         formData.append('print_date', formatDateMMDDYYYY(now));
         const pdfSewerChargeAmount = Math.max(0, Math.round(adjustedServiceCost * 100) / 100);
-        const pdfPreviousCharges = Math.max(0, Math.round((parseFloat(customer.pastDue || 0)) * 100) / 100);
+        const pdfPreviousCharges = Math.max(0, Math.round(getOutstandingLastStatementUnpaid(customer) * 100) / 100);
         const pdfLateFee = Math.max(0, Math.round((lateFeeAmount || 0) * 100) / 100);
         const pdfCurrentDue = getPdfCurrentDueFromSewerAndTaxCharges(pdfSewerChargeAmount, taxCodeDetails);
         const pdfTotalAmount = Math.max(0, Math.round((pdfCurrentDue + pdfPreviousCharges + pdfLateFee) * 100) / 100);
@@ -5474,7 +5619,7 @@
             pdfContainer.className = 'mt-4';
             pdfContainer.innerHTML = `
               <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Generated Bill PDF</h4>
-              <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: 600px;" title="Bill PDF Preview"></iframe>
+              <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 720px;" title="Bill PDF Preview"></iframe>
             `;
             customerBillInfo.appendChild(pdfContainer);
             document.getElementById('billPdfViewer').src = displayUrl;
@@ -5501,7 +5646,11 @@
             clearPendingDepositBillExplanationIfPresent(customer);
           }
 
+          setLastBillPdfLineSnapshots(customer, pdfPreviousCharges, pdfLateFee);
+
           pushBillingCycleClosedLedgerRow(customer, calc, { now });
+
+          syncProcessBillPanelFrozenSnapshot(customer, pdfTotalAmount, pdfPreviousCharges, pdfLateFee);
 
           console.log('[LateLogic] produceBill AFTER PDF:', {
             customerId: customer.id,
@@ -5637,10 +5786,11 @@
 
         for (const customer of cycleCustomers) {
           try {
-            const calc = calculateCustomerTotal(customer);
+            const calc = calculateCustomerTotal(customer, { billUiSnapshot: false });
             const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
             const adjustedServiceCost = calc.adjustedServiceCost;
             const pastDueOpening = parseFloat(customer.pastDue || 0);
+            const pdfOutstanding = getOutstandingLastStatementUnpaid(customer);
             const lateFeeAmount = calc.lateFeeAmount;
             const totalSurcharge = calc.totalSurcharge;
             const subtotalBeforePuc = calc.subtotalBeforePuc;
@@ -5652,7 +5802,7 @@
             const pdfCurrentDueNum = getPdfCurrentDueFromSewerAndTaxCharges(adjustedServiceCost, taxCodeDetails);
             const pdfTotalNum = Math.max(
               0,
-              Math.round((pdfCurrentDueNum + pastDueOpening + lateFeeAmount) * 100) / 100
+              Math.round((pdfCurrentDueNum + pdfOutstanding + lateFeeAmount) * 100) / 100
             );
 
             const depositExplainForSnapshot =
@@ -5687,7 +5837,7 @@
                 sewer_charge: 'Sewer Charge',
                 sewer_charge_amount: `$${Math.max(0, adjustedServiceCost).toFixed(2)}`,
                 current_due: `$${pdfCurrentDueNum.toFixed(2)}`,
-                previous_charges: `$${Math.max(0, pastDueOpening).toFixed(2)}`,
+                previous_charges: `$${Math.max(0, pdfOutstanding).toFixed(2)}`,
                 late_fee: `$${Math.max(0, lateFeeAmount).toFixed(2)}`,
                 total_amount: `$${pdfTotalNum.toFixed(2)}`,
                 due_date: dueDateStr,
@@ -5769,10 +5919,14 @@
               clearPendingDepositBillExplanationIfPresent(customer);
             }
 
+            setLastBillPdfLineSnapshots(customer, pdfOutstanding, lateFeeAmount);
+
             pushBillingCycleClosedLedgerRow(customer, calc, {
               now,
               paymentMethod: `Billing cycle closed (batch cycle ${cycleNumber})`
             });
+
+            syncProcessBillPanelFrozenSnapshot(customer, pdfTotalNum, pdfOutstanding, lateFeeAmount);
             if (typeof saveSingleCustomerToFirestore === 'function') {
               await saveSingleCustomerToFirestore(customer);
             }
@@ -5850,7 +6004,7 @@
     window.showBillDetailsModal = function() {
       const customerId = typeof getBillSelectedCustomerId === 'function' ? getBillSelectedCustomerId() : '';
       if (customerId) {
-        showAmountDetails(customerId);
+        showAmountDetails(customerId, { billUiSnapshot: true });
       }
     };
 
@@ -6140,7 +6294,7 @@
           <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
-                <p class="text-sm text-slate-600 dark:text-slate-400">Current Amount Due</p>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Total Amount Due</p>
                 <p id="billAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
                 <button id="viewBillDetailsBtn" onclick="showBillDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
                   View Details
@@ -6184,7 +6338,7 @@
             <!-- PDF Display Container -->
             <div id="billPdfDisplay" class="hidden mt-4">
               <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Generated Bill PDF</h4>
-              <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: 600px;" title="Bill PDF Preview"></iframe>
+              <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 720px;" title="Bill PDF Preview"></iframe>
             </div>
           </div>
         </div>
@@ -6457,6 +6611,7 @@
         };
 
         customer.paymentHistory.push(paymentRecord);
+        clearProcessBillPanelDisplayData(customer);
 
         // If customer was pending closing and now has no balance, mark as inactive
         if (customer.paymentStatus === 'pending closing' && customer.pastDue === 0 && customer.currentBill === 0) {
@@ -6946,7 +7101,7 @@
           <div id="customerPaymentInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
-                <p class="text-sm text-slate-600 dark:text-slate-400">Current Amount Due</p>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Total Amount Due</p>
                 <p id="paymentAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
                 <button id="viewDetailsBtn" onclick="showPaymentDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
                   View Details
@@ -16498,10 +16653,10 @@
 
     function getLateFeeStatusSummary() {
       if (lateFeeMode === 'percent') {
-        return `Current value: ${lateFeePercent.toFixed(2)}% of amount due (before late fees)`;
+        return `Current value: ${lateFeePercent.toFixed(2)}% of past due`;
       }
       if (lateFeeMode === 'combination') {
-        return `Current value: max($${lateFeeFlat.toFixed(2)} or ${lateFeePercent.toFixed(2)}% of balance) per late-fee cycle`;
+        return `Current value: max($${lateFeeFlat.toFixed(2)} or ${lateFeePercent.toFixed(2)}% of past due)`;
       }
       return `Current value: $${lateFeeFlat.toFixed(2)} per 30‑day late period`;
     }
@@ -18003,6 +18158,7 @@
           delete customer.lastBillPrintDate;
           delete customer.lateFeeAnchorPrintDate;
           delete customer.lastPrintedStatementTotalDue;
+          clearProcessBillPanelDisplayData(customer);
           customer.lastBill60DayDepositApplied = false;
           delete customer.daysLate;
           delete customer.pendingDepositBillExplanation;
@@ -18976,12 +19132,16 @@
     };
 
     // Show amount details modal
-    window.showAmountDetails = function(customerId) {
+    window.showAmountDetails = function(customerId, opts) {
       const customer = customers.find(c => c.id === customerId);
       if (!customer) return;
 
-      // Use shared calculation function to ensure consistency
-      const calc = calculateCustomerTotal(customer);
+      opts = opts || {};
+      // Process Bill "View Details" uses billUiSnapshot so amounts match the panel (no calendar late fees until Produce Bill).
+      const calc = calculateCustomerTotal(
+        customer,
+        opts.billUiSnapshot ? { billUiSnapshot: true } : {}
+      );
       const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
 
       // Check if customer has actually paid their bill in full
@@ -19217,11 +19377,11 @@
                   `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
               } else if (lateFeeMode === 'percent') {
                 hint.textContent =
-                  `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (percent mode: % applies to balance before late fees). ` +
+                  `${Number(lateFeePercent).toFixed(2)}% of past due (not multiplied by the number of 30‑day late periods). ` +
                   `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
               } else {
                 hint.textContent =
-                  `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (combination: each cycle uses the greater of $${Number(lateFeeFlat).toFixed(2)} or ${Number(lateFeePercent).toFixed(2)}% of balance before late fees). ` +
+                  `Combination: max($${Number(lateFeeFlat).toFixed(2)}, ${Number(lateFeePercent).toFixed(2)}% of past due). ` +
                   `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
               }
               lateFeeDetailsEl.appendChild(hint);
@@ -20752,6 +20912,7 @@
 
       if (!Array.isArray(customer.paymentHistory)) customer.paymentHistory = [];
       customer.paymentHistory.push(paymentRecord);
+      clearProcessBillPanelDisplayData(customer);
 
       // Update last payment date
       customer.lastPayment = paymentDate;
@@ -21186,7 +21347,7 @@
             <div id="customerPaymentInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
               <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Current Amount Due</p>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Total Amount Due</p>
                   <p id="paymentAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
                   <button id="viewDetailsBtn" onclick="showPaymentDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
                     View Details
@@ -21282,7 +21443,7 @@
             <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
               <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Current Amount Due</p>
+                  <p class="text-sm text-slate-600 dark:text-slate-400">Total Amount Due</p>
                   <p id="billAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
                   <button id="viewBillDetailsBtn" onclick="showBillDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
                     View Details
@@ -21352,7 +21513,7 @@
               <!-- PDF Display Container -->
               <div id="billPdfDisplay" class="hidden mt-4">
                 <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Generated Bill PDF</h4>
-                <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: 600px;" title="Bill PDF Preview"></iframe>
+                <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 720px;" title="Bill PDF Preview"></iframe>
               </div>
             </div>
           </div>
@@ -21964,7 +22125,7 @@
               <div class="flex justify-between items-center mb-4">
                 <div>
                   <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Late Fee</h4>
-                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Flat per 30‑day late period (up to 3), percent of amount due before late fees, or combination (whichever is higher each cycle).</p>
+                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Flat per 30‑day late period (up to 3), percent of past due (not stacked each period), or combination (greater of the flat $ or % of past due — same as most printed policies).</p>
                 </div>
               </div>
               <div class="flex flex-wrap items-center gap-4 mb-4">
@@ -21975,7 +22136,7 @@
                 </label>
                 <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
                   <input type="radio" name="lateFeeMode" id="lateFeeModePercent" value="percent" class="rounded-full border-slate-300" onchange="syncLateFeeModeLabels()" />
-                  Percent of amount due (%)
+                  Percent of past due (%)
                 </label>
                 <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
                   <input type="radio" name="lateFeeMode" id="lateFeeModeCombination" value="combination" class="rounded-full border-slate-300" onchange="syncLateFeeModeLabels()" />
@@ -21995,7 +22156,7 @@
                   />
                 </div>
                 <div id="lateFeePercentFieldWrap" class="flex-1">
-                  <label id="lateFeePercentLabel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Percent of amount due (%)</label>
+                  <label id="lateFeePercentLabel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Percent of past due (%)</label>
                   <input 
                     type="number" 
                     id="lateFeePercentInput" 
@@ -22141,37 +22302,35 @@
               <div class="bg-slate-50 dark:bg-slate-900/20 p-4 rounded-xl border border-slate-200 dark:border-slate-700 mb-6">
                 <h3 class="font-semibold text-slate-800 dark:text-slate-200 mb-2">Test Date</h3>
                 <p class="text-sm text-slate-600 dark:text-slate-300 mb-4">
-                  Set a test date to simulate how the system behaves on different dates (e.g., when the month changes). Leave empty to use the real current date.
+                  Set a test date to simulate how the system behaves on different dates (e.g., when the month changes). Changes save automatically. Leave empty to use the real current date.
                 </p>
-                <div class="flex items-center gap-4">
-                  <div class="flex-1">
+                <div class="flex flex-wrap items-end gap-4">
+                  <div class="flex-1 min-w-[200px]">
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Today's Date</label>
                     <input 
                       type="date" 
                       id="testDateInput" 
                       class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       onclick="if (this.showPicker) this.showPicker()"
-                      onchange="setTestDate(this.value)"
+                      onchange="applyTestDateFromInput()"
                     />
                   </div>
-                  <div class="flex items-end">
+                  <div class="flex flex-wrap items-end gap-2">
                     <button 
                       type="button"
-                      onclick="clearTestDate()" 
+                      onclick="resetTestDateToRealToday()" 
                       class="bg-slate-500 text-white px-4 py-2 rounded-lg hover:bg-slate-600 transition-colors font-medium"
-                      title="Clear test date and use real current date"
+                      title="Set test date to today (real current calendar date)"
                     >
-                      Clear
+                      Reset
                     </button>
-                  </div>
-                  <div class="flex items-end">
                     <button 
                       type="button"
-                      onclick="setTestDate(document.getElementById('testDateInput').value)" 
-                      class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                      title="Save test date"
+                      onclick="advanceTestDateBy21Days()" 
+                      class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors font-medium"
+                      title="Set test date to 21 days after the current simulated date (runs advancing calendar animation)"
                     >
-                      Save
+                      21+ days
                     </button>
                   </div>
                 </div>
