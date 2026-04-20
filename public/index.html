@@ -576,6 +576,9 @@
       if (!customer || !customer.id) {
         throw new Error('Customer object with valid id is required');
       }
+      if (typeof syncPastDueCompositionToPastDueField === 'function') {
+        syncPastDueCompositionToPastDueField(customer);
+      }
       const customersRef = collection(db, 'customers');
       const customerRef = doc(customersRef, customer.id);
       await setDoc(customerRef, customer);
@@ -3254,13 +3257,32 @@
       if (isNaN(lastStmt) || lastStmt <= 0.005) return 0;
       const billTime = new Date(customer.lastBillPrintDate).getTime();
       if (isNaN(billTime)) return Math.max(0, lastStmt);
+      const billLo = Number.isFinite(Number(customer.lastBillPrintLedgerOrder))
+        ? Number(customer.lastBillPrintLedgerOrder)
+        : -1;
       let paidAfter = 0;
       const hist = customer.paymentHistory || [];
       for (let i = 0; i < hist.length; i++) {
         const p = hist[i];
         if (!p || p.source === 'testFreshStart') continue;
         const ts = p.timestamp ? new Date(p.timestamp).getTime() : 0;
+        if (isNaN(ts)) continue;
+        const payLoKnown =
+          typeof p.ledgerOrder === 'number' && Number.isFinite(Number(p.ledgerOrder));
+        const payLo = payLoKnown ? Number(p.ledgerOrder) : null;
+        let countsTowardStatement = false;
         if (ts > billTime) {
+          countsTowardStatement = true;
+        } else if (ts === billTime) {
+          if (billLo < 0) {
+            countsTowardStatement = true;
+          } else if (!payLoKnown) {
+            countsTowardStatement = true;
+          } else if (payLo > billLo) {
+            countsTowardStatement = true;
+          }
+        }
+        if (countsTowardStatement) {
           paidAfter += parseFloat(p.amountPaid || 0) || 0;
         }
       }
@@ -4533,6 +4555,8 @@
           sewerChargeOnBill: 0,
           pastDueOnBill: 0,
           surchargesOnBill: 0,
+          taxCodesOnBill: 0,
+          pucSurchargeOnBill: 0,
           lateFeeAmount: feeIncrement,
           currentDue: runningDueAfterCycle
         });
@@ -4699,8 +4723,12 @@
       }
       customer.lastPrintedStatementTotalDue = Math.round(statementTotal * 100) / 100;
 
+      ensurePastDueComposition(customer);
+      syncPastDueCompositionToPastDueField(customer);
       if (rollUnpaidCurrentIntoPastDue !== false) {
+        addRolledUnpaidCurrentToPastDueComposition(customer, calc, unpaidCurrent);
         customer.pastDue = Math.round((prevPastDueRaw + unpaidCurrent) * 100) / 100;
+        syncPastDueCompositionToPastDueField(customer);
       }
 
       customer.currentMonthPaid = 0;
@@ -4731,6 +4759,10 @@
       const now = options.now || (window.getCurrentDate ? window.getCurrentDate() : new Date());
       if (!Array.isArray(customer.chargeHistory)) customer.chargeHistory = [];
 
+      // Capture pre-roll state for anchor + bill line amounts (PDF columns match calc before roll)
+      const openingPastDueForAnchor = parseFloat(customer.pastDue || 0);
+      const previousLastBillPrintDate = customer.lastBillPrintDate;
+
       const sewerChargeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.adjustedServiceCost) || 0) * 100) / 100;
       const pastDueOnBill = Math.round(
         Math.max(
@@ -4738,7 +4770,9 @@
           getOutstandingLastStatementUnpaid(customer)
         ) * 100
       ) / 100;
-      const surchargesOnBill = Math.round(Math.max(0, (parseFloat(calcBeforeRoll.totalSurcharge) || 0) + (parseFloat(calcBeforeRoll.pucSurchargeAmount) || 0)) * 100) / 100;
+      const taxCodesOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.totalSurcharge) || 0) * 100) / 100;
+      const pucSurchargeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.pucSurchargeAmount) || 0) * 100) / 100;
+      const surchargesOnBill = Math.round((taxCodesOnBill + pucSurchargeOnBill) * 100) / 100;
       const lateFeeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.lateFeeAmount) || 0) * 100) / 100;
       // For charge history, "Current Due" is the billed statement subtotal for that row
       // (sum of displayed charge columns), not the net owed after prior payments.
@@ -4746,26 +4780,39 @@
         Math.max(0, sewerChargeOnBill + pastDueOnBill + surchargesOnBill + lateFeeOnBill) * 100
       ) / 100;
 
+      // Roll unpaid current into pastDue + composition BEFORE snapshotting the bill row — otherwise
+      // pastDueComposition would only get a drift adjustment into "Past due amount" and miss sewer/tax/PUC splits.
+      applyBillProductionRollForward(customer, calcBeforeRoll, !!previousLastBillPrintDate);
+
+      syncPastDueCompositionToPastDueField(customer);
+      const pastDueCompositionSnapshot = buildPastDueCompositionSnapshotForBillLine(
+        customer,
+        pastDueOnBill
+      );
+
       const formattedDate = (now.getMonth() + 1).toString().padStart(2, '0') + '/' +
         now.getDate().toString().padStart(2, '0') + '/' + now.getFullYear();
-      customer.chargeHistory.push({
+      const billLedgerOrder = nextLedgerOrder(customer);
+      const billRow = {
         date: formattedDate,
         timestamp: now.toISOString(),
-        ledgerOrder: nextLedgerOrder(customer),
+        ledgerOrder: billLedgerOrder,
         source: 'billingCharge',
         chargeType: 'Billed Customer',
         chargeSubtype: 'Billed Customer',
         sewerChargeOnBill,
         pastDueOnBill,
         surchargesOnBill,
+        taxCodesOnBill,
+        pucSurchargeOnBill,
         lateFeeAmount: lateFeeOnBill,
         currentDue: currentDueOnBill
-      });
-
-      const openingPastDueForAnchor = parseFloat(customer.pastDue || 0);
-      const previousLastBillPrintDate = customer.lastBillPrintDate;
-
-      applyBillProductionRollForward(customer, calcBeforeRoll, !!previousLastBillPrintDate);
+      };
+      if (pastDueCompositionSnapshot && pastDueOnBill > 0.005) {
+        billRow.pastDueComposition = pastDueCompositionSnapshot;
+      }
+      customer.chargeHistory.push(billRow);
+      customer.lastBillPrintLedgerOrder = billLedgerOrder;
       if (options.setBillDates !== false) {
         const printIso = now.toISOString();
         if (!customer.lateFeeAnchorPrintDate) {
@@ -5061,8 +5108,10 @@
           const pdPositive = Math.max(0, pastDueNum);
           const toPast = Math.min(remaining, pdPositive);
           if (toPast > 0) {
+            subtractFromPastDueComposition(customer, toPast);
             customer.pastDue = Math.round((pastDueNum - toPast) * 100) / 100;
             remaining = Math.round((remaining - toPast) * 100) / 100;
+            syncPastDueCompositionToPastDueField(customer);
           }
         }
 
@@ -5095,6 +5144,14 @@
         const allocPastDue = Math.round((beforePastDue - Math.max(0, parseFloat(customer.pastDue || 0))) * 100) / 100;
 
         const calcAfterDeposit = calculateCustomerTotal(customer);
+        const depositPaymentNumber = customer.paymentHistory.length + 1;
+        const depositBreakdown = mergeAppliedBreakdown({
+          'Late fees': allocLate,
+          'Past due amount': allocPastDue,
+          'Current amount due': allocSewer,
+          'Puc surcharge': allocPuc,
+          'Tax Codes': allocTax
+        });
         customer.paymentHistory.push({
           date: depDateStr,
           timestamp: today.toISOString(),
@@ -5106,10 +5163,14 @@
           lateFeePaidFromPayment: allocLate,
           sewerChargeOnBill: allocSewer,
           surchargesOnBill: Math.round((allocTax + allocPuc) * 100) / 100,
+          taxCodesOnBill: allocTax,
+          pucSurchargeOnBill: allocPuc,
           pastDueOnBill: allocPastDue,
           newAmountDue: Math.round(Math.max(0, calcAfterDeposit.total) * 100) / 100,
           paymentMethod: 'Security deposit (auto)',
-          source: 'depositAutoApply'
+          source: 'depositAutoApply',
+          paymentNumber: depositPaymentNumber,
+          appliedBreakdown: depositBreakdown
         });
         clearProcessBillPanelDisplayData(customer);
 
@@ -5407,6 +5468,7 @@
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
                 <p id="billPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                <button type="button" onclick="openProcessBillPastDueDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
               </div>
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
@@ -6343,6 +6405,7 @@
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
                 <p id="billPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                <button type="button" onclick="openProcessBillPastDueDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
               </div>
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
@@ -6547,6 +6610,7 @@
             case 'Past Due':
               applyToCategory('Past due amount', () => Math.max(0, pastDueRemaining), (applied) => {
                 pastDueRemaining -= applied;
+                subtractFromPastDueComposition(customer, applied);
                 customer.pastDue = pastDueRemaining;
               });
               break;
@@ -6599,13 +6663,17 @@
 
         if (creditGiven > 0) {
           const pastDueBeforeCredit = customer.pastDue || 0;
+          subtractFromPastDueComposition(customer, creditGiven);
           customer.pastDue = pastDueBeforeCredit - creditGiven;
 
         } else if (remainingPayment > 0) {
           const pastDueBeforeRemaining = customer.pastDue || 0;
+          subtractFromPastDueComposition(customer, remainingPayment);
           customer.pastDue = pastDueBeforeRemaining - remainingPayment;
 
         }
+
+        syncPastDueCompositionToPastDueField(customer);
 
         // Update trackers
         customer.currentMonthPaidSewer = paidSewer;
@@ -6647,7 +6715,9 @@
           creditGiven: totalCreditGiven > 0 ? totalCreditGiven : null,
           paymentMethod: paymentType,
           lateFeeAmount: Math.round(lateFeeBeforePayment * 100) / 100,
-          newAmountDue: Math.round(Math.max(0, calcAfterPayment.total) * 100) / 100
+          newAmountDue: Math.round(Math.max(0, calcAfterPayment.total) * 100) / 100,
+          paymentNumber: globalPaymentNumber,
+          appliedBreakdown: buildAppliedBreakdownFromPaymentsApplied(paymentsApplied)
         };
 
         customer.paymentHistory.push(paymentRecord);
@@ -18113,7 +18183,9 @@
         source: 'testFreshStart',
         sewerChargeOnBill: sewer,
         pastDueOnBill: Math.round(Math.max(0, parseFloat(calc.pastDue || 0)) * 100) / 100,
-        surchargesOnBill: surchargesCombined
+        surchargesOnBill: surchargesCombined,
+        taxCodesOnBill: taxOnly,
+        pucSurchargeOnBill: pucOnly
       }];
       customer.lastPayment = payDateStr;
       customer.lastPrintedStatementTotalDue = totalDue;
@@ -19451,20 +19523,46 @@
           pastDueSummaryRow.classList.remove('hidden');
           if (pastDueTotalEl) pastDueTotalEl.textContent = `$${pastDueDisplay.toFixed(2)}`;
           if (pastDueDetailsEl) {
-            const baseRow = document.createElement('div');
-            baseRow.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600 last:border-b-0';
-            baseRow.innerHTML = `
+            pastDueDetailsEl.innerHTML = '';
+            if (typeof syncPastDueCompositionToPastDueField === 'function') {
+              syncPastDueCompositionToPastDueField(customer);
+            }
+            const comp = customer.pastDueComposition;
+            const compSum =
+              comp && typeof sumPastDueComposition === 'function'
+                ? sumPastDueComposition(comp)
+                : 0;
+            const showComp =
+              pastDueDisplay > 0.005 &&
+              comp &&
+              compSum > 0.005 &&
+              typeof renderPastDueCompositionBreakdownHtml === 'function';
+            if (showComp) {
+              pastDueDetailsEl.insertAdjacentHTML(
+                'beforeend',
+                `<div class="mb-2 text-xs font-semibold text-slate-600 dark:text-slate-300">Past Due composition</div>${renderPastDueCompositionBreakdownHtml(
+                  comp,
+                  pastDueDisplay
+                )}`
+              );
+            } else {
+              const baseRow = document.createElement('div');
+              baseRow.className =
+                'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600 last:border-b-0';
+              baseRow.innerHTML = `
               <span class="text-slate-600 dark:text-slate-300">Past Due (remaining)</span>
               <span class="font-medium text-slate-800 dark:text-slate-100">$${pastDueDisplay.toFixed(2)}</span>
             `;
-            pastDueDetailsEl.appendChild(baseRow);
+              pastDueDetailsEl.appendChild(baseRow);
+            }
 
             pdPays.forEach((p) => {
               const paymentNum = p.paymentNumber || '?';
               const r = document.createElement('div');
-              r.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600 last:border-b-0';
+              r.className =
+                'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600 last:border-b-0';
               r.innerHTML = `
-                <span class="text-green-600 dark:text-green-400">Previous Payment #${paymentNum} (${p.date || '—'})</span>
+                <span class="text-green-600 dark:text-green-400">Previous Payment #${paymentNum} (${p.date || '—'}) — Past due</span>
                 <span class="font-medium text-green-600 dark:text-green-400">-$${(p.amount || 0).toFixed(2)}</span>
               `;
               pastDueDetailsEl.appendChild(r);
@@ -19771,6 +19869,716 @@
       return dateTimeDisplay;
     }
 
+    function getCanonicalHierarchyLabels() {
+      return (window.PAYMENT_HIERARCHY_DEFAULT || ['Late fees', 'Past due amount', 'Current amount due', 'Puc surcharge', 'Tax Codes']).slice();
+    }
+
+    /** Saved Payment Application Hierarchy order (same permutation as settings UI). */
+    function getHierarchyDisplayOrder() {
+      return normalizePaymentHierarchyOrder(window.paymentHierarchyOrder);
+    }
+
+    /** Modal-only label; storage / appliedBreakdown still use canonical "Current amount due". */
+    function displayHierarchyLabelForModal(canonicalKey) {
+      if (canonicalKey === 'Current amount due') return 'Sewer Charge';
+      return canonicalKey;
+    }
+
+    function roundMoney2(n) {
+      return Math.round((parseFloat(n) || 0) * 100) / 100;
+    }
+
+    function emptyPastDueComposition() {
+      const o = {};
+      getCanonicalHierarchyLabels().forEach((k) => {
+        o[k] = 0;
+      });
+      return o;
+    }
+
+    function sumPastDueComposition(comp) {
+      if (!comp) return 0;
+      return getCanonicalHierarchyLabels().reduce((s, k) => s + roundMoney2(comp[k]), 0);
+    }
+
+    function ensurePastDueComposition(customer) {
+      if (!customer.pastDueComposition || typeof customer.pastDueComposition !== 'object') {
+        customer.pastDueComposition = emptyPastDueComposition();
+      }
+      getCanonicalHierarchyLabels().forEach((k) => {
+        const v = parseFloat(customer.pastDueComposition[k]);
+        customer.pastDueComposition[k] = isNaN(v) ? 0 : roundMoney2(v);
+      });
+    }
+
+    /**
+     * Keeps customer.pastDueComposition sums aligned with customer.pastDue (single rolled balance field).
+     * Legacy customers: undifferentiated balance is placed in Past due amount until rolls/payments refine it.
+     */
+    function syncPastDueCompositionToPastDueField(customer) {
+      ensurePastDueComposition(customer);
+      const target = roundMoney2(Math.max(0, parseFloat(customer.pastDue) || 0));
+      let s = sumPastDueComposition(customer.pastDueComposition);
+      if (Math.abs(s - target) < 0.02) return;
+      if (target < 0.005) {
+        getCanonicalHierarchyLabels().forEach((k) => {
+          customer.pastDueComposition[k] = 0;
+        });
+        return;
+      }
+      if (s < 0.005) {
+        getCanonicalHierarchyLabels().forEach((k) => {
+          customer.pastDueComposition[k] = 0;
+        });
+        customer.pastDueComposition['Past due amount'] = target;
+        return;
+      }
+      const factor = target / s;
+      getCanonicalHierarchyLabels().forEach((k) => {
+        customer.pastDueComposition[k] = roundMoney2((customer.pastDueComposition[k] || 0) * factor);
+      });
+      s = sumPastDueComposition(customer.pastDueComposition);
+      let drift = roundMoney2(target - s);
+      if (Math.abs(drift) > 0.001) {
+        const keys = getCanonicalHierarchyLabels();
+        const pick =
+          keys.find((k) => roundMoney2(customer.pastDueComposition[k]) > 0.005) || 'Past due amount';
+        customer.pastDueComposition[pick] = roundMoney2(
+          (customer.pastDueComposition[pick] || 0) + drift
+        );
+      }
+    }
+
+    /** Proportional reduction when dollars are paid/credited against past due. */
+    function subtractFromPastDueComposition(customer, amount) {
+      if (!amount || amount < 0.005) return;
+      ensurePastDueComposition(customer);
+      const c = customer.pastDueComposition;
+      const total = sumPastDueComposition(c);
+      if (total < 0.005) return;
+      const take = Math.min(roundMoney2(amount), total);
+      const factor = (total - take) / total;
+      getCanonicalHierarchyLabels().forEach((k) => {
+        c[k] = roundMoney2((c[k] || 0) * factor);
+      });
+    }
+
+    /**
+     * Split rolled unpaid current-cycle balance into composition buckets using **remaining** amounts
+     * per category (after hierarchy payments), matching Amount Breakdown — not full bill line weights.
+     */
+    function addRolledUnpaidCurrentToPastDueComposition(customer, calc, unpaidCurrent) {
+      if (unpaidCurrent < 0.005) return;
+      ensurePastDueComposition(customer);
+      const c = customer.pastDueComposition;
+      const paidSewer = parseFloat(customer.currentMonthPaidSewer || 0);
+      const paidTax = parseFloat(customer.currentMonthPaidTaxCodes || 0);
+      const paidPuc = parseFloat(customer.currentMonthPaidPuc || 0);
+      const paidLate = parseFloat(customer.currentMonthPaidLateFee || 0);
+      const adjustedServiceCost = Math.max(0, calc.adjustedServiceCost || 0);
+      const totalSurcharge = Math.max(0, calc.totalSurcharge || 0);
+      const pucSurchargeAmount = Math.max(0, calc.pucSurchargeAmount || 0);
+      const lateFeeAmount = Math.max(0, calc.lateFeeAmount || 0);
+      const sewerRem = Math.max(0, roundMoney2(adjustedServiceCost - paidSewer));
+      const taxRem = Math.max(0, roundMoney2(totalSurcharge - paidTax));
+      const pucRem = Math.max(0, roundMoney2(pucSurchargeAmount - paidPuc));
+      const lateRem = Math.max(0, roundMoney2(lateFeeAmount - paidLate));
+      const sumRem = roundMoney2(sewerRem + taxRem + pucRem + lateRem);
+      if (sumRem < 0.005) {
+        c['Past due amount'] = roundMoney2((c['Past due amount'] || 0) + unpaidCurrent);
+        return;
+      }
+      const u = unpaidCurrent;
+      c['Current amount due'] = roundMoney2((c['Current amount due'] || 0) + u * (sewerRem / sumRem));
+      c['Tax Codes'] = roundMoney2((c['Tax Codes'] || 0) + u * (taxRem / sumRem));
+      c['Puc surcharge'] = roundMoney2((c['Puc surcharge'] || 0) + u * (pucRem / sumRem));
+      c['Late fees'] = roundMoney2((c['Late fees'] || 0) + u * (lateRem / sumRem));
+    }
+
+    function buildPastDueCompositionSnapshotForBillLine(customer, pastDueLineAmount) {
+      ensurePastDueComposition(customer);
+      syncPastDueCompositionToPastDueField(customer);
+      const line = roundMoney2(Math.max(0, pastDueLineAmount));
+      if (line < 0.005) return null;
+      const snap = JSON.parse(JSON.stringify(customer.pastDueComposition));
+      let s = sumPastDueComposition(snap);
+      if (Math.abs(s - line) > 0.02) {
+        const drift = roundMoney2(line - s);
+        snap['Past due amount'] = roundMoney2((snap['Past due amount'] || 0) + drift);
+        s = sumPastDueComposition(snap);
+        if (Math.abs(s - line) > 0.02 && s > 0.005) {
+          const f = line / s;
+          getCanonicalHierarchyLabels().forEach((k) => {
+            snap[k] = roundMoney2((snap[k] || 0) * f);
+          });
+          let s2 = sumPastDueComposition(snap);
+          const d2 = roundMoney2(line - s2);
+          if (Math.abs(d2) > 0.001) {
+            snap['Past due amount'] = roundMoney2((snap['Past due amount'] || 0) + d2);
+          }
+        }
+      }
+      return snap;
+    }
+
+    function renderPastDueCompositionBreakdownHtml(comp, expectedTotal) {
+      if (!comp || typeof comp !== 'object') return '';
+      const esc = (t) =>
+        String(t == null ? '' : t)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/"/g, '&quot;');
+      const order = getHierarchyDisplayOrder();
+      const lines = [];
+      order.forEach((k) => {
+        const v = roundMoney2(comp[k]);
+        if (v < 0.005) return;
+        lines.push(`
+          <div class="flex justify-between px-3 py-2 border-b border-slate-200 dark:border-slate-600 text-sm">
+            <span class="text-slate-600 dark:text-slate-300">${esc(displayHierarchyLabelForModal(k))}</span>
+            <span class="font-medium text-slate-900 dark:text-slate-100">$${v.toFixed(2)}</span>
+          </div>`);
+      });
+      if (!lines.length) {
+        return '<p class="text-xs text-slate-500 dark:text-slate-400 py-2">No non-zero buckets in this snapshot.</p>';
+      }
+      const sum = roundMoney2(sumPastDueComposition(comp));
+      const exp = roundMoney2(expectedTotal);
+      const foot =
+        Math.abs(sum - exp) > 0.03
+          ? `<div class="flex justify-between px-3 py-2 text-xs text-amber-700 dark:text-amber-300">Rounded total vs. line: $${sum.toFixed(2)} (line $${exp.toFixed(2)})</div>`
+          : '';
+      return `
+        <div class="rounded-lg border border-slate-200 dark:border-slate-600 overflow-hidden mb-2">
+          ${lines.join('')}
+          <div class="flex justify-between px-3 py-2 font-semibold text-sm bg-slate-50/80 dark:bg-slate-900/40 text-slate-800 dark:text-slate-100">
+            <span>Total (Past Due line)</span>
+            <span>$${exp.toFixed(2)}</span>
+          </div>
+          ${foot}
+        </div>`;
+    }
+
+    function emptyHierarchyBreakdown() {
+      const o = {};
+      getCanonicalHierarchyLabels().forEach((l) => {
+        o[l] = 0;
+      });
+      return o;
+    }
+
+    function mergeAppliedBreakdown(raw) {
+      const o = emptyHierarchyBreakdown();
+      if (raw && typeof raw === 'object') {
+        getCanonicalHierarchyLabels().forEach((l) => {
+          const v = parseFloat(raw[l]);
+          o[l] = Math.round((isNaN(v) ? 0 : v) * 100) / 100;
+        });
+      }
+      return o;
+    }
+
+    function normalizeCategoryToHierarchyLabel(cat) {
+      if (cat == null) return null;
+      const c = String(cat).trim();
+      if (getCanonicalHierarchyLabels().includes(c)) return c;
+      const legacy = {
+        'Late Fee': 'Late fees',
+        'Past Due': 'Past due amount',
+        'Sewer Charge': 'Current amount due'
+      };
+      return legacy[c] || null;
+    }
+
+    function buildAppliedBreakdownFromPaymentsApplied(paymentsApplied) {
+      const o = emptyHierarchyBreakdown();
+      (paymentsApplied || []).forEach((p) => {
+        const lab = normalizeCategoryToHierarchyLabel(p.category);
+        const amt = Math.round((parseFloat(p.amount) || 0) * 100) / 100;
+        if (lab && o[lab] !== undefined) o[lab] += amt;
+      });
+      getCanonicalHierarchyLabels().forEach((l) => {
+        o[l] = Math.round(o[l] * 100) / 100;
+      });
+      return o;
+    }
+
+    function breakdownFromCurrentMonthHistory(customer, paymentNumber) {
+      const o = emptyHierarchyBreakdown();
+      const hist = Array.isArray(customer.currentMonthPaymentHistory) ? customer.currentMonthPaymentHistory : [];
+      let any = false;
+      hist.forEach((h) => {
+        if (h && h.paymentNumber === paymentNumber) {
+          const lab = normalizeCategoryToHierarchyLabel(h.category);
+          const amt = Math.round((parseFloat(h.amount) || 0) * 100) / 100;
+          if (lab && o[lab] !== undefined) {
+            o[lab] += amt;
+            any = true;
+          }
+        }
+      });
+      if (any) {
+        getCanonicalHierarchyLabels().forEach((l) => {
+          o[l] = Math.round(o[l] * 100) / 100;
+        });
+        return o;
+      }
+      return null;
+    }
+
+    function computePaymentAppliedBreakdown(payment, customer, chronologicalIndex) {
+      if (!payment) return mergeAppliedBreakdown(null);
+      if (payment.appliedBreakdown && typeof payment.appliedBreakdown === 'object') {
+        return mergeAppliedBreakdown(payment.appliedBreakdown);
+      }
+      let pn = payment.paymentNumber;
+      if (pn == null || pn === undefined) pn = chronologicalIndex + 1;
+      const fromHist = breakdownFromCurrentMonthHistory(customer, pn);
+      if (fromHist) return fromHist;
+      return mergeAppliedBreakdown(null);
+    }
+
+    window.closeLedgerPaymentBreakdownModal = function() {
+      const el = document.getElementById('ledgerPaymentBreakdownModal');
+      if (el) el.classList.add('hidden');
+    };
+
+    window.closeLedgerPastDueBreakdownModal = function() {
+      const el = document.getElementById('ledgerPastDueBreakdownModal');
+      if (el) el.classList.add('hidden');
+    };
+
+    function renderPastDueSnapshotTable(sn) {
+      if (!sn) return '';
+      return `
+        <div class="text-xs text-slate-500 dark:text-slate-400 mb-1">${sn.dateTime}</div>
+        <div class="rounded-lg border border-slate-200 dark:border-slate-600 divide-y divide-slate-200 dark:divide-slate-600 text-sm">
+          <div class="flex justify-between px-3 py-2"><span class="text-slate-600 dark:text-slate-300">Sewer Charge</span><span class="font-medium text-slate-900 dark:text-slate-100">$${sn.sewer.toFixed(2)}</span></div>
+          <div class="flex justify-between px-3 py-2"><span class="text-slate-600 dark:text-slate-300">Past Due</span><span class="font-medium text-slate-900 dark:text-slate-100">$${sn.pastDue.toFixed(2)}</span></div>
+          <div class="flex justify-between px-3 py-2"><span class="text-slate-600 dark:text-slate-300">Tax Codes</span><span class="font-medium text-slate-900 dark:text-slate-100">$${sn.taxCodes.toFixed(2)}</span></div>
+          <div class="flex justify-between px-3 py-2"><span class="text-slate-600 dark:text-slate-300">PUC Surcharge</span><span class="font-medium text-slate-900 dark:text-slate-100">$${sn.puc.toFixed(2)}</span></div>
+          <div class="flex justify-between px-3 py-2"><span class="text-slate-600 dark:text-slate-300">Late Fee</span><span class="font-medium text-slate-900 dark:text-slate-100">$${sn.lateFee.toFixed(2)}</span></div>
+          <div class="flex justify-between px-3 py-2 font-semibold bg-slate-50/80 dark:bg-slate-900/40"><span class="text-slate-800 dark:text-slate-100">Statement total</span><span>$${sn.currentDue.toFixed(2)}</span></div>
+        </div>`;
+    }
+
+    function ledgerEscapeHtml(s) {
+      if (s == null) return '';
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function collectAccountingPaymentRowsForLedger(customer) {
+      const paymentHistory = Array.isArray(customer.paymentHistory) ? customer.paymentHistory : [];
+      const sortedAsc = [...paymentHistory].sort((a, b) => {
+        const ma = getLedgerEntrySortMs(a);
+        const mb = getLedgerEntrySortMs(b);
+        if (ma !== mb) return ma - mb;
+        return getLedgerEntryOrder(a) - getLedgerEntryOrder(b);
+      });
+      return sortedAsc.map((p, i) => {
+        const br = computePaymentAppliedBreakdown(p, customer, i);
+        const subtype =
+          p.paymentMethod ||
+          (p.source === 'depositAutoApply' ? 'Security deposit (auto)' : 'Payment');
+        return {
+          payment: p,
+          chronoIndex: i,
+          breakdown: br,
+          dateTime: formatLedgerDateTime(p),
+          subtype,
+          paymentNumber: p.paymentNumber
+        };
+      });
+    }
+
+    function renderAccountingPaymentsInnerTable(items) {
+      if (!items || items.length === 0) {
+        return '<p class="text-xs text-slate-500 dark:text-slate-400 py-2">No payment allocations found for this selection.</p>';
+      }
+      const body = items
+        .map(
+          (it) => `
+        <tr class="border-b border-slate-200 dark:border-slate-600">
+          <td class="py-1.5 pr-2 align-top">${ledgerEscapeHtml(it.dateTime)}</td>
+          <td class="py-1.5 pr-2 align-top">${ledgerEscapeHtml(it.subtype)}${
+            it.paymentNumber != null ? ` · #${ledgerEscapeHtml(String(it.paymentNumber))}` : ''
+          }</td>
+          <td class="py-1.5 text-right font-medium align-top">$${(it.amount || 0).toFixed(2)}</td>
+        </tr>`
+        )
+        .join('');
+      return `<div class="overflow-x-auto max-h-56 overflow-y-auto">
+        <table class="min-w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+              <th class="pb-1 font-medium">When</th>
+              <th class="pb-1 font-medium">Payment</th>
+              <th class="pb-1 text-right font-medium">Applied</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>`;
+    }
+
+    window.closeLedgerAccountingTotalModal = function() {
+      const el = document.getElementById('ledgerAccountingTotalModal');
+      if (el) el.classList.add('hidden');
+    };
+
+    window.ledgerAccountingOnTaxCodeSelect = function(selectedIndex) {
+      const host = document.getElementById('ledgerAccountingTaxCodePayments');
+      const data = window.__ledgerAccountingData;
+      if (!host || !data) return;
+      const opt = data.taxSelectOptions[selectedIndex];
+      if (!opt || opt === '__NONE__') {
+        host.innerHTML =
+          '<p class="text-xs text-slate-500 dark:text-slate-400 py-1">Select a tax code to list payments applied to that code.</p>';
+        return;
+      }
+      if (opt === '__AGGREGATE__') {
+        host.innerHTML = renderAccountingPaymentsInnerTable(data.aggregateTaxRows);
+        return;
+      }
+      const items = data.taxAllocByName[opt] || [];
+      host.innerHTML = renderAccountingPaymentsInnerTable(items);
+    };
+
+    window.openLedgerAccountingTotalModal = function() {
+      const customer = window.__ledgerAccountingCustomer;
+      if (!customer) return;
+      const rows = collectAccountingPaymentRowsForLedger(customer);
+      const totals = emptyHierarchyBreakdown();
+      rows.forEach((r) => {
+        getCanonicalHierarchyLabels().forEach((k) => {
+          totals[k] = Math.round(((totals[k] || 0) + (r.breakdown[k] || 0)) * 100) / 100;
+        });
+      });
+
+      let calc = null;
+      try {
+        calc = typeof calculateCustomerTotal === 'function' ? calculateCustomerTotal(customer) : null;
+      } catch (e) {
+        calc = null;
+      }
+      const pdfDetails = calc ? buildTaxCodeDetailsForPdf(customer, calc) : [];
+      const taxLines = (pdfDetails || []).filter((d) => d && !String(d.name || '').includes('PUC SCHG'));
+      const sumW = taxLines.reduce((s, d) => s + Math.max(0, d.amount || 0), 0);
+
+      const taxAllocByName = {};
+      taxLines.forEach((tl) => {
+        taxAllocByName[tl.name] = [];
+      });
+      rows.forEach((pr) => {
+        const pool = Math.max(0, pr.breakdown['Tax Codes'] || 0);
+        taxLines.forEach((tl) => {
+          const amt =
+            sumW > 0.005
+              ? Math.round(pool * (Math.max(0, tl.amount || 0) / sumW) * 100) / 100
+              : 0;
+          if (amt > 0.001) {
+            taxAllocByName[tl.name].push({
+              dateTime: pr.dateTime,
+              subtype: pr.subtype,
+              amount: amt,
+              paymentNumber: pr.paymentNumber
+            });
+          }
+        });
+      });
+
+      const aggregateTaxRows = rows
+        .filter((pr) => (pr.breakdown['Tax Codes'] || 0) > 0.005)
+        .map((pr) => ({
+          dateTime: pr.dateTime,
+          subtype: pr.subtype,
+          amount: Math.round((pr.breakdown['Tax Codes'] || 0) * 100) / 100,
+          paymentNumber: pr.paymentNumber
+        }));
+
+      const taxSelectOptions = ['__NONE__', '__AGGREGATE__'].concat(taxLines.map((t) => t.name));
+      window.__ledgerAccountingData = {
+        taxSelectOptions,
+        taxAllocByName,
+        aggregateTaxRows
+      };
+
+      const meta = window.__ledgerPaymentBreakdownModalMeta;
+      const order = getHierarchyDisplayOrder();
+
+      const sectionsHtml = order
+        .map((key) => {
+          const display = displayHierarchyLabelForModal(key);
+          const total = Math.round((totals[key] || 0) * 100) / 100;
+
+          if (key === 'Tax Codes') {
+            const selOptions = taxSelectOptions
+              .map((opt, i) => {
+                let label = '';
+                if (i === 0) label = 'Select a tax code…';
+                else if (opt === '__AGGREGATE__') label = 'All tax codes (combined)';
+                else label = opt;
+                return `<option value="${i}">${ledgerEscapeHtml(label)}</option>`;
+              })
+              .join('');
+            const taxNote =
+              taxLines.length > 0
+                ? `<p class="text-xs text-slate-500 dark:text-slate-400 mb-2">Pick a tax code to list payments. Amounts to each code are estimated from each payment&apos;s &quot;Tax Codes&quot; total using <strong>current</strong> tax-code weights (same proportions as on today&apos;s bill estimate).</p>`
+                : `<p class="text-xs text-slate-500 dark:text-slate-400 mb-2">No tax codes are configured on this customer; use &quot;All tax codes (combined)&quot; to see the full Tax Codes bucket per payment.</p>`;
+            return `
+            <details class="rounded-lg border border-slate-200 dark:border-slate-600 mb-2">
+              <summary class="cursor-pointer px-3 py-2 font-medium text-slate-800 dark:text-slate-100 flex justify-between items-center hover:bg-slate-50 dark:hover:bg-slate-700/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                <span>${ledgerEscapeHtml(display)}</span>
+                <span class="text-slate-600 dark:text-slate-300">$${total.toFixed(2)}</span>
+              </summary>
+              <div class="px-3 pb-3 pt-1 border-t border-slate-200 dark:border-slate-600">
+                ${taxNote}
+                <select id="ledgerAccountingTaxCodeSelect" class="w-full text-sm border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1.5 bg-white dark:bg-slate-800 mb-2" onchange="ledgerAccountingOnTaxCodeSelect(this.selectedIndex)">
+                  ${selOptions}
+                </select>
+                <div id="ledgerAccountingTaxCodePayments">
+                  <p class="text-xs text-slate-500 dark:text-slate-400 py-1">Select a tax code to list payments applied to that code.</p>
+                </div>
+              </div>
+            </details>`;
+          }
+
+          const items = [];
+          rows.forEach((pr) => {
+            const a = Math.round((pr.breakdown[key] || 0) * 100) / 100;
+            if (a > 0.005) {
+              items.push({
+                dateTime: pr.dateTime,
+                subtype: pr.subtype,
+                amount: a,
+                paymentNumber: pr.paymentNumber
+              });
+            }
+          });
+          const tableHtml = renderAccountingPaymentsInnerTable(items);
+          return `
+            <details class="rounded-lg border border-slate-200 dark:border-slate-600 mb-2">
+              <summary class="cursor-pointer px-3 py-2 font-medium text-slate-800 dark:text-slate-100 flex justify-between items-center hover:bg-slate-50 dark:hover:bg-slate-700/50 rounded-lg list-none [&::-webkit-details-marker]:hidden">
+                <span>${ledgerEscapeHtml(display)}</span>
+                <span class="text-slate-600 dark:text-slate-300">$${total.toFixed(2)}</span>
+              </summary>
+              <div class="px-3 pb-3 pt-1 border-t border-slate-200 dark:border-slate-600">${tableHtml}</div>
+            </details>`;
+        })
+        .join('');
+
+      let el = document.getElementById('ledgerAccountingTotalModal');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'ledgerAccountingTotalModal';
+        el.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] hidden';
+        document.body.appendChild(el);
+      }
+      el.innerHTML = `
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-4 border border-slate-200 dark:border-slate-600 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-start mb-3">
+            <div>
+              <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Accounting totals</h3>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">${meta && meta.customerLabel ? ledgerEscapeHtml(meta.customerLabel) : ''}</p>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Totals paid toward each Payment Application Hierarchy category (from stored payment breakdowns).</p>
+            </div>
+            <button type="button" onclick="closeLedgerAccountingTotalModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 shrink-0" aria-label="Close">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="space-y-1 mb-3">${sectionsHtml}</div>
+          <button type="button" onclick="closeLedgerAccountingTotalModal()" class="w-full bg-blue-600 text-white font-medium py-2 rounded-lg hover:bg-blue-700">Close</button>
+        </div>`;
+      el.classList.remove('hidden');
+    };
+
+    window.openLedgerPastDueBreakdown = function(rowIdx) {
+      const meta = window.__ledgerPaymentBreakdownModalMeta;
+      const pack = window.__ledgerPastDueBreakdownByRow && window.__ledgerPastDueBreakdownByRow[rowIdx];
+      if (!pack) return;
+      let el = document.getElementById('ledgerPastDueBreakdownModal');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'ledgerPastDueBreakdownModal';
+        el.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden';
+        document.body.appendChild(el);
+      }
+      const payBlock =
+        pack.rowKind === 'payment'
+          ? `<div class="mb-3 text-sm text-slate-700 dark:text-slate-200">
+              <span class="text-slate-500 dark:text-slate-400">Applied to Past due amount (this payment):</span>
+              <strong class="ml-1">$${(pack.paymentPastDueApplied != null ? pack.paymentPastDueApplied : 0).toFixed(2)}</strong>
+              ${Math.abs((pack.paymentPastDueApplied || 0) - pack.pastDue) > 0.02 ? ` <span class="text-xs text-slate-500">(Past Due column shows the statement snapshot: $${pack.pastDue.toFixed(2)})</span>` : ''}
+            </div>`
+          : '';
+      const stmtPay = pack.statementForPayment
+        ? `<div class="mb-3">
+            <p class="text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">Statement this payment applied to</p>
+            ${renderPastDueSnapshotTable(pack.statementForPayment)}
+          </div>`
+        : '';
+      const compositionBlock = pack.pastDueComposition
+        ? `<div class="mb-3">
+            <p class="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">Past Due composition (this bill line)</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mb-2 leading-relaxed">
+              Amounts below are the tracked portions of this Past Due balance by category (Sewer Charge, Tax Codes, PUC Surcharge, Late fees, and older rolled &quot;Past due&quot;). They are updated when payments apply to past due and when unpaid current-cycle charges roll into past due at billing.
+            </p>
+            ${renderPastDueCompositionBreakdownHtml(pack.pastDueComposition, pack.pastDue)}
+          </div>`
+        : `<div class="rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50/80 dark:bg-slate-900/30 px-3 py-2 mb-3">
+            <p class="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">Past Due composition</p>
+            <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">No saved breakdown for this row — only bills produced after this feature store a per-category split. The Past Due total above is still the rolled balance.</p>
+          </div>`;
+      el.innerHTML = `
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4 border border-slate-200 dark:border-slate-600 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-start mb-3">
+            <div>
+              <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Past Due details</h3>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">${meta && meta.customerLabel ? meta.customerLabel : ''}</p>
+              <p class="text-xs text-slate-500 dark:text-slate-400">${pack.dateTime || ''} · ${pack.rowKind === 'payment' ? 'Payment' : 'Charge'} · ${pack.subtype}</p>
+            </div>
+            <button type="button" onclick="closeLedgerPastDueBreakdownModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 shrink-0" aria-label="Close">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="rounded-xl border border-slate-200 dark:border-slate-600 px-3 py-2 mb-3 bg-slate-50/80 dark:bg-slate-900/40">
+            <div class="flex justify-between text-sm font-semibold text-slate-800 dark:text-slate-100">
+              <span>Past Due (this ledger row)</span>
+              <span>$${pack.pastDue.toFixed(2)}</span>
+            </div>
+          </div>
+          ${compositionBlock}
+          ${payBlock}
+          ${stmtPay}
+          ${pack.showNoPriorBillingStatement ? `<p class="text-xs text-slate-500 dark:text-slate-400 mb-3">This is the first billed statement on record; there is no prior bill to compare.</p>` : ''}
+          ${!pack.statementForPayment && pack.rowKind === 'payment' ? `<p class="text-xs text-slate-500 dark:text-slate-400 mb-3">No billing charge row was found before this payment to list statement line items.</p>` : ''}
+          <button type="button" onclick="closeLedgerPastDueBreakdownModal()" class="w-full bg-blue-600 text-white font-medium py-2 rounded-lg hover:bg-blue-700">Close</button>
+        </div>`;
+      el.classList.remove('hidden');
+    };
+
+    window.openProcessBillPastDueDetailsModal = function() {
+      const id = typeof getBillSelectedCustomerId === 'function' ? getBillSelectedCustomerId() : '';
+      if (!id) return;
+      const cust = typeof customers !== 'undefined' ? customers.find((c) => c.id === id) : null;
+      if (!cust) return;
+      openCustomerPastDueDetailsModal(cust);
+    };
+
+    window.openCustomerPastDueDetailsModal = function(customer) {
+      if (!customer) return;
+      if (typeof syncPastDueCompositionToPastDueField === 'function') {
+        syncPastDueCompositionToPastDueField(customer);
+      }
+      const pastDue = roundMoney2(Math.max(0, parseFloat(customer.pastDue) || 0));
+      const escM = (t) =>
+        String(t == null ? '' : t)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/"/g, '&quot;');
+      const metaLabel = escM(`${customer.name} (${customer.accountNumber || customer.id})`);
+      const comp = customer.pastDueComposition;
+      const compTotal =
+        comp && typeof sumPastDueComposition === 'function' ? sumPastDueComposition(comp) : 0;
+      const hasComp =
+        comp && typeof comp === 'object' && compTotal > 0.005 && pastDue > 0.005;
+      const compositionBlock = hasComp
+        ? `<div class="mb-3">
+            <p class="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">Past Due composition</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mb-2 leading-relaxed">
+              Tracked portions of the current past-due balance (same categories as your Payment Application Hierarchy).
+            </p>
+            ${renderPastDueCompositionBreakdownHtml(comp, pastDue)}
+          </div>`
+        : `<div class="rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50/80 dark:bg-slate-900/30 px-3 py-2 mb-3">
+            <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">No per-category breakdown is available yet, or the balance is $0.</p>
+          </div>`;
+
+      let el = document.getElementById('ledgerPastDueBreakdownModal');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'ledgerPastDueBreakdownModal';
+        el.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden';
+        document.body.appendChild(el);
+      }
+      el.innerHTML = `
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4 border border-slate-200 dark:border-slate-600 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-start mb-3">
+            <div>
+              <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Past Due details</h3>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">${metaLabel}</p>
+              <p class="text-xs text-slate-500 dark:text-slate-400">Current balance</p>
+            </div>
+            <button type="button" onclick="closeLedgerPastDueBreakdownModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 shrink-0" aria-label="Close">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="rounded-xl border border-slate-200 dark:border-slate-600 px-3 py-2 mb-3 bg-slate-50/80 dark:bg-slate-900/40">
+            <div class="flex justify-between text-sm font-semibold text-slate-800 dark:text-slate-100">
+              <span>Past Due balance</span>
+              <span>$${pastDue.toFixed(2)}</span>
+            </div>
+          </div>
+          ${compositionBlock}
+          <button type="button" onclick="closeLedgerPastDueBreakdownModal()" class="w-full bg-blue-600 text-white font-medium py-2 rounded-lg hover:bg-blue-700">Close</button>
+        </div>`;
+      el.classList.remove('hidden');
+    };
+
+    window.openLedgerPaymentBreakdown = function(rowIdx) {
+      const meta = window.__ledgerPaymentBreakdownModalMeta;
+      const pack = window.__ledgerPaymentBreakdownByRow && window.__ledgerPaymentBreakdownByRow[rowIdx];
+      if (!pack) return;
+      let el = document.getElementById('ledgerPaymentBreakdownModal');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'ledgerPaymentBreakdownModal';
+        el.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden';
+        document.body.appendChild(el);
+      }
+      const order = getHierarchyDisplayOrder();
+      const br = pack.breakdown || emptyHierarchyBreakdown();
+      const rowsHtml = order.map((label) => `
+        <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600 text-sm">
+          <span class="text-slate-700 dark:text-slate-300">${displayHierarchyLabelForModal(label)}</span>
+          <span class="font-medium text-slate-900 dark:text-slate-100">$${((br && br[label]) || 0).toFixed(2)}</span>
+        </div>`).join('');
+      const totalBr = order.reduce((s, l) => s + ((br && br[l]) || 0), 0);
+      const paid = pack.amountPaid;
+      const noDetail = totalBr < 0.005 && paid > 0.005;
+      const mismatch = Math.abs(totalBr - paid) > 0.02 && !noDetail;
+      el.innerHTML = `
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4 border border-slate-200 dark:border-slate-600">
+          <div class="flex justify-between items-start mb-4">
+            <div>
+              <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Payment application</h3>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">${meta && meta.customerLabel ? meta.customerLabel : ''}</p>
+              <p class="text-xs text-slate-500 dark:text-slate-400">${pack.dateTime || ''}</p>
+              <p class="text-xs text-slate-600 dark:text-slate-300 mt-0.5">${pack.subtype || 'Payment'}</p>
+            </div>
+            <button type="button" onclick="closeLedgerPaymentBreakdownModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1" aria-label="Close">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">How this payment was applied (same categories as your payment hierarchy):</p>
+          <div class="rounded-xl border border-slate-200 dark:border-slate-600 px-3 mb-3 bg-slate-50/80 dark:bg-slate-900/40">
+            ${rowsHtml}
+            <div class="flex justify-between items-center py-2 font-semibold text-sm text-slate-800 dark:text-slate-100">
+              <span>Total applied</span>
+              <span>$${totalBr.toFixed(2)}</span>
+            </div>
+          </div>
+          <div class="text-sm text-slate-600 dark:text-slate-300 mb-2">Amount paid (this entry): <strong>$${paid.toFixed(2)}</strong></div>
+          ${noDetail ? `<p class="text-xs text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-900/30 rounded-lg px-2 py-2 mb-2">Category splits were not stored for this payment. New payments processed from the payment module include a full breakdown.</p>` : ''}
+          ${mismatch ? `<p class="text-xs text-slate-500 dark:text-slate-400 mb-2">Totals may differ slightly from amount paid due to rounding or legacy records.</p>` : ''}
+          <button type="button" onclick="closeLedgerPaymentBreakdownModal()" class="mt-2 w-full bg-blue-600 text-white font-medium py-2 rounded-lg hover:bg-blue-700">Close</button>
+        </div>`;
+      el.classList.remove('hidden');
+    };
+
     function displayAllLedgerModal(customer) {
       let modal = document.getElementById('allLedgerModal');
       if (!modal) {
@@ -19779,6 +20587,7 @@
         modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden';
         document.body.appendChild(modal);
       }
+      window.__ledgerAccountingCustomer = customer;
 
       const paymentHistory = Array.isArray(customer.paymentHistory) ? customer.paymentHistory : [];
       const paymentSortedAsc = [...paymentHistory].sort((a, b) => {
@@ -19792,21 +20601,134 @@
           ? Math.round(Math.max(0, calculateCustomerTotal(customer).total) * 100) / 100
           : 0;
 
+      function ledgerEntryStrictlyAfter(a, b) {
+        const ma = getLedgerEntrySortMs(a);
+        const mb = getLedgerEntrySortMs(b);
+        if (ma !== mb) return ma > mb;
+        return getLedgerEntryOrder(a) > getLedgerEntryOrder(b);
+      }
+
+      function ledgerEntryStrictlyBefore(a, b) {
+        const ma = getLedgerEntrySortMs(a);
+        const mb = getLedgerEntrySortMs(b);
+        if (ma !== mb) return ma < mb;
+        return getLedgerEntryOrder(a) < getLedgerEntryOrder(b);
+      }
+
       const resolvedNewDue = new Array(paymentSortedAsc.length);
+      const chargeHist = Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [];
       for (let i = 0; i < paymentSortedAsc.length; i++) {
         let nd = paymentSortedAsc[i].newAmountDue;
         if (nd === undefined || nd === null) {
           if (i < paymentSortedAsc.length - 1 && paymentSortedAsc[i + 1].amountDue != null && paymentSortedAsc[i + 1].amountDue !== '') {
-            nd = parseFloat(paymentSortedAsc[i + 1].amountDue);
-          } else if (i === paymentSortedAsc.length - 1) {
-            nd = currentTotalDue;
+            const curP = paymentSortedAsc[i];
+            const nextP = paymentSortedAsc[i + 1];
+            const chargeBetweenPayments = chargeHist.some(
+              (c) => c && ledgerEntryStrictlyAfter(c, curP) && ledgerEntryStrictlyBefore(c, nextP)
+            );
+            if (!chargeBetweenPayments) {
+              nd = parseFloat(nextP.amountDue);
+            }
+          }
+          if ((nd === undefined || nd === null) && i === paymentSortedAsc.length - 1) {
+            const lastP = paymentSortedAsc[i];
+            const hasChargeAfter = chargeHist.some((c) => c && ledgerEntryStrictlyAfter(c, lastP));
+            if (hasChargeAfter) {
+              const ad = parseFloat(lastP.amountDue);
+              const ap = parseFloat(lastP.amountPaid);
+              if (!isNaN(ad) && !isNaN(ap)) {
+                nd = Math.round(Math.max(0, ad - ap) * 100) / 100;
+              }
+            } else {
+              nd = currentTotalDue;
+            }
+          }
+          if ((nd === undefined || nd === null) && i < paymentSortedAsc.length - 1) {
+            const midP = paymentSortedAsc[i];
+            const ad = parseFloat(midP.amountDue);
+            const ap = parseFloat(midP.amountPaid);
+            if (!isNaN(ad) && !isNaN(ap)) {
+              nd = Math.round(Math.max(0, ad - ap) * 100) / 100;
+            }
           }
         }
         resolvedNewDue[i] = nd != null && !isNaN(parseFloat(nd)) ? Math.round(parseFloat(nd) * 100) / 100 : null;
       }
+      for (let i = 0; i < paymentSortedAsc.length - 1; i++) {
+        const curP = paymentSortedAsc[i];
+        const nextP = paymentSortedAsc[i + 1];
+        const chargeBetweenPayments = chargeHist.some(
+          (c) => c && ledgerEntryStrictlyAfter(c, curP) && ledgerEntryStrictlyBefore(c, nextP)
+        );
+        if (!chargeBetweenPayments) continue;
+        const ad = parseFloat(curP.amountDue);
+        const ap = parseFloat(curP.amountPaid);
+        if (isNaN(ad) || isNaN(ap)) continue;
+        resolvedNewDue[i] = Math.round(Math.max(0, ad - ap) * 100) / 100;
+      }
+      if (paymentSortedAsc.length > 0) {
+        const lastIdx = paymentSortedAsc.length - 1;
+        const lastPay = paymentSortedAsc[lastIdx];
+        const anyChargeStrictlyAfterLastPayment = (Array.isArray(customer.chargeHistory) ? customer.chargeHistory : []).some(
+          (c) => c && ledgerEntryStrictlyAfter(c, lastPay)
+        );
+        if (!anyChargeStrictlyAfterLastPayment) {
+          resolvedNewDue[lastIdx] = currentTotalDue;
+        }
+      }
+
+      for (let i = 0; i < paymentSortedAsc.length; i++) {
+        const p = paymentSortedAsc[i];
+        const hasChargeAfter = (Array.isArray(customer.chargeHistory) ? customer.chargeHistory : []).some(
+          (c) => c && ledgerEntryStrictlyAfter(c, p)
+        );
+        if (!hasChargeAfter) continue;
+        const ad = parseFloat(p.amountDue);
+        const ap = parseFloat(p.amountPaid);
+        if (isNaN(ad) || isNaN(ap)) continue;
+        const approxAfter = Math.round(Math.max(0, ad - ap) * 100) / 100;
+        const cur = resolvedNewDue[i];
+        if (cur == null || isNaN(parseFloat(cur))) continue;
+        const curN = Math.round(parseFloat(cur) * 100) / 100;
+        if (
+          Math.abs(curN - currentTotalDue) < 0.05 &&
+          Math.abs(curN - approxAfter) > 0.05
+        ) {
+          resolvedNewDue[i] = approxAfter;
+        }
+      }
+
+      function ledgerTaxCodesAndPucFromEntry(entry) {
+        if (!entry) return { taxCodes: 0, puc: 0 };
+        const tc = parseFloat(entry.taxCodesOnBill);
+        const puc = parseFloat(entry.pucSurchargeOnBill);
+        if (Number.isFinite(tc) || Number.isFinite(puc)) {
+          return {
+            taxCodes: Math.round(Math.max(0, Number.isFinite(tc) ? tc : 0) * 100) / 100,
+            puc: Math.round(Math.max(0, Number.isFinite(puc) ? puc : 0) * 100) / 100
+          };
+        }
+        const comb = Math.round(Math.max(0, parseFloat(entry.surchargesOnBill || 0) || 0) * 100) / 100;
+        return { taxCodes: comb, puc: 0 };
+      }
+
+      /** Latest billing charge row before this payment (statement line items the payment applies to). */
+      function getMostRecentBillingChargeBeforePayment(customer, paymentEntry) {
+        const ch = Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [];
+        const bills = ch.filter((c) => c && c.source === 'billingCharge');
+        const before = bills.filter((c) => ledgerEntryStrictlyBefore(c, paymentEntry));
+        if (!before.length) return null;
+        before.sort((a, b) => {
+          const ma = getLedgerEntrySortMs(a);
+          const mb = getLedgerEntrySortMs(b);
+          if (ma !== mb) return ma - mb;
+          return getLedgerEntryOrder(a) - getLedgerEntryOrder(b);
+        });
+        return before[before.length - 1];
+      }
 
       const paymentRows = paymentSortedAsc.map((p, i) => {
-        const lateFee = Math.round(
+        const lateFeeFromSnapshot = Math.round(
           Math.max(
             0,
             parseFloat(
@@ -19818,25 +20740,78 @@
         ) / 100;
         const amountPaid = Math.round(Math.max(0, parseFloat(p.amountPaid || 0)) * 100) / 100;
         const amountDue = Math.round(Math.max(0, parseFloat(p.amountDue || 0)) * 100) / 100;
-        const sewer = Math.round(Math.max(0, parseFloat(p.sewerChargeOnBill || p.sewerCharge || 0)) * 100) / 100;
-        const pastDue = Math.round(Math.max(0, parseFloat(p.pastDueOnBill || p.pastDue || 0)) * 100) / 100;
-        let surcharges = Math.round(Math.max(0, parseFloat(p.surchargesOnBill || p.surcharges || 0)) * 100) / 100;
-        if (sewer === 0 && pastDue === 0 && surcharges === 0 && amountDue > 0) {
-          const base = Math.max(0, Math.round((amountDue - lateFee) * 100) / 100);
-          const nextBill = (Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [])
-            .filter(c => c && c.source === 'billingCharge' && getLedgerEntrySortMs(c) > getLedgerEntrySortMs(p))
-            .sort((a, b) => getLedgerEntrySortMs(a) - getLedgerEntrySortMs(b))[0];
-          if (nextBill) {
-            const bs = Math.round(Math.max(0, parseFloat(nextBill.sewerChargeOnBill || 0)) * 100) / 100;
-            const su = Math.round(Math.max(0, parseFloat(nextBill.surchargesOnBill || 0)) * 100) / 100;
-            if (bs + su > 0.005 && Math.abs(bs + su - base) < 0.05) {
-              sewer = bs;
-              surcharges = su;
-            } else {
-              surcharges = base;
-            }
+        let sewer = Math.round(Math.max(0, parseFloat(p.sewerChargeOnBill || p.sewerCharge || 0)) * 100) / 100;
+        let pastDue = Math.round(Math.max(0, parseFloat(p.pastDueOnBill || p.pastDue || 0)) * 100) / 100;
+        const initSp = ledgerTaxCodesAndPucFromEntry(p);
+        let taxCodesAmt = initSp.taxCodes;
+        let pucAmt = initSp.puc;
+        let combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
+        let lateFee = lateFeeFromSnapshot;
+
+        if (p.source === 'testFreshStart') {
+          taxCodesAmt = initSp.taxCodes;
+          pucAmt = initSp.puc;
+          combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
+        } else {
+          const priorBill = getMostRecentBillingChargeBeforePayment(customer, p);
+          if (priorBill) {
+            sewer = Math.round(Math.max(0, parseFloat(priorBill.sewerChargeOnBill || 0)) * 100) / 100;
+            pastDue = Math.round(Math.max(0, parseFloat(priorBill.pastDueOnBill || 0)) * 100) / 100;
+            const sp = ledgerTaxCodesAndPucFromEntry(priorBill);
+            taxCodesAmt = sp.taxCodes;
+            pucAmt = sp.puc;
+            combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
+            lateFee = Math.round(Math.max(0, parseFloat(priorBill.lateFeeAmount || 0)) * 100) / 100;
           } else {
-            surcharges = base;
+            const br = mergeAppliedBreakdown(
+              p.appliedBreakdown && typeof p.appliedBreakdown === 'object'
+                ? p.appliedBreakdown
+                : computePaymentAppliedBreakdown(p, customer, i)
+            );
+            const brSum = getCanonicalHierarchyLabels().reduce((s, k) => s + (br[k] || 0), 0);
+            if (brSum > 0.005) {
+              sewer = Math.round((br['Current amount due'] || 0) * 100) / 100;
+              pastDue = Math.round((br['Past due amount'] || 0) * 100) / 100;
+              taxCodesAmt = Math.round((br['Tax Codes'] || 0) * 100) / 100;
+              pucAmt = Math.round((br['Puc surcharge'] || 0) * 100) / 100;
+              combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
+              lateFee = Math.round((br['Late fees'] || 0) * 100) / 100;
+            } else {
+              const hasBillLineSnapshot =
+                sewer > 0.005 ||
+                pastDue > 0.005 ||
+                combinedSurcharges > 0.005 ||
+                (p.lateFeePaidFromPayment != null && p.lateFeePaidFromPayment !== '') ||
+                (p.source === 'depositAutoApply' && lateFeeFromSnapshot > 0.005);
+
+              if (!hasBillLineSnapshot && sewer === 0 && pastDue === 0 && combinedSurcharges === 0 && amountDue > 0) {
+                lateFee = 0;
+              }
+
+              if (
+                hasBillLineSnapshot &&
+                sewer === 0 &&
+                pastDue === 0 &&
+                combinedSurcharges === 0 &&
+                amountDue > 0
+              ) {
+                const base = Math.max(0, Math.round((amountDue - lateFeeFromSnapshot) * 100) / 100);
+                const nextBill = (Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [])
+                  .filter(c => c && c.source === 'billingCharge' && getLedgerEntrySortMs(c) > getLedgerEntrySortMs(p))
+                  .sort((a, b) => getLedgerEntrySortMs(a) - getLedgerEntrySortMs(b))[0];
+                if (nextBill) {
+                  const bs = Math.round(Math.max(0, parseFloat(nextBill.sewerChargeOnBill || 0)) * 100) / 100;
+                  const nsp = ledgerTaxCodesAndPucFromEntry(nextBill);
+                  const nsCombined = Math.round((nsp.taxCodes + nsp.puc) * 100) / 100;
+                  if (bs + nsCombined > 0.005 && Math.abs(bs + nsCombined - base) < 0.05) {
+                    sewer = bs;
+                    taxCodesAmt = nsp.taxCodes;
+                    pucAmt = nsp.puc;
+                    combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
+                  }
+                }
+              }
+            }
           }
         }
         const subtype =
@@ -19851,33 +20826,41 @@
           subtype,
           sewer,
           pastDue,
-          surcharges,
+          taxCodes: taxCodesAmt,
+          pucSurcharge: pucAmt,
           lateFee,
           amountPaid,
-          balanceAfter: resolvedNewDue[i]
+          balanceAfter: resolvedNewDue[i],
+          ledgerPayment: p,
+          paymentChronoIndex: i
         };
       });
 
       const chargeHistory = Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [];
-      const chargeRows = chargeHistory.map((c) => ({
-        sourceKind: 'charge',
-        sortMs: getLedgerEntrySortMs(c),
-        ledgerOrder: getLedgerEntryOrder(c),
-        dateTime: formatLedgerDateTime(c),
-        type: 'Charge',
-        subtype: c.chargeSubtype ||
-          (c.source === 'lateFeeAdded' && c.calendarDaysLate != null && !isNaN(parseInt(c.calendarDaysLate, 10))
-            ? `Late fee added (${parseInt(c.calendarDaysLate, 10)} days late)`
-            : null) ||
-          c.chargeType ||
-          (c.source === 'lateFeeAdded' ? 'Late fee added' : 'Billed Customer'),
-        sewer: Math.round(Math.max(0, parseFloat(c.sewerChargeOnBill || 0)) * 100) / 100,
-        pastDue: Math.round(Math.max(0, parseFloat(c.pastDueOnBill || 0)) * 100) / 100,
-        surcharges: Math.round(Math.max(0, parseFloat(c.surchargesOnBill || 0)) * 100) / 100,
-        lateFee: Math.round(Math.max(0, parseFloat(c.lateFeeAmount || 0)) * 100) / 100,
-        amountPaid: 0,
-        balanceAfter: Math.round(Math.max(0, parseFloat(c.currentDue || 0)) * 100) / 100
-      }));
+      const chargeRows = chargeHistory.map((c) => {
+        const sp = ledgerTaxCodesAndPucFromEntry(c);
+        return {
+          sourceKind: 'charge',
+          sortMs: getLedgerEntrySortMs(c),
+          ledgerOrder: getLedgerEntryOrder(c),
+          dateTime: formatLedgerDateTime(c),
+          type: 'Charge',
+          subtype: c.chargeSubtype ||
+            (c.source === 'lateFeeAdded' && c.calendarDaysLate != null && !isNaN(parseInt(c.calendarDaysLate, 10))
+              ? `Late fee added (${parseInt(c.calendarDaysLate, 10)} days late)`
+              : null) ||
+            c.chargeType ||
+            (c.source === 'lateFeeAdded' ? 'Late fee added' : 'Billed Customer'),
+          sewer: Math.round(Math.max(0, parseFloat(c.sewerChargeOnBill || 0)) * 100) / 100,
+          pastDue: Math.round(Math.max(0, parseFloat(c.pastDueOnBill || 0)) * 100) / 100,
+          taxCodes: sp.taxCodes,
+          pucSurcharge: sp.puc,
+          lateFee: Math.round(Math.max(0, parseFloat(c.lateFeeAmount || 0)) * 100) / 100,
+          amountPaid: 0,
+          balanceAfter: Math.round(Math.max(0, parseFloat(c.currentDue || 0)) * 100) / 100,
+          ledgerCharge: c
+        };
+      });
 
       const rows = [...paymentRows, ...chargeRows].sort((a, b) => {
         if (a.sortMs !== b.sortMs) return a.sortMs - b.sortMs;
@@ -19889,22 +20872,111 @@
         return a.sourceKind === 'charge' ? -1 : 1;
       });
 
+      window.__ledgerPaymentBreakdownModalMeta = {
+        customerLabel: `${customer.name} (${customer.accountNumber || customer.id})`
+      };
+      window.__ledgerPaymentBreakdownByRow = {};
+      window.__ledgerPastDueBreakdownByRow = {};
+
+      function getSortedBillingChargesForPastDueModal() {
+        return (Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [])
+          .filter((c) => c && c.source === 'billingCharge')
+          .sort((a, b) => {
+            const ma = getLedgerEntrySortMs(a);
+            const mb = getLedgerEntrySortMs(b);
+            if (ma !== mb) return ma - mb;
+            return getLedgerEntryOrder(a) - getLedgerEntryOrder(b);
+          });
+      }
+
+      function snapshotBillForPastDueModal(charge) {
+        if (!charge) return null;
+        const sp = ledgerTaxCodesAndPucFromEntry(charge);
+        return {
+          dateTime: formatLedgerDateTime(charge),
+          sewer: Math.round(Math.max(0, parseFloat(charge.sewerChargeOnBill || 0)) * 100) / 100,
+          pastDue: Math.round(Math.max(0, parseFloat(charge.pastDueOnBill || 0)) * 100) / 100,
+          taxCodes: sp.taxCodes,
+          puc: sp.puc,
+          lateFee: Math.round(Math.max(0, parseFloat(charge.lateFeeAmount || 0)) * 100) / 100,
+          currentDue: Math.round(Math.max(0, parseFloat(charge.currentDue || 0)) * 100) / 100
+        };
+      }
+
+      function buildPastDueDetailPack(row) {
+        const pastDue = Math.round((row.pastDue || 0) * 100) / 100;
+        const pack = {
+          pastDue,
+          rowKind: row.sourceKind,
+          dateTime: row.dateTime,
+          subtype: row.subtype || '—',
+          paymentPastDueApplied: null,
+          statementForPayment: null,
+          showNoPriorBillingStatement: false,
+          pastDueComposition: null
+        };
+        if (
+          row.sourceKind === 'charge' &&
+          row.ledgerCharge &&
+          row.ledgerCharge.pastDueComposition &&
+          typeof row.ledgerCharge.pastDueComposition === 'object'
+        ) {
+          pack.pastDueComposition = row.ledgerCharge.pastDueComposition;
+        }
+        const bills = getSortedBillingChargesForPastDueModal();
+        if (row.sourceKind === 'payment' && row.ledgerPayment) {
+          const br = computePaymentAppliedBreakdown(row.ledgerPayment, customer, row.paymentChronoIndex);
+          pack.paymentPastDueApplied = Math.round((br['Past due amount'] || 0) * 100) / 100;
+          const stmt = getMostRecentBillingChargeBeforePayment(customer, row.ledgerPayment);
+          if (stmt) pack.statementForPayment = snapshotBillForPastDueModal(stmt);
+        }
+        if (row.sourceKind === 'charge' && row.ledgerCharge && row.ledgerCharge.source === 'billingCharge') {
+          const idx = bills.findIndex((b) => b === row.ledgerCharge);
+          if (idx === 0) pack.showNoPriorBillingStatement = true;
+        }
+        return pack;
+      }
+
       let htmlRows = '';
       if (rows.length === 0) {
-        htmlRows = '<tr><td colspan="9" class="text-center text-slate-500 dark:text-slate-400 py-8">No activity yet.</td></tr>';
+        htmlRows = '<tr><td colspan="10" class="text-center text-slate-500 dark:text-slate-400 py-8">No activity yet.</td></tr>';
       } else {
-        rows.forEach((r) => {
+        rows.forEach((r, idx) => {
+          if (r.sourceKind === 'payment' && r.ledgerPayment && r.amountPaid > 0) {
+            window.__ledgerPaymentBreakdownByRow[idx] = {
+              breakdown: computePaymentAppliedBreakdown(r.ledgerPayment, customer, r.paymentChronoIndex),
+              amountPaid: r.amountPaid,
+              dateTime: r.dateTime,
+              subtype: r.subtype
+            };
+          }
+          window.__ledgerPastDueBreakdownByRow[idx] = buildPastDueDetailPack(r);
           const bal = (r.balanceAfter != null && !isNaN(r.balanceAfter)) ? `$${r.balanceAfter.toFixed(2)}` : '—';
+          const showPayDetail =
+            r.sourceKind === 'payment' && r.ledgerPayment && r.amountPaid > 0;
+          const amountPaidCell = showPayDetail
+            ? `<div class="flex flex-col gap-1 items-start min-w-[8rem]">
+                <span class="text-slate-900 dark:text-slate-100">$${r.amountPaid.toFixed(2)}</span>
+                <button type="button" onclick="openLedgerPaymentBreakdown(${idx})" class="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline text-left">View Payment Details</button>
+              </div>`
+            : `$${r.amountPaid.toFixed(2)}`;
+          const tc = typeof r.taxCodes === 'number' ? r.taxCodes : 0;
+          const puc = typeof r.pucSurcharge === 'number' ? r.pucSurcharge : 0;
+          const pastDueCell = `<div class="flex flex-col gap-1 items-start min-w-[7rem]">
+              <span class="text-slate-900 dark:text-slate-100">$${r.pastDue.toFixed(2)}</span>
+              <button type="button" onclick="openLedgerPastDueBreakdown(${idx})" class="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline text-left">Past Due Details</button>
+            </div>`;
           htmlRows += `
             <tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.dateTime}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.type}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.subtype}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.sewer.toFixed(2)}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.pastDue.toFixed(2)}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.surcharges.toFixed(2)}</td>
+              <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${pastDueCell}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${tc.toFixed(2)}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${puc.toFixed(2)}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.lateFee.toFixed(2)}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.amountPaid.toFixed(2)}</td>
+              <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${amountPaidCell}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-slate-100">${bal}</td>
             </tr>
           `;
@@ -19933,7 +21005,8 @@
                   <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Subtype</th>
                   <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Sewer</th>
                   <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Past Due</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Surcharges</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Tax Codes</th>
+                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">PUC Surcharge</th>
                   <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Late Fee</th>
                   <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Paid</th>
                   <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Balance After</th>
@@ -19944,8 +21017,9 @@
               </tbody>
             </table>
           </div>
-          <div class="mt-6 flex justify-end">
-            <button onclick="hideAllLedgerModal()" class="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-blue-700 transition-colors">Close</button>
+          <div class="mt-6 flex justify-end gap-3 flex-wrap">
+            <button type="button" onclick="openLedgerAccountingTotalModal()" class="border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 font-semibold py-2 px-6 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">View Accounting Total</button>
+            <button type="button" onclick="hideAllLedgerModal()" class="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-blue-700 transition-colors">Close</button>
           </div>
         </div>
       `;
@@ -19956,6 +21030,15 @@
     window.hideAllLedgerModal = function() {
       const modal = document.getElementById('allLedgerModal');
       if (modal) modal.classList.add('hidden');
+      if (typeof window.closeLedgerPaymentBreakdownModal === 'function') {
+        window.closeLedgerPaymentBreakdownModal();
+      }
+      if (typeof window.closeLedgerPastDueBreakdownModal === 'function') {
+        window.closeLedgerPastDueBreakdownModal();
+      }
+      if (typeof window.closeLedgerAccountingTotalModal === 'function') {
+        window.closeLedgerAccountingTotalModal();
+      }
     };
 
     function displayAllPaymentsModal(customer) {
@@ -20927,15 +22010,24 @@
                          today.getFullYear();
 
       // Update customer balance
-      if (paymentAmount >= customer.currentBill) {
-        const remaining = paymentAmount - customer.currentBill;
+      const cbBefore = Math.max(0, parseFloat(customer.currentBill) || 0);
+      if (paymentAmount >= cbBefore) {
+        const remaining = paymentAmount - cbBefore;
         customer.currentBill = 0;
-        customer.pastDue = Math.max(0, customer.pastDue - remaining);
+        const pdBefore = Math.max(0, parseFloat(customer.pastDue) || 0);
+        const toPast = Math.min(remaining, pdBefore);
+        if (toPast > 0.005) {
+          subtractFromPastDueComposition(customer, toPast);
+        }
+        customer.pastDue = Math.max(0, pdBefore - toPast);
+        syncPastDueCompositionToPastDueField(customer);
       } else {
-        customer.currentBill -= paymentAmount;
+        customer.currentBill = cbBefore - paymentAmount;
       }
 
       const calcAfterSimple = typeof calculateCustomerTotal === 'function' ? calculateCustomerTotal(customer) : null;
+      if (!Array.isArray(customer.paymentHistory)) customer.paymentHistory = [];
+      const legacyPaymentNumber = customer.paymentHistory.length + 1;
       const paymentRecord = {
         date: paymentDate,
         timestamp: today.toISOString(),
@@ -20945,10 +22037,10 @@
         remainingBalance: currentAmount - paymentAmount,
         lateFeeAmount: calcBeforeSimple ? Math.round(Math.max(0, calcBeforeSimple.lateFeeAmount || 0) * 100) / 100 : null,
         newAmountDue: calcAfterSimple ? Math.round(Math.max(0, calcAfterSimple.total) * 100) / 100 : Math.max(0, currentAmount - paymentAmount),
-        paymentMethod: 'Payment (legacy modal)'
+        paymentMethod: 'Payment (legacy modal)',
+        paymentNumber: legacyPaymentNumber
       };
 
-      if (!Array.isArray(customer.paymentHistory)) customer.paymentHistory = [];
       customer.paymentHistory.push(paymentRecord);
       clearProcessBillPanelDisplayData(customer);
 
@@ -21490,6 +22582,7 @@
                 <div>
                   <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
                   <p id="billPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                  <button type="button" onclick="openProcessBillPastDueDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
                 </div>
                 <div>
                   <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
