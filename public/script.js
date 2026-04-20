@@ -2656,10 +2656,11 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       const drawerCountModule = document.getElementById('drawerCountModule');
       const isDrawerCountVisible = drawerCountModule && !drawerCountModule.classList.contains('hidden');
 
-      // Ensure buttons are visible after data load (but not if drawer count is showing)
+      // Ensure buttons are visible after data load (but not if drawer count is showing, and not if the user already opened a module while loading)
       if (!isDrawerCountVisible && buttonContainerAfter && buttonContainerAfter.classList.contains('hidden')) {
-
-        showDashboardButtons();
+        if (!window.isDashboardSuppressedByActiveModule || !window.isDashboardSuppressedByActiveModule()) {
+          showDashboardButtons();
+        }
       } else if (isDrawerCountVisible) {
 
       } else if (!buttonContainerAfter) {
@@ -3175,10 +3176,11 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       const logoutBtn = document.getElementById('logoutButton');
       const makePaymentBtn = document.getElementById('makePaymentButton');
       const closeOutDrawerBtn = document.getElementById('closeOutDrawerButton');
+      const addClientBtn = document.getElementById('addClientButton');
 
       // Hide individual buttons first (regardless of container)
       const buttonsToHide = [
-        sendBillBtn, searchDatabaseBtn, drawerCountBtn, endOfDayDrawerCountBtn,
+        addClientBtn, sendBillBtn, searchDatabaseBtn, drawerCountBtn, endOfDayDrawerCountBtn,
         businessEndOfDayBtn, settingsBtn, logoutBtn, makePaymentBtn, closeOutDrawerBtn
       ];
       buttonsToHide.forEach((btn, index) => {
@@ -3206,6 +3208,25 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
         }
       }
 
+    };
+
+    /** True while a full-screen module is open (nav must stay hidden). Used so late async init does not call showDashboardButtons() over an already-open module. */
+    window.isDashboardSuppressedByActiveModule = function() {
+      const moduleIds = [
+        'settingsModule',
+        'paymentModule',
+        'billModule',
+        'addClientModule',
+        'searchModule',
+        'drawerCountModule'
+      ];
+      for (let i = 0; i < moduleIds.length; i++) {
+        const el = document.getElementById(moduleIds[i]);
+        if (el && !el.classList.contains('hidden')) {
+          return true;
+        }
+      }
+      return false;
     };
 
     window.showDashboardButtons = async function() {
@@ -3325,7 +3346,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
 
     // Module Management Functions
     window.showPaymentModule = function() {
-      hideAllModules();
+      hideAllModules(true);
       hideDashboardButtons();
       // Reset payment module to original form
       resetPaymentForm();
@@ -3337,7 +3358,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
     };
 
     window.showBillModule = function() {
-      hideAllModules();
+      hideAllModules(true);
       hideDashboardButtons();
       // Reset bill module to original form
       resetBillForm();
@@ -3345,7 +3366,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
     };
 
     window.showAddClientModule = function() {
-      hideAllModules();
+      hideAllModules(true);
       hideDashboardButtons();
       // Reset add client module to original form
       resetAddClientForm();
@@ -3359,7 +3380,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
     };
 
     window.showSearchModule = function() {
-      hideAllModules();
+      hideAllModules(true);
       hideDashboardButtons();
       // Clear search results and reset form
       document.getElementById('searchByName').value = '';
@@ -3369,7 +3390,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
     };
 
     window.showSettingsModule = async function() {
-      hideAllModules();
+      hideAllModules(true);
       hideDashboardButtons();
       const settingsModule = document.getElementById('settingsModule');
       const loadingOverlay = document.getElementById('settingsLoadingOverlay');
@@ -3456,7 +3477,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       }
     };
 
-    window.hideAllModules = function() {
+    window.hideAllModules = function(suppressDashboardButtons) {
       // Hide main modules
       const paymentModule = document.getElementById('paymentModule');
       const billModule = document.getElementById('billModule');
@@ -3473,8 +3494,9 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       if (searchModule) searchModule.classList.add('hidden');
       if (settingsModule) settingsModule.classList.add('hidden');
 
-      // Show dashboard buttons when all modules are hidden
-      showDashboardButtons();
+      if (!suppressDashboardButtons) {
+        showDashboardButtons();
+      }
 
       // Hide drawer count module
       const drawerCountModule = document.getElementById('drawerCountModule');
@@ -9141,7 +9163,6 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
 
     // Initialize selected codes array
     window.selectedClientCodes = [];
-    window.selectedCustomerCodes = [];
 
     // Add code to client
     window.addClientCode = function() {
@@ -9195,67 +9216,6 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
           <button 
             type="button"
             onclick="removeClientCode('${code.id}')" 
-            class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 text-sm"
-          >
-            Remove
-          </button>
-        </div>
-      `;
-        }).join('');
-    }
-
-    // Add code to customer (for Add Customer modal)
-    window.addCustomerCode = function() {
-      const select = document.getElementById('newCustomerCodeSelect');
-      if (!select || !select.value) {
-        alert('Please select a code first');
-        return;
-      }
-
-      const codeId = select.value;
-      const code = codes.find(c => c.id === codeId);
-      if (!code) return;
-
-      // Check if already added
-      if (window.selectedCustomerCodes.find(c => c.id === codeId)) {
-        alert('This code has already been added');
-        select.value = '';
-        return;
-      }
-
-      window.selectedCustomerCodes.push(code);
-      select.value = '';
-      updateCustomerCodesList();
-    };
-
-    // Remove code from customer
-    window.removeCustomerCode = function(codeId) {
-      window.selectedCustomerCodes = window.selectedCustomerCodes.filter(c => c.id !== codeId);
-      updateCustomerCodesList();
-    };
-
-    // Update customer codes list display
-    function updateCustomerCodesList() {
-      const listContainer = document.getElementById('newCustomerCodesList');
-      if (!listContainer) return;
-
-      if (window.selectedCustomerCodes.length === 0) {
-        listContainer.innerHTML = '<p class="text-sm text-slate-500 dark:text-slate-400">No codes selected</p>';
-        return;
-      }
-
-        listContainer.innerHTML = window.selectedCustomerCodes.map(code => {
-          const codeType = code.type || 'percentage';
-          const codeAmount = code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0);
-          const displayText = codeType === 'flat' 
-            ? `${code.name} ($${parseFloat(codeAmount).toFixed(2)})` 
-            : `${code.name} (${parseFloat(codeAmount).toFixed(2)}%)`;
-          return `
-          <div class="flex items-center justify-between bg-slate-50 dark:bg-slate-700 p-3 rounded-lg">
-            <span class="text-sm text-slate-800 dark:text-slate-200">${displayText}</span>
-          <button 
-            type="button"
-            onclick="removeCustomerCode('${code.id}')" 
             class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 text-sm"
           >
             Remove
@@ -9351,175 +9311,6 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
 
       container.innerHTML = html;
     }
-
-    // Add new customer
-    window.showAddCustomerModal = function() {
-      // Populate location dropdown with all locations
-      const locationSelect = document.getElementById('newCustomerLocation');
-      locationSelect.innerHTML = '<option value="">Select a property location</option>';
-
-      locations.forEach(location => {
-        const option = document.createElement('option');
-        option.value = location.id;
-        option.textContent = `${location.address} (${location.status})`;
-        locationSelect.appendChild(option);
-      });
-
-      // Populate codes dropdown
-      const codeSelect = document.getElementById('newCustomerCodeSelect');
-      if (codeSelect) {
-        codeSelect.innerHTML = '<option value="">Select a code...</option>';
-        codes.forEach(code => {
-          const option = document.createElement('option');
-          option.value = code.id;
-          const codeType = code.type || 'percentage';
-          const codeAmount = code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0);
-          const displayText = codeType === 'flat' 
-            ? `${code.name} ($${parseFloat(codeAmount).toFixed(2)})` 
-            : `${code.name} (${parseFloat(codeAmount).toFixed(2)}%)`;
-          option.textContent = displayText;
-          codeSelect.appendChild(option);
-        });
-      }
-
-      // Clear selected codes
-      window.selectedCustomerCodes = [];
-      updateCustomerCodesList();
-
-      document.getElementById('addCustomerModal').classList.remove('hidden');
-    };
-
-    window.hideAddCustomerModal = function() {
-      document.getElementById('addCustomerModal').classList.add('hidden');
-      document.getElementById('addCustomerForm').reset();
-      window.selectedCustomerCodes = [];
-      updateCustomerCodesList();
-    };
-
-    window.addCustomer = async function() {
-      const name = document.getElementById('newCustomerName').value;
-      const email = document.getElementById('newCustomerEmail').value;
-      const locationId = document.getElementById('newCustomerLocation').value;
-      const phone = document.getElementById('newCustomerPhone').value.replace(/\D/g, ''); // Store as digits only
-
-      // Get new fields
-      const entityType = document.getElementById('newCustomerEntityType')?.value || '';
-      const ssn = document.getElementById('newCustomerSSN')?.value.trim() || '';
-      const idType = document.getElementById('newCustomerIDType')?.value || '';
-      const idNumber = document.getElementById('newCustomerIDNumber')?.value.trim() || '';
-      const secondaryContactName = document.getElementById('newCustomerSecondaryContactName')?.value.trim() || '';
-      const secondaryContactPhone = document.getElementById('newCustomerSecondaryContactPhone')?.value.replace(/\D/g, '') || '';
-      const mailingStreet = document.getElementById('newCustomerMailingStreet')?.value.trim() || '';
-      const mailingCity = document.getElementById('newCustomerMailingCity')?.value.trim() || '';
-      const mailingState = document.getElementById('newCustomerMailingState')?.value || '';
-      const mailingZip = document.getElementById('newCustomerMailingZip')?.value.trim() || '';
-
-      // Build mailing address
-      let mailingAddress = '';
-      if (mailingStreet || mailingCity || mailingState || mailingZip) {
-        const parts = [];
-        if (mailingStreet) parts.push(mailingStreet);
-        if (mailingCity || mailingState || mailingZip) {
-          const cityStateZip = [mailingCity, mailingState, mailingZip].filter(Boolean).join(', ');
-          parts.push(cityStateZip);
-        }
-        mailingAddress = parts.join(', ');
-      }
-
-      // Get selected codes
-      const selectedCodes = window.selectedCustomerCodes.map(code => ({
-        id: code.id,
-        name: code.name,
-        type: code.type || 'percentage',
-        amount: code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0),
-        percentage: code.percentage !== undefined ? code.percentage : (code.type === 'percentage' && code.amount !== undefined ? code.amount : 0)
-      }));
-
-      // Get factor
-      const factor = document.getElementById('newCustomerFactor')?.value.trim() || '';
-
-      // Get cycle number
-      const cycleNumber = document.getElementById('newCustomerCycleNumber')?.value.trim() || '';
-
-      if (!name || !email || !locationId || !phone) {
-        alert('Please fill in all required fields');
-        return;
-      }
-
-      // Find the selected location
-      const selectedLocation = locations.find(l => l.id === locationId);
-      if (!selectedLocation) {
-        alert('Selected location not found');
-        return;
-      }
-
-      if (selectedLocation.status === 'occupied') {
-        alert('This location is already occupied. Please select an available location.');
-        return;
-      }
-
-      // Calculate current month's bill
-      const now = window.getCurrentDate();
-      const isNewMonth = now.getDate() === 1; // Check if it's the first of the month
-
-      const newCustomer = {
-        id: `CUS-${String(customers.length + 1).padStart(6, '0')}`,
-        name: name,
-        email: email,
-        locationId: locationId,
-        address: selectedLocation.address,
-        accountNumber: `CUS-${String(customers.length + 1).padStart(6, '0')}`,
-        currentBill: isNewMonth ? sewerCharge : 0, // New bill on 1st of month, otherwise 0
-        pastDue: 0,
-        lastPayment: 'Never',
-        needsPasswordChange: true,
-        createdDate: (() => {
-          const today = window.getCurrentDate();
-          return (today.getMonth() + 1).toString().padStart(2, '0') + '/' + 
-                 today.getDate().toString().padStart(2, '0') + '/' + 
-                 today.getFullYear();
-        })(),
-        phone: phone,
-        paymentHistory: [], // Track payment history
-        entityType: entityType,
-        ssn: ssn,
-        idType: idType,
-        idNumber: idNumber,
-        secondaryContactName: secondaryContactName,
-        secondaryContactPhone: secondaryContactPhone,
-        mailingAddress: mailingAddress,
-        mailingStreet: mailingStreet,
-        mailingCity: mailingCity,
-        mailingState: mailingState,
-        mailingZip: mailingZip,
-        codes: selectedCodes,
-        factor: factor,
-        cycleNumber: cycleNumber || null
-      };
-
-      // Update payment status based on past due amount
-      updateCustomerPaymentStatus(newCustomer);
-
-      // Update location status and owner
-      selectedLocation.currentResident = name;
-      selectedLocation.status = 'occupied';
-      selectedLocation.ownerFirstName = name.split(' ')[0];
-      selectedLocation.ownerLastName = name.split(' ').slice(1).join(' ');
-      selectedLocation.ownerFullName = name;
-
-      customers.push(newCustomer);
-      filteredCustomers = [...customers];
-
-      // Clear selected codes after creation
-      window.selectedCustomerCodes = [];
-      updateCustomerCodesList();
-
-      updateDashboard();
-      await saveCustomersToFirestore();
-      hideAddCustomerModal();
-
-      alert('Customer added successfully!');
-    };
 
     // Mark customer as paid
     window.markAsPaid = async function(customerId) {
@@ -9619,27 +9410,35 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       }
     };
 
-    // Delete all user data
+    // Wipe all operational billing data in Firestore (not app login users or settings/* config docs).
     window.deleteAllUserData = async function() {
-      const confirmMessage = 'Are you sure you want to delete ALL customer data? This action cannot be undone and will permanently delete all customers from the database.';
+      const confirmMessage =
+        'This will permanently delete ALL billing data: customers, property locations, tax codes, billing cycles, payment processing sessions, and cash drawers. Staff user accounts used to sign into this app are NOT deleted. Firestore configuration under settings (rates, toggles, hierarchy) is NOT removed. This cannot be undone.';
       if (!confirm(confirmMessage)) {
         return;
       }
 
-      // Double confirmation
-      const doubleConfirm = confirm('This will delete ALL customer data. Type OK to confirm, or Cancel to abort.');
+      const doubleConfirm = confirm('Final confirmation: wipe all billing data from the database?');
       if (!doubleConfirm) {
         return;
       }
 
-      try {
+      const WIPE_COLLECTIONS = [
+        { id: 'customers', phase: 'customers' },
+        { id: 'locations', phase: 'property locations' },
+        { id: 'codes', phase: 'tax codes' },
+        { id: 'billingCycles', phase: 'billing cycles' },
+        { id: 'paymentProcessingSessions', phase: 'payment sessions' },
+        { id: 'drawers', phase: 'cash drawers' }
+      ];
 
-        // Show progress modal
+      try {
         const deleteProgressModal = document.getElementById('deleteProgressModal');
         const deleteProgress = document.getElementById('deleteProgress');
         const deleteProgressText = document.getElementById('deleteProgressText');
         const deleteProgressBar = document.getElementById('deleteProgressBar');
         const deleteProgressStats = document.getElementById('deleteProgressStats');
+        const deleteProgressPhase = document.getElementById('deleteProgressPhase');
 
         if (deleteProgressModal) {
           deleteProgressModal.classList.remove('hidden');
@@ -9647,107 +9446,100 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
         if (deleteProgress) {
           deleteProgress.classList.remove('hidden');
         }
+        if (deleteProgressPhase) {
+          deleteProgressPhase.textContent = 'Counting documents…';
+        }
 
-        const customersRef = collection(db, 'customers');
+        const snapshots = await Promise.all(
+          WIPE_COLLECTIONS.map(c => getDocs(collection(db, c.id)))
+        );
+        let totalDocs = snapshots.reduce((acc, snap) => acc + snap.size, 0);
+        const progressTotal = Math.max(totalDocs, 1);
+        let deletedOverall = 0;
+        const batchSize = 500;
 
-        // Get all customers from Firestore
-        const existingCustomers = await getDocs(customersRef);
-        const totalCustomers = existingCustomers.size;
-        const customerDocs = [];
-        existingCustomers.forEach(doc => {
-          customerDocs.push(doc);
-        });
-
-        // Process deletions in batches with progress updates (using Firestore batch writes)
-        const batchSize = 500; // Firestore batch limit
-        let deletedCount = 0;
-
-        for (let i = 0; i < customerDocs.length; i += batchSize) {
-          const batch = writeBatch(db);
-          const batchDocs = customerDocs.slice(i, Math.min(i + batchSize, customerDocs.length));
-
-          batchDocs.forEach(doc => {
-            batch.delete(doc.ref);
-          });
-
-          await batch.commit();
-          deletedCount += batchDocs.length;
-
-          // Small delay between batches to avoid rate limiting
-          if (i + batchSize < customerDocs.length) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
-
-          // Update progress
-          const percent = Math.round((deletedCount / totalCustomers) * 100);
+        const updateProgressUi = () => {
+          const pct = Math.min(100, Math.round((deletedOverall / progressTotal) * 100));
           if (deleteProgressText) {
-            deleteProgressText.textContent = `${deletedCount} / ${totalCustomers}`;
+            deleteProgressText.textContent = `${deletedOverall} / ${totalDocs || 0}`;
           }
           if (deleteProgressBar) {
-            deleteProgressBar.style.width = percent + '%';
+            deleteProgressBar.style.width = pct + '%';
           }
           if (deleteProgressStats) {
-            deleteProgressStats.textContent = `Deleted: ${deletedCount} of ${totalCustomers} customers`;
+            deleteProgressStats.textContent =
+              totalDocs === 0
+                ? 'No documents to delete.'
+                : `Overall: ${deletedOverall} of ${totalDocs} documents removed`;
+          }
+        };
+
+        updateProgressUi();
+
+        for (let idx = 0; idx < WIPE_COLLECTIONS.length; idx++) {
+          const { phase } = WIPE_COLLECTIONS[idx];
+          if (deleteProgressPhase) {
+            deleteProgressPhase.textContent = `Deleting ${phase}…`;
           }
 
-          // Allow UI to update
-          await new Promise(resolve => setTimeout(resolve, 0));
+          const docSnaps = [];
+          snapshots[idx].forEach(d => docSnaps.push(d));
+
+          for (let i = 0; i < docSnaps.length; i += batchSize) {
+            const slice = docSnaps.slice(i, Math.min(i + batchSize, docSnaps.length));
+            const batch = writeBatch(db);
+            slice.forEach(docSnap => batch.delete(docSnap.ref));
+            await batch.commit();
+            deletedOverall += slice.length;
+            updateProgressUi();
+            if (i + batchSize < docSnaps.length) {
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            await new Promise(resolve => setTimeout(resolve, 0));
+          }
         }
 
-        // Update progress to 100%
-        if (deleteProgressText) {
-          deleteProgressText.textContent = `${totalCustomers} / ${totalCustomers}`;
+        if (deleteProgressPhase) {
+          deleteProgressPhase.textContent = 'Clearing local state…';
         }
-        if (deleteProgressBar) {
-          deleteProgressBar.style.width = '100%';
-        }
-        if (deleteProgressStats) {
-          deleteProgressStats.textContent = `Deleted: ${totalCustomers} of ${totalCustomers} customers`;
-        }
-
-        // Allow UI to update
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Clear local arrays
         customers = [];
         filteredCustomers = [];
+        locations = [];
+        filteredLocations = [];
+        codes = [];
+        drawers = [];
+        deletedCodeNames = new Set();
+        window.paymentProcessingSessions = [];
+        window.currentPaymentProcessing = null;
+        try {
+          localStorage.removeItem('currentPaymentProcessingSession');
+          localStorage.removeItem('currentPaymentProcessing');
+        } catch (e) {
 
-        // Update status: Updating locations
-        if (deleteProgressStats) {
-          deleteProgressStats.textContent = 'Updating locations...';
         }
-        // Allow UI to update
-        await new Promise(resolve => setTimeout(resolve, 50));
 
-        // Update all locations to be available
-        locations.forEach(location => {
-          location.currentResident = null;
-          location.status = 'available';
-          location.ownerFirstName = '';
-          location.ownerLastName = '';
-          location.ownerFullName = '';
-        });
-        filteredLocations = [...locations];
-
-        // Save location changes
-        await saveLocationsToFirestore();
-
-        // Update status: Finalizing
-        if (deleteProgressStats) {
-          deleteProgressStats.textContent = 'Finalizing...';
+        if (deleteProgressPhase) {
+          deleteProgressPhase.textContent = 'Reloading from database…';
         }
-        // Allow UI to update
-        await new Promise(resolve => setTimeout(resolve, 50));
+        if (deleteProgressStats) {
+          deleteProgressStats.textContent = 'Refreshing lists…';
+        }
 
-        // Reload data from Firestore to ensure UI is in sync
         await loadCustomersFromFirestore();
+        await loadLocationsFromFirestore();
+        await loadCodesFromFirestore();
+        await loadDrawersFromFirestore();
+        if (typeof loadPaymentProcessingSessionsFromFirestore === 'function') {
+          await loadPaymentProcessingSessionsFromFirestore();
+        }
 
-        // Update displays
         updateDashboard();
         updateCustomerTable();
         updateSettingsCustomerTable();
+        if (typeof updateSettingsLocationsTable === 'function') {
+          updateSettingsLocationsTable();
+        }
 
-        // Hide progress modal
         if (deleteProgressModal) {
           deleteProgressModal.classList.add('hidden');
         }
@@ -9755,16 +9547,16 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
           deleteProgress.classList.add('hidden');
         }
 
-        // Close settings module if it's open
         if (window.hideAllModules) {
           window.hideAllModules();
         }
 
-        // Show success alert
-        alert(`Successfully deleted ${totalCustomers} customer${totalCustomers !== 1 ? 's' : ''}!`);
+        const summary =
+          totalDocs === 0
+            ? 'Billing database was already empty.'
+            : `Successfully removed ${totalDocs} document${totalDocs !== 1 ? 's' : ''} (customers, locations, codes, cycles, sessions, drawers).`;
+        alert(summary);
       } catch (error) {
-
-        // Hide progress modal on error
         const deleteProgressModal = document.getElementById('deleteProgressModal');
         const deleteProgress = document.getElementById('deleteProgress');
         if (deleteProgressModal) {
@@ -9774,7 +9566,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
           deleteProgress.classList.add('hidden');
         }
 
-        alert('Error deleting customer data: ' + error.message);
+        alert('Error wiping billing data: ' + error.message);
       }
     };
 
@@ -13232,7 +13024,7 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       if (!module) return;
 
       // Hide other modules and dashboard buttons
-      hideAllModules();
+      hideAllModules(true);
       hideDashboardButtons();
 
       const drawerName = session.drawer?.name || 'Unknown Drawer';
@@ -15829,20 +15621,6 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       if (addClientSelect) {
         populateAddClientLocationSelect();
         addClientSelect.value = selectedLocationId;
-      }
-
-      // Update Add Customer Modal dropdown
-      const addCustomerSelect = document.getElementById('newCustomerLocation');
-      if (addCustomerSelect) {
-        // Repopulate the dropdown
-        addCustomerSelect.innerHTML = '<option value="">Select a property location</option>';
-        locations.forEach(location => {
-          const option = document.createElement('option');
-          option.value = location.id;
-          option.textContent = `${location.address} (${location.status})`;
-          addCustomerSelect.appendChild(option);
-        });
-        addCustomerSelect.value = selectedLocationId;
       }
     }
 
