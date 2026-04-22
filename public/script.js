@@ -8725,6 +8725,14 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       // Update payment status based on past due amount
       updateCustomerPaymentStatus(newCustomer);
 
+      const locSnapshot = {
+        currentResident: selectedLocation.currentResident,
+        status: selectedLocation.status,
+        ownerFullName: selectedLocation.ownerFullName,
+        ownerFirstName: selectedLocation.ownerFirstName,
+        ownerLastName: selectedLocation.ownerLastName
+      };
+
       customers.push(newCustomer);
       filteredCustomers = [...customers];
 
@@ -8740,9 +8748,23 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       window.selectedClientCodes = [];
       updateClientCodesList();
 
-      // Save only this customer to Firestore
-      await saveSingleCustomerToFirestore(customer);
-      await saveLocationsToFirestore();
+      try {
+        await saveSingleCustomerToFirestore(newCustomer);
+        await saveLocationsToFirestore();
+      } catch (err) {
+        customers = customers.filter(c => c.id !== newCustomer.id);
+        filteredCustomers = [...customers];
+        selectedLocation.currentResident = locSnapshot.currentResident;
+        selectedLocation.status = locSnapshot.status;
+        selectedLocation.ownerFullName = locSnapshot.ownerFullName;
+        selectedLocation.ownerFirstName = locSnapshot.ownerFirstName;
+        selectedLocation.ownerLastName = locSnapshot.ownerLastName;
+        window.selectedClientCodes = selectedCodes.map(c => ({ ...c }));
+        updateClientCodesList();
+        alert('Could not save client: ' + (err && err.message ? err.message : String(err)));
+        return;
+      }
+
       updateDashboard();
 
       // Show success screen instead of hiding module
