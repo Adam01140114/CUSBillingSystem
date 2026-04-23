@@ -5131,6 +5131,110 @@
       }
     }
 
+    /**
+     * Apply dollars using Settings → Payment Application Hierarchy (same bucket rules as POS).
+     * Mutates currentMonthPaid* and pastDue during the hierarchy pass.
+     * @param {boolean} [absorbRemainderInPastDue=true] — if true, leftover dollars reduce past due (deposit auto); if false, return them for POS credit/overpayment handling.
+     * @returns {number} remainingPayment after hierarchy (and after optional absorb).
+     */
+    function applyCustomerPaymentByHierarchy(
+      customer,
+      paymentAmount,
+      calcBeforePayment,
+      formattedDate,
+      paymentsAppliedOut,
+      absorbRemainderInPastDue
+    ) {
+      if (absorbRemainderInPastDue === undefined) absorbRemainderInPastDue = true;
+
+      const currentAmountDue = Math.max(0, calcBeforePayment.adjustedServiceCost || 0);
+      const taxCodesBase = Math.max(0, calcBeforePayment.totalSurcharge || 0);
+      const pucDue = Math.max(0, calcBeforePayment.pucSurchargeAmount || 0);
+      const lateFeeDue = Math.max(0, calcBeforePayment.lateFeeAmount || 0);
+
+      let remainingPayment = Math.round(Math.max(0, parseFloat(paymentAmount) || 0) * 100) / 100;
+      let paidSewer = parseFloat(customer.currentMonthPaidSewer || 0) || 0;
+      let paidTax = parseFloat(customer.currentMonthPaidTaxCodes || 0) || 0;
+      let paidPuc = parseFloat(customer.currentMonthPaidPuc || 0) || 0;
+      let paidLate = parseFloat(customer.currentMonthPaidLateFee || 0) || 0;
+      let pastDueRemaining = Math.max(0, parseFloat(calcBeforePayment.pastDue) || 0);
+
+      const hierarchy = getHierarchyDisplayOrder();
+
+      const pushApplied = (label, amount) => {
+        if (!paymentsAppliedOut || !formattedDate || amount < 0.005) return;
+        paymentsAppliedOut.push({ category: label, amount, date: formattedDate });
+      };
+
+      const applyToCategory = (label, dueGetter, applyFn) => {
+        const due = Math.max(0, dueGetter());
+        if (remainingPayment > 0.005 && due > 0.005) {
+          const applied = Math.round(Math.min(remainingPayment, due) * 100) / 100;
+          remainingPayment = Math.round((remainingPayment - applied) * 100) / 100;
+          applyFn(applied);
+          pushApplied(label, applied);
+        }
+      };
+
+      hierarchy.forEach((item) => {
+        switch (item) {
+          case 'Past due amount':
+          case 'Past Due':
+            applyToCategory('Past due amount', () => pastDueRemaining, (applied) => {
+              pastDueRemaining = Math.round((pastDueRemaining - applied) * 100) / 100;
+              subtractFromPastDueComposition(customer, applied);
+              customer.pastDue = pastDueRemaining;
+            });
+            break;
+          case 'Late fees':
+          case 'Late Fee':
+            applyToCategory('Late fees', () => Math.max(0, lateFeeDue - paidLate), (applied) => {
+              paidLate = Math.round((paidLate + applied) * 100) / 100;
+            });
+            break;
+          case 'Tax Codes':
+            applyToCategory('Tax Codes', () => Math.max(0, taxCodesBase - paidTax), (applied) => {
+              paidTax = Math.round((paidTax + applied) * 100) / 100;
+            });
+            break;
+          case 'Puc surcharge':
+            applyToCategory('Puc surcharge', () => Math.max(0, pucDue - paidPuc), (applied) => {
+              paidPuc = Math.round((paidPuc + applied) * 100) / 100;
+            });
+            break;
+          case 'Current amount due':
+          case 'Sewer Charge':
+            applyToCategory('Current amount due', () => Math.max(0, currentAmountDue - paidSewer), (applied) => {
+              paidSewer = Math.round((paidSewer + applied) * 100) / 100;
+            });
+            break;
+          default:
+            applyToCategory('Current amount due', () => Math.max(0, currentAmountDue - paidSewer), (applied) => {
+              paidSewer = Math.round((paidSewer + applied) * 100) / 100;
+            });
+        }
+      });
+
+      if (absorbRemainderInPastDue && remainingPayment > 0.005) {
+        const pastDueBeforeRemaining = parseFloat(customer.pastDue || 0) || 0;
+        subtractFromPastDueComposition(customer, remainingPayment);
+        customer.pastDue = Math.round((pastDueBeforeRemaining - remainingPayment) * 100) / 100;
+        remainingPayment = 0;
+      }
+
+      if (absorbRemainderInPastDue) {
+        syncPastDueCompositionToPastDueField(customer);
+      }
+
+      customer.currentMonthPaidSewer = paidSewer;
+      customer.currentMonthPaidTaxCodes = paidTax;
+      customer.currentMonthPaidPuc = paidPuc;
+      customer.currentMonthPaidLateFee = paidLate;
+      customer.currentMonthPaid = Math.round((paidSewer + paidTax + paidPuc + paidLate) * 100) / 100;
+
+      return Math.max(0, remainingPayment);
+    }
+
     // Apply deposit automatically when a bill reaches the configured days-late threshold
     function maybeApplyDepositAt60Days(customer) {
       try {
@@ -5165,105 +5269,38 @@
           return;
         }
 
-        // Same dollars as Process Bill "Total Amount Due": frozen snapshot from last Produce Bill when present,
-        // else calculateCustomerTotal with billUiSnapshot (matches showCustomerBillInfo). Do not use the path that
-        // runs maybeAppendLateFeeChargeHistory without billUiSnapshot — it can inflate total vs the customer panel.
-        const frozenSnap = customer.processBillPanelFrozenSnapshot;
-        const hasFrozenDue = frozenSnap && typeof frozenSnap.amountDue === 'number';
-        const hasFrozenLate = frozenSnap && typeof frozenSnap.lateFee === 'number';
-        let calcUi = null;
-        if (!hasFrozenDue || !hasFrozenLate) {
-          calcUi = calculateCustomerTotal(customer, {
-            billUiSnapshot: true,
-            skipDepositAutoApply: true
-          });
-        }
-        const balanceOwed = hasFrozenDue
-          ? Math.max(0, frozenSnap.amountDue)
-          : Math.max(0, parseFloat(calcUi.total) || 0);
-        const lateFeeAmtForAlloc = hasFrozenLate
-          ? Math.max(0, frozenSnap.lateFee)
-          : Math.max(0, parseFloat(calcUi.lateFeeAmount) || 0);
-        if (balanceOwed <= 0.005) {
+        // Full amount owed (same total as Amount Breakdown / calculateCustomerTotal), not the frozen PDF cap,
+        // so the deposit cannot leave a stranded past-due slice.
+        const calcBeforeDeposit = calculateCustomerTotal(customer, {
+          billUiSnapshot: true,
+          skipDepositAutoApply: true
+        });
+        const trueOwed = Math.round(Math.max(0, parseFloat(calcBeforeDeposit.total) || 0) * 100) / 100;
+        if (trueOwed <= 0.005) {
           if (shouldLogDeposit) {
 
           }
           return;
         }
 
-        const appliedRaw = Math.min(deposit, balanceOwed);
+        const appliedRaw = Math.min(deposit, trueOwed);
         const applied = Math.round(appliedRaw * 100) / 100;
-        if (applied <= 0) {
+        if (applied <= 0.005) {
           if (shouldLogDeposit) {
 
           }
           return;
         }
 
-        const parts = getSubtotalBeforePucAndPucSurcharge(customer);
-        const lateFeeAmt = lateFeeAmtForAlloc;
-        const { subtotalBeforePuc, pucSurchargeAmount, adjustedServiceCost, totalSurcharge } = parts;
-        let paidSewer = parseFloat(customer.currentMonthPaidSewer || 0);
-        let paidTax = parseFloat(customer.currentMonthPaidTaxCodes || 0);
-        let paidPuc = parseFloat(customer.currentMonthPaidPuc || 0);
-        let paidLate = parseFloat(customer.currentMonthPaidLateFee || 0);
-        const beforeSewer = paidSewer;
-        const beforeTax = paidTax;
-        const beforePuc = paidPuc;
-        const beforeLate = paidLate;
-        let pastDueNum = parseFloat(customer.pastDue || 0);
-        const beforePastDue = pastDueNum;
-        const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, lateFeeAmt, parts);
+        const lateFeeAmt = Math.max(0, parseFloat(calcBeforeDeposit.lateFeeAmount) || 0);
 
-        if (shouldLogDeposit) {
+        const beforeSewer = parseFloat(customer.currentMonthPaidSewer || 0) || 0;
+        const beforeTax = parseFloat(customer.currentMonthPaidTaxCodes || 0) || 0;
+        const beforePuc = parseFloat(customer.currentMonthPaidPuc || 0) || 0;
+        const beforeLate = parseFloat(customer.currentMonthPaidLateFee || 0) || 0;
+        const beforePastDue = parseFloat(customer.pastDue || 0) || 0;
 
-        }
-
-        // Latest charges first: apply to current cycle, then positive past due
-        let remaining = applied;
-        const toCurrent = Math.min(remaining, currentDue);
-        if (toCurrent > 0) {
-          const sewerUnpaid = Math.max(0, adjustedServiceCost - paidSewer);
-          const taxCodesUnpaid = Math.max(0, totalSurcharge - paidTax);
-          const pucUnpaid = Math.max(0, pucSurchargeAmount - paidPuc);
-          const taxAndPucUnpaid = taxCodesUnpaid + pucUnpaid;
-          const lateUnpaid = Math.max(0, lateFeeAmt - paidLate);
-          const totalUnpaid = sewerUnpaid + taxAndPucUnpaid + lateUnpaid;
-
-          if (totalUnpaid > 0.005) {
-            let addS = Math.round(toCurrent * (sewerUnpaid / totalUnpaid) * 100) / 100;
-            let addTPool = Math.round(toCurrent * (taxAndPucUnpaid / totalUnpaid) * 100) / 100;
-            let addL = Math.round((toCurrent - addS - addTPool) * 100) / 100;
-            paidSewer = Math.round((paidSewer + addS) * 100) / 100;
-            if (taxAndPucUnpaid > 0.005) {
-              const addTax = Math.round(addTPool * (taxCodesUnpaid / taxAndPucUnpaid) * 100) / 100;
-              const addPuc = Math.round((addTPool - addTax) * 100) / 100;
-              paidTax = Math.round((paidTax + addTax) * 100) / 100;
-              paidPuc = Math.round((paidPuc + addPuc) * 100) / 100;
-            } else {
-              paidTax = Math.round((paidTax + addTPool) * 100) / 100;
-            }
-            paidLate = Math.round((paidLate + addL) * 100) / 100;
-          } else {
-            paidSewer = Math.round((paidSewer + toCurrent) * 100) / 100;
-          }
-          customer.currentMonthPaidSewer = paidSewer;
-          customer.currentMonthPaidTaxCodes = paidTax;
-          customer.currentMonthPaidPuc = paidPuc;
-          customer.currentMonthPaidLateFee = paidLate;
-          customer.currentMonthPaid = Math.round((paidSewer + paidTax + paidPuc + paidLate) * 100) / 100;
-          remaining = Math.round((remaining - toCurrent) * 100) / 100;
-        }
-        if (remaining > 0) {
-          const pdPositive = Math.max(0, pastDueNum);
-          const toPast = Math.min(remaining, pdPositive);
-          if (toPast > 0) {
-            subtractFromPastDueComposition(customer, toPast);
-            customer.pastDue = Math.round((pastDueNum - toPast) * 100) / 100;
-            remaining = Math.round((remaining - toPast) * 100) / 100;
-            syncPastDueCompositionToPastDueField(customer);
-          }
-        }
+        applyCustomerPaymentByHierarchy(customer, applied, calcBeforeDeposit, null, null, true);
 
         // Billing trail: record like a real payment so Amount Breakdown shows last amount due / last payment paid
         const today = window.getCurrentDate ? window.getCurrentDate() : new Date();
@@ -5273,7 +5310,7 @@
           customer.paymentHistory = [];
         }
         customer.lastPayment = depDateStr;
-        customer.lastPrintedStatementTotalDue = Math.round(balanceOwed * 100) / 100;
+        customer.lastPrintedStatementTotalDue = trueOwed;
 
         customer.deposit = Math.round((deposit - applied) * 100) / 100;
         customer.lastBill60DayDepositApplied = true;
@@ -5306,7 +5343,7 @@
           date: depDateStr,
           timestamp: today.toISOString(),
           ledgerOrder: nextLedgerOrder(customer),
-          amountDue: Math.round(balanceOwed * 100) / 100,
+          amountDue: trueOwed,
           amountPaid: applied,
           creditGiven: null,
           lateFeeAmount: Math.round((lateFeeAmt || 0) * 100) / 100,
@@ -6683,80 +6720,16 @@
         let overpaymentAmount = 0;
         const checkReceived = paymentType === 'Check' ? (!isNaN(checkReceivedInput) ? checkReceivedInput : paymentAmount) : 0;
 
-        // Prepare amounts for hierarchy application
-        const currentAmountDue = Math.max(0, calcBeforePayment.adjustedServiceCost);
-        const taxCodesBase = Math.max(0, calcBeforePayment.totalSurcharge || 0);
-        const pucDue = Math.max(0, calcBeforePayment.pucSurchargeAmount || 0);
-        const taxCodesTotal = taxCodesBase + pucDue;
-        const lateFeeDue = Math.max(0, calcBeforePayment.lateFeeAmount || 0);
-
-        let remainingPayment = paymentAmount;
-        let paidSewer = customer.currentMonthPaidSewer || 0;
-        let paidTax = customer.currentMonthPaidTaxCodes || 0;
-        let paidPuc = customer.currentMonthPaidPuc || 0;
-        let paidLate = customer.currentMonthPaidLateFee || 0;
-        let pastDueRemaining = pastDueBeforePayment;
-
         const paymentsApplied = [];
 
-        const hierarchy = window.paymentHierarchyOrder || [];
-
-        const applyToCategory = (label, dueGetter, applyFn) => {
-          const due = Math.max(0, dueGetter());
-
-          if (remainingPayment > 0 && due > 0) {
-            const applied = Math.min(remainingPayment, due);
-
-            remainingPayment -= applied;
-            applyFn(applied);
-            paymentsApplied.push({ category: label, amount: applied, date: formattedDate });
-
-          } else {
-
-          }
-        };
-
-        hierarchy.forEach((item, idx) => {
-
-          switch (item) {
-            case 'Past due amount':
-            case 'Past Due':
-              applyToCategory('Past due amount', () => Math.max(0, pastDueRemaining), (applied) => {
-                pastDueRemaining -= applied;
-                subtractFromPastDueComposition(customer, applied);
-                customer.pastDue = pastDueRemaining;
-              });
-              break;
-            case 'Late fees':
-            case 'Late Fee':
-              applyToCategory('Late fees', () => Math.max(0, lateFeeDue - paidLate), (applied) => {
-                paidLate += applied;
-              });
-              break;
-            case 'Tax Codes':
-              applyToCategory('Tax Codes', () => Math.max(0, taxCodesBase - paidTax), (applied) => {
-                paidTax += applied;
-              });
-              break;
-            case 'Puc surcharge':
-              applyToCategory('Puc surcharge', () => Math.max(0, pucDue - paidPuc), (applied) => {
-                paidPuc += applied;
-              });
-              break;
-            case 'Current amount due':
-            case 'Sewer Charge':
-              applyToCategory('Current amount due', () => Math.max(0, currentAmountDue - paidSewer), (applied) => {
-                paidSewer += applied;
-              });
-              break;
-            default:
-
-              applyToCategory('Current amount due', () => Math.max(0, currentAmountDue - paidSewer), (applied) => {
-                paidSewer += applied;
-              });
-              break;
-          }
-        });
+        let remainingPayment = applyCustomerPaymentByHierarchy(
+          customer,
+          paymentAmount,
+          calcBeforePayment,
+          formattedDate,
+          paymentsApplied,
+          false
+        );
 
         // Calculate credit after payment hierarchy is applied
         // Credit is the actual overpayment: checkReceived - paymentAmount (when credit is selected)
@@ -6787,13 +6760,6 @@
         }
 
         syncPastDueCompositionToPastDueField(customer);
-
-        // Update trackers
-        customer.currentMonthPaidSewer = paidSewer;
-        customer.currentMonthPaidTaxCodes = paidTax;
-        customer.currentMonthPaidPuc = paidPuc;
-        customer.currentMonthPaidLateFee = paidLate;
-        customer.currentMonthPaid = paidSewer + paidTax + paidPuc + paidLate;
 
         // Get the payment number BEFORE adding to paymentHistory (this will be the global payment number)
         if (!customer.paymentHistory) {
