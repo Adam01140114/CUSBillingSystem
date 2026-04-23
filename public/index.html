@@ -16,7 +16,7 @@
   <!-- Firebase SDK -->
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-    import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, writeBatch } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+    import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, writeBatch, deleteField } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 
     const firebaseConfig = {
@@ -123,14 +123,68 @@
     let sewerCharge = 170;
 
     // Late fee settings (loaded from Firebase)
-    // lateFeeMode: 'flat' | 'percent' | 'combination' — flat-only uses $ × 30-day cycles; percent = % of past due once; combination = max(flat $, % of past due), both once (matches typical bill language).
+    // lateFeeMode: 'flat' | 'percent' | 'combination' — one automatic late fee per bill when the 21-day timer hits (if owed); no 30-day fee stacking.
     let lateFeeFlat = 20;
     let lateFeePercent = 0;
     let lateFeeMode = 'flat';
 
-    // Toggle: automatically apply late fees based on days late (30/60/90 cycles)
+    // Toggle: automatically apply late fees (21-day per-bill timer; 30-60-90 is a separate delinquency clock for search/deposit)
     // Defaults to true; stored in settings/toggles as autoApplyLateFees
     let autoApplyLateFees = true;
+
+    /** Days since last bill print before late fee can apply (default 21). settings/toggles.lateFeeTimerDays */
+    let lateFeeTimerDays = 21;
+    /** Continuous 30-60-90 delinquency days before deposit auto-apply (default 60). settings/toggles.depositWithdrawDelinquencyDays */
+    let depositWithdrawDelinquencyDays = 60;
+
+    /** When true, no auto late fee if total due (excl. that fee) is at or below lateFeeGraceAmountDollars. settings/toggles */
+    let lateFeeGraceAmountEnabled = false;
+    let lateFeeGraceAmountDollars = 0;
+
+    function getLateFeeTimerDays() {
+      const n = parseInt(lateFeeTimerDays, 10);
+      if (isNaN(n) || n < 1) return 21;
+      return Math.min(365, n);
+    }
+
+    function getLateFeeGraceCalendarDays() {
+      return Math.max(0, getLateFeeTimerDays() - 1);
+    }
+
+    function getDepositWithdrawDelinquencyDays() {
+      const n = parseInt(depositWithdrawDelinquencyDays, 10);
+      if (isNaN(n) || n < 1) return 60;
+      return Math.min(365, n);
+    }
+
+    function getDepositWithdrawBillLatePhrase() {
+      return `${getDepositWithdrawDelinquencyDays()}+`;
+    }
+
+    function getLateFeeGraceAmountDollars() {
+      const n = parseFloat(lateFeeGraceAmountDollars);
+      if (isNaN(n) || n < 0) return 0;
+      return Math.round(Math.min(999999.99, n) * 100) / 100;
+    }
+
+    /** True when grace toggle is on, threshold is positive, and total due (excl. auto late fee) is at or below that threshold. */
+    function isLateFeeBlockedByGraceAmount(customer) {
+      if (!lateFeeGraceAmountEnabled) return false;
+      const cap = getLateFeeGraceAmountDollars();
+      if (cap <= 0.005) return false;
+      const owed = getTotalDueExcludingAutoLateFee(customer);
+      return owed <= cap + 0.005;
+    }
+
+    /** Syncs test-date shortcut button label/title with Settings → Toggles late-fee day count. */
+    function refreshLateFeeTimerTestButtonUi() {
+      const btn = document.getElementById('advanceTestDateByLateFeeTimerBtn');
+      if (!btn) return;
+      const n = getLateFeeTimerDays();
+      btn.textContent = `${n}+ days`;
+      btn.title =
+        `Set test date to ${n} days after the current simulated date (runs advancing calendar animation)`;
+    }
 
     // PUC Surcharge setting (defaults to 0, loaded from Firebase, applied as percentage to all customers)
     let pucSurcharge = 0;
@@ -699,14 +753,15 @@
         for (const code of codes) {
           const codeRef = doc(codesRef, code.id);
 
-          // Build the code object to save - preserve ALL fields from the code object
-          // Use spread operator to copy all properties, then ensure amount/percentage are set correctly
+          const amountVal =
+            code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0);
           const codeToSave = {
             ...code,
-            // Ensure amount is set - use code.amount if it exists (even if 0), otherwise fall back to percentage or 0
-            amount: code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0),
-            // For percentage type, sync percentage with amount if amount is set, otherwise use percentage or 0
-            percentage: code.type === 'percentage' && code.amount !== undefined ? code.amount : (code.percentage !== undefined ? code.percentage : 0)
+            amount: amountVal,
+            percentage:
+              (code.type || 'percentage') === 'percentage'
+                ? amountVal
+                : deleteField()
           };
 
           await setDoc(codeRef, codeToSave);
@@ -1147,6 +1202,20 @@
         let settings;
         if (settingsDoc.exists()) {
           const data = settingsDoc.data();
+          const rawLateDays = parseInt(data.lateFeeTimerDays, 10);
+          const rawDepositDays = parseInt(data.depositWithdrawDelinquencyDays, 10);
+          const lateDays = !isNaN(rawLateDays) && rawLateDays >= 1 ? Math.min(365, rawLateDays) : 21;
+          const depDays = !isNaN(rawDepositDays) && rawDepositDays >= 1 ? Math.min(365, rawDepositDays) : 60;
+          lateFeeTimerDays = lateDays;
+          depositWithdrawDelinquencyDays = depDays;
+          lateFeeGraceAmountEnabled =
+            data.lateFeeGraceAmountEnabled === true ||
+            data.lateFeeGraceAmountEnabled === 'true' ||
+            data.lateFeeGraceAmountEnabled === 1;
+          const rawGraceAmt = parseFloat(data.lateFeeGraceAmountDollars);
+          lateFeeGraceAmountDollars =
+            !isNaN(rawGraceAmt) && rawGraceAmt >= 0 ? Math.round(Math.min(999999.99, rawGraceAmt) * 100) / 100 : 0;
+
           settings = {
             askUserCodePerTransaction: data.askUserCodePerTransaction || false,
             skipPOSInitialRegisterCount: data.skipPOSInitialRegisterCount || false,
@@ -1158,7 +1227,11 @@
             autoApplyLateFees: (data.autoApplyLateFees === undefined || data.autoApplyLateFees === null)
               ? true
               : !!data.autoApplyLateFees,
-            testDate: data.testDate || null
+            testDate: data.testDate || null,
+            lateFeeTimerDays: lateDays,
+            depositWithdrawDelinquencyDays: depDays,
+            lateFeeGraceAmountEnabled: lateFeeGraceAmountEnabled,
+            lateFeeGraceAmountDollars: lateFeeGraceAmountDollars
           };
 
           // Load test date if it exists
@@ -1172,7 +1245,6 @@
           }
           // Keep global toggle in sync
           autoApplyLateFees = settings.autoApplyLateFees;
-          console.log('[LateLogic] loadTogglesSettings: autoApplyLateFees =', autoApplyLateFees, '(from Firestore settings/toggles)');
 
         } else {
           // If setting doesn't exist, create it with default values
@@ -1184,11 +1256,19 @@
             afterHoursEndTime: '09:00',
             posDoesntCloseOut: false,
             useUsernameInsteadOfUserCode: false,
-            autoApplyLateFees: true
+            autoApplyLateFees: true,
+            lateFeeTimerDays: 21,
+            depositWithdrawDelinquencyDays: 60,
+            lateFeeGraceAmountEnabled: false,
+            lateFeeGraceAmountDollars: 0
           };
+          lateFeeTimerDays = 21;
+          depositWithdrawDelinquencyDays = 60;
+          lateFeeGraceAmountEnabled = false;
+          lateFeeGraceAmountDollars = 0;
           await setDoc(settingsRef, settings);
           autoApplyLateFees = true;
-          console.log('[LateLogic] loadTogglesSettings: autoApplyLateFees = true (no toggles doc; created defaults)');
+
         }
 
         // Update checkboxes if they exist
@@ -1230,9 +1310,33 @@
         } else {
 
         }
+        if (autoApplyLateFeesCheckbox) {
+          autoApplyLateFeesCheckbox.checked = !!settings.autoApplyLateFees;
+        }
+        const lateFeeTimerDaysInput = document.getElementById('toggleLateFeeTimerDays');
+        if (lateFeeTimerDaysInput) {
+          lateFeeTimerDaysInput.value = String(settings.lateFeeTimerDays != null ? settings.lateFeeTimerDays : getLateFeeTimerDays());
+        }
+        const depositWithdrawDaysInput = document.getElementById('toggleDepositWithdrawDelinquencyDays');
+        if (depositWithdrawDaysInput) {
+          depositWithdrawDaysInput.value = String(
+            settings.depositWithdrawDelinquencyDays != null ? settings.depositWithdrawDelinquencyDays : getDepositWithdrawDelinquencyDays()
+          );
+        }
+        const lateFeeGraceAmtToggle = document.getElementById('toggleLateFeeGraceAmountEnabled');
+        if (lateFeeGraceAmtToggle) {
+          lateFeeGraceAmtToggle.checked = !!settings.lateFeeGraceAmountEnabled;
+        }
+        const lateFeeGraceAmtInput = document.getElementById('toggleLateFeeGraceAmountDollars');
+        if (lateFeeGraceAmtInput) {
+          const g = settings.lateFeeGraceAmountDollars != null ? settings.lateFeeGraceAmountDollars : getLateFeeGraceAmountDollars();
+          lateFeeGraceAmtInput.value = String(g);
+        }
 
         // Update time inputs visibility
         updateAfterHoursTimeInputs();
+        updateLateFeeGraceAmountInputsVisibility();
+        refreshLateFeeTimerTestButtonUi();
 
         return settings;
       } catch (error) {
@@ -1245,7 +1349,12 @@
           afterHoursStartTime: '17:00',
           afterHoursEndTime: '09:00',
           posDoesntCloseOut: false,
-          useUsernameInsteadOfUserCode: false
+          useUsernameInsteadOfUserCode: false,
+          autoApplyLateFees: true,
+          lateFeeTimerDays: 21,
+          depositWithdrawDelinquencyDays: 60,
+          lateFeeGraceAmountEnabled: false,
+          lateFeeGraceAmountDollars: 0
         };
       }
     }
@@ -1261,6 +1370,10 @@
         const posDoesntCloseOutCheckbox = document.getElementById('togglePOSDoesntCloseOut');
         const useUsernameInsteadOfUserCodeCheckbox = document.getElementById('toggleUseUsernameInsteadOfUserCode');
         const autoApplyLateFeesCheckbox = document.getElementById('toggleAutoApplyLateFees');
+        const lateFeeTimerDaysInput = document.getElementById('toggleLateFeeTimerDays');
+        const depositWithdrawDaysInput = document.getElementById('toggleDepositWithdrawDelinquencyDays');
+        const lateFeeGraceAmtToggle = document.getElementById('toggleLateFeeGraceAmountEnabled');
+        const lateFeeGraceAmtInput = document.getElementById('toggleLateFeeGraceAmountDollars');
 
         const askUserCodePerTransaction = toggleCheckbox ? toggleCheckbox.checked : false;
         const skipPOSInitialRegisterCount = skipInitialCountCheckbox ? skipInitialCountCheckbox.checked : false;
@@ -1271,8 +1384,30 @@
         const useUsernameInsteadOfUserCode = useUsernameInsteadOfUserCodeCheckbox ? useUsernameInsteadOfUserCodeCheckbox.checked : false;
         const autoApplyLateFeesLocal = autoApplyLateFeesCheckbox ? autoApplyLateFeesCheckbox.checked : true;
 
+        let lfd = lateFeeTimerDaysInput ? parseInt(lateFeeTimerDaysInput.value, 10) : lateFeeTimerDays;
+        let dwd = depositWithdrawDaysInput ? parseInt(depositWithdrawDaysInput.value, 10) : depositWithdrawDelinquencyDays;
+        if (isNaN(lfd) || lfd < 1) lfd = 21;
+        lfd = Math.min(365, lfd);
+        if (isNaN(dwd) || dwd < 1) dwd = 60;
+        dwd = Math.min(365, dwd);
+        lateFeeTimerDays = lfd;
+        depositWithdrawDelinquencyDays = dwd;
+        if (lateFeeTimerDaysInput) lateFeeTimerDaysInput.value = String(lfd);
+        if (depositWithdrawDaysInput) depositWithdrawDaysInput.value = String(dwd);
+
+        const lateFeeGraceEnabledLocal = lateFeeGraceAmtToggle ? lateFeeGraceAmtToggle.checked : false;
+        let graceAmt = lateFeeGraceAmtInput ? parseFloat(lateFeeGraceAmtInput.value) : lateFeeGraceAmountDollars;
+        if (isNaN(graceAmt) || graceAmt < 0) graceAmt = 0;
+        graceAmt = Math.round(Math.min(999999.99, graceAmt) * 100) / 100;
+        lateFeeGraceAmountEnabled = lateFeeGraceEnabledLocal;
+        lateFeeGraceAmountDollars = graceAmt;
+        if (lateFeeGraceAmtInput) lateFeeGraceAmtInput.value = String(graceAmt);
+
         const settingsRef = doc(db, 'settings', 'toggles');
+        const existingSnap = await getDoc(settingsRef);
+        const prev = existingSnap.exists() ? existingSnap.data() : {};
         const settingsToSave = {
+          ...prev,
           askUserCodePerTransaction: askUserCodePerTransaction,
           skipPOSInitialRegisterCount: skipPOSInitialRegisterCount,
           afterHoursLogoutEnabled: afterHoursLogoutEnabled,
@@ -1281,12 +1416,18 @@
           posDoesntCloseOut: posDoesntCloseOut,
           useUsernameInsteadOfUserCode: useUsernameInsteadOfUserCode,
           autoApplyLateFees: autoApplyLateFeesLocal,
+          lateFeeTimerDays: lfd,
+          depositWithdrawDelinquencyDays: dwd,
+          lateFeeGraceAmountEnabled: lateFeeGraceEnabledLocal,
+          lateFeeGraceAmountDollars: graceAmt,
           updatedAt: new Date().toISOString()
         };
 
         autoApplyLateFees = autoApplyLateFeesLocal;
 
         await setDoc(settingsRef, settingsToSave);
+        refreshLateFeeTimerTestButtonUi();
+        updateLateFeeGraceAmountInputsVisibility();
 
         // Show success feedback
         if (toggleCheckbox) {
@@ -1326,10 +1467,22 @@
       }
     }
 
+    function updateLateFeeGraceAmountInputsVisibility() {
+      const toggle = document.getElementById('toggleLateFeeGraceAmountEnabled');
+      const wrap = document.getElementById('lateFeeGraceAmountWrap');
+      if (!toggle || !wrap) return;
+      if (toggle.checked) {
+        wrap.classList.remove('hidden');
+      } else {
+        wrap.classList.add('hidden');
+      }
+    }
+
     // Make loadTogglesSettings globally accessible
     window.loadTogglesSettings = loadTogglesSettings;
     window.saveTogglesSettings = saveTogglesSettings;
     window.updateAfterHoursTimeInputs = updateAfterHoursTimeInputs;
+    window.updateLateFeeGraceAmountInputsVisibility = updateLateFeeGraceAmountInputsVisibility;
 
     // Print payment receipt from session details
     window.printPaymentReceiptFromSession = function(sessionId, entryIndex) {
@@ -1574,22 +1727,16 @@
     }
 
     /**
-     * First local calendar date on which "days late after grace" reaches the start of cycle N
-     * (cycle 1 → 1 day late, cycle 2 → 31, …), matching getLateFeeCycleCount tiers.
+     * First calendar date on which the per-bill late-fee timer reaches the configured day (last bill print + N days).
      */
-    function getFirstCalendarDateWhenLateFeeCycleStarts(customer, cycle) {
-      if (!customer || cycle < 1) return null;
-      const anchorIso = customer.lateFeeAnchorPrintDate || customer.lastBillPrintDate;
-      if (!anchorIso) return null;
+    function getFirstCalendarDateWhenLateFeeAfter21Days(customer) {
+      if (!customer || !customer.lastBillPrintDate) return null;
       try {
-        const a = new Date(anchorIso);
+        const a = new Date(customer.lastBillPrintDate);
         if (isNaN(a.getTime())) return null;
         const anchorLocal = new Date(a.getFullYear(), a.getMonth(), a.getDate());
-        const graceDays = 20;
-        const firstCalLateInCycle = 1 + (cycle - 1) * 30;
-        const daysSincePrintForFirstDayOfCycle = graceDays + firstCalLateInCycle;
         const d = new Date(anchorLocal.getFullYear(), anchorLocal.getMonth(), anchorLocal.getDate());
-        d.setDate(d.getDate() + daysSincePrintForFirstDayOfCycle);
+        d.setDate(d.getDate() + getLateFeeTimerDays());
         return d;
       } catch (e) {
         return null;
@@ -1614,7 +1761,7 @@
         try {
           calculateCustomerTotal(customers[i], { billUiSnapshot: true });
         } catch (e) {
-          console.warn('[TestDate] calculateCustomerTotal', customers[i] && customers[i].id, e);
+
         }
       }
     }
@@ -1811,11 +1958,11 @@
 
     };
 
-    /** Move simulated calendar 21 days forward (same animation as Save with a future date). */
+    /** Move simulated calendar forward by the configured per-bill late-fee timer length (Settings → Toggles). */
     window.advanceTestDateBy21Days = async function() {
       const startD = getEffectiveTestCalendarDate();
       const tgt = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
-      tgt.setDate(tgt.getDate() + 21);
+      tgt.setDate(tgt.getDate() + getLateFeeTimerDays());
       await window.setTestDate(formatLocalYMD(tgt), {});
     };
 
@@ -3036,7 +3183,7 @@
 
         updateStats();
       } catch (e) {
-        console.error('Dashboard data load error:', e);
+
       } finally {
         resolveBillModuleCustomersReadyGate();
       }
@@ -3208,18 +3355,18 @@
 
     }
 
-    // --- Late tracking: calendar from delinquency anchor print + 20-day grace ---
-    // lateFeeAnchorPrintDate = first bill print of the current unpaid streak (set once, kept across rebills).
-    // lastBillPrintDate = latest statement print (due date on PDF still uses this).
-    // Owed balance can be prior pastDue OR unpaid current-cycle charges (pastDue may be $0).
+    // --- Late tracking ---
+    // lateFeeAnchorPrintDate = start of the continuous 30-60-90 delinquency streak (unchanged across rebills until paid to $0).
+    // lastBillPrintDate = latest bill print — 21-day late fee timer always counts from this date only (restarts each bill).
 
     function getLateFeeTrackingPrintDateIso(customer) {
       if (!customer) return null;
       return customer.lateFeeAnchorPrintDate || customer.lastBillPrintDate || null;
     }
 
+    /** Calendar days since the most recent bill print (21-day late-fee timer); restarts every bill. */
     function getDaysSinceLastBillPrint(customer) {
-      const dateIso = getLateFeeTrackingPrintDateIso(customer);
+      const dateIso = customer && customer.lastBillPrintDate;
       if (!dateIso) return null;
       let billDate;
       try {
@@ -3242,19 +3389,12 @@
       return Math.floor(diffMs / (24 * 60 * 60 * 1000));
     }
 
-    /** Days past the due date (print + grace). Does not check whether they still owe. */
-    function getCalendarDaysLateAfterGrace(customer, graceDays = 20) {
+    /** Days past the due date (print + grace). Default grace = late fee day − 1. */
+    function getCalendarDaysLateAfterGrace(customer, graceDays) {
+      const g = graceDays !== undefined && graceDays !== null ? graceDays : getLateFeeGraceCalendarDays();
       const dsp = getDaysSinceLastBillPrint(customer);
       if (dsp === null) return 0;
-      return Math.max(0, dsp - graceDays);
-    }
-
-    /** Number of 30-day late-fee cycles from days past grace (continues indefinitely). */
-    function getLateFeeCycleCount(daysLate) {
-      if (!autoApplyLateFees || daysLate <= 0) return 0;
-      let cycles = 1 + Math.floor((daysLate - 1) / 30);
-      if (cycles < 0) cycles = 0;
-      return cycles;
+      return Math.max(0, dsp - g);
     }
 
     /**
@@ -3321,7 +3461,7 @@
       const amountDue = Math.round(Math.max(0, parseFloat(pdfTotalAmount) || 0) * 100) / 100;
       const pastDue = Math.round(Math.max(0, parseFloat(pdfPreviousCharges) || 0) * 100) / 100;
       const lateFee = Math.round(Math.max(0, parseFloat(pdfLateFee) || 0) * 100) / 100;
-      const dueDateStr = getBillDueDateStr(customer, 20);
+      const dueDateStr = getBillDueDateStr(customer);
       const statusClass = getPaymentStatusBadgeClass(customer);
       const statusLabel = getPaymentStatusBadgeLabel(customer);
       customer.processBillPanelFrozenSnapshot = {
@@ -3358,14 +3498,9 @@
       return Math.max(fieldNet, stmtUnpaid);
     }
 
-    /**
-     * Late fee $ for a customer given calendar days late (past grace).
-     * Flat: flatPerCycle × cycles (30-day tiers). Percent: past-due base × (percent/100) once — not multiplied by cycles.
-     * Combination: max(minimum flat $, % of past due) — same as “whichever is greater” on the bill; do not multiply flat by cycles.
-     */
-    function getLateFeeAmountForCustomerAndDaysLate(customer, calendarDaysLate) {
-      const cycles = getLateFeeCycleCount(calendarDaysLate);
-      if (cycles === 0) return 0;
+    /** One late-fee charge (flat / percent / combination) — no 30-day stacking. */
+    function getLateFeeSingleCycleAmount(customer) {
+      if (!customer) return 0;
       const base = getLateFeeBaseAmountBeforeFees(customer);
       if (lateFeeMode === 'percent') {
         if (base <= 0) return 0;
@@ -3376,7 +3511,69 @@
         const flatPart = lateFeeFlat;
         return Math.round(Math.max(flatPart, pctPart) * 100) / 100;
       }
-      return Math.round(lateFeeFlat * cycles * 100) / 100;
+      return Math.round(lateFeeFlat * 100) / 100;
+    }
+
+    /**
+     * Total due before automatic late fee (current cycle + past due, net of credit).
+     * Used for 21-day late fee eligibility and the continuous 30-60-90 delinquency timer.
+     */
+    function getTotalDueExcludingAutoLateFee(customer) {
+      if (!customer) return 0;
+      const parts = getSubtotalBeforePucAndPucSurcharge(customer);
+      const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, 0, parts);
+      const pastDueRaw = parseFloat(customer.pastDue || 0);
+      const pastDue = Math.max(0, pastDueRaw);
+      const credit = Math.abs(Math.min(0, pastDueRaw));
+      return Math.max(0, Math.round((currentDue + pastDue - credit) * 100) / 100);
+    }
+
+    /**
+     * 30-60-90 timer: whole calendar days from lateFeeAnchorPrintDate while total due (excl. auto late fee) > 0.
+     * Does not reset on rebill until paid to $0 (anchor cleared in calculateCustomerTotal when total hits 0).
+     */
+    function getContinuousDelinquencyDays(customer) {
+      if (!customer || !customer.lateFeeAnchorPrintDate) return 0;
+      if (getTotalDueExcludingAutoLateFee(customer) <= 0.005) return 0;
+      let anchorDate;
+      try {
+        anchorDate = new Date(customer.lateFeeAnchorPrintDate);
+      } catch (e) {
+        return 0;
+      }
+      if (!anchorDate || isNaN(anchorDate.getTime())) return 0;
+      const now = window.getCurrentDate ? window.getCurrentDate() : new Date();
+      const ay = anchorDate.getFullYear();
+      const am = anchorDate.getMonth();
+      const ad = anchorDate.getDate();
+      const ny = now.getFullYear();
+      const nm = now.getMonth();
+      const nd = now.getDate();
+      const anchorUtc = Date.UTC(ay, am, ad);
+      const nowUtc = Date.UTC(ny, nm, nd);
+      const diffMs = nowUtc - anchorUtc;
+      if (diffMs <= 0) return 0;
+      return Math.floor(diffMs / (24 * 60 * 60 * 1000));
+    }
+
+    /**
+     * Late fee dollars: one charge when N+ days since last bill print and amount owed (excl. that fee) > 0 (N = Settings → Toggles).
+     */
+    function compute21DayLateFeeDollars(customer) {
+      if (!customer || !autoApplyLateFees) return 0;
+      const dsp = getDaysSinceLastBillPrint(customer);
+      const minDays = getLateFeeTimerDays();
+      if (dsp === null || dsp < minDays) return 0;
+      if (getTotalDueExcludingAutoLateFee(customer) <= 0.005) return 0;
+      if (isLateFeeBlockedByGraceAmount(customer)) return 0;
+      return getLateFeeSingleCycleAmount(customer);
+    }
+
+    /**
+     * Late fee $ (21-day rule; second parameter unused, kept for call-site compatibility).
+     */
+    function getLateFeeAmountForCustomerAndDaysLate(customer, calendarDaysLate_unused) {
+      return compute21DayLateFeeDollars(customer);
     }
 
     /** Current-cycle subtotal + PUC only (no late fee, no side effects). */
@@ -3465,11 +3662,14 @@
     }
 
     /**
-     * Total still owed for late / fee purposes, given calendar days late (avoids recursion with getAutomaticLateFeeAmount).
+     * Total still owed including automatic late fee. Pass lateFeeAmt explicitly to avoid recursion with getAutomaticLateFeeAmount.
      */
-    function getTotalOwedForLateTracking(customer, calendarDaysLate) {
+    function getTotalOwedForLateTracking(customer, lateFeeAmtExplicit) {
       const parts = getSubtotalBeforePucAndPucSurcharge(customer);
-      const lateFeeAmt = getLateFeeAmountForCustomerAndDaysLate(customer, calendarDaysLate);
+      const lateFeeAmt =
+        typeof lateFeeAmtExplicit === 'number' && !isNaN(lateFeeAmtExplicit)
+          ? lateFeeAmtExplicit
+          : compute21DayLateFeeDollars(customer);
       const pastDueRaw = parseFloat(customer.pastDue || 0);
       const pastDue = Math.max(0, pastDueRaw);
       const credit = Math.abs(Math.min(0, pastDueRaw));
@@ -3484,39 +3684,14 @@
       return Math.max(0, Math.round((currentDue + priorChain - credit) * 100) / 100);
     }
 
-    // Days late for UI + 30/60/90 search: calendar days *after* the 20-day grace from lateFeeAnchorPrintDate (or last bill if no anchor).
-    // Example: 25 days since anchor print → 5 days late. During grace, returns 0 (not yet "late" for this count).
-    // Same basis as late fees: getCalendarDaysLateAfterGrace(customer, 20).
+    // Days late for UI + search: continuous 30-60-90 delinquency timer (anchor while amount owed > 0).
     function getCustomerDaysLate(customer) {
       if (!customer) return 0;
-      if (!customer.lastBillPrintDate) return 0;
-
-      const dsp = getDaysSinceLastBillPrint(customer);
-      if (dsp === null || dsp <= 0) return 0;
-
-      const calLateForFee = getCalendarDaysLateAfterGrace(customer, 20);
-      if (calLateForFee <= 0) return 0;
-
-      const totalOwed = getTotalOwedForLateTracking(customer, calLateForFee);
-      if (totalOwed <= 0.005) return 0;
-
-      console.log('[LateLogic] getCustomerDaysLate:', {
-        customerId: customer.id,
-        accountNumber: customer.accountNumber,
-        lateFeeAnchorPrintDate: customer.lateFeeAnchorPrintDate,
-        lastBillPrintDate: customer.lastBillPrintDate,
-        daysSincePrint: dsp,
-        calendarDaysLateAfterGrace: calLateForFee,
-        totalOwed,
-        pastDue: customer.pastDue
-      });
-
-      return calLateForFee;
+      return getContinuousDelinquencyDays(customer);
     }
 
     // Marker to confirm the latest late-logic is loaded in the browser.
     // If you don't see this in console after a hard refresh, you're on a cached build.
-    console.log('[LateLogic] loaded: v3 (late-fee anchor + fee TRACE logs; set window.LATE_FEE_TRACE_ALL=true for all calls)');
 
     // Format a Date as MM/DD/YYYY using local date components.
     function formatDateMMDDYYYY(dateObj) {
@@ -3538,13 +3713,14 @@
     }
 
     // Single source of truth for "Due Date":
-    //   dueDate = bill print date + 20-day grace period (day 21 is first late day).
+    //   dueDate = bill print date + grace (default late fee day − 1).
     // If we don't have a bill print date (older data), fall back to prior behavior.
-    function getBillDueDateStr(customer, graceDays = 20) {
+    function getBillDueDateStr(customer, graceDays) {
+      const g = graceDays !== undefined && graceDays !== null ? graceDays : getLateFeeGraceCalendarDays();
       if (customer && customer.lastBillPrintDate) {
         const billDate = new Date(customer.lastBillPrintDate);
         if (!isNaN(billDate.getTime())) {
-          const dueDate = new Date(billDate.getTime() + (graceDays * 24 * 60 * 60 * 1000));
+          const dueDate = new Date(billDate.getTime() + (g * 24 * 60 * 60 * 1000));
           return formatDateMMDDYYYY(dueDate);
         }
       }
@@ -3555,11 +3731,12 @@
       return formatDateMMDDYYYY(lastDayOfMonth);
     }
 
-    function getBillDueDateObj(customer, graceDays = 20) {
+    function getBillDueDateObj(customer, graceDays) {
+      const g = graceDays !== undefined && graceDays !== null ? graceDays : getLateFeeGraceCalendarDays();
       if (customer && customer.lastBillPrintDate) {
         const billDate = new Date(customer.lastBillPrintDate);
         if (!isNaN(billDate.getTime())) {
-          return new Date(billDate.getTime() + (graceDays * 24 * 60 * 60 * 1000));
+          return new Date(billDate.getTime() + (g * 24 * 60 * 60 * 1000));
         }
       }
       // Fallback: last day of current month
@@ -3573,10 +3750,7 @@
       return ps === 'inactive' || ps === 'pending closing';
     }
 
-    // Update customer payment status based on past due and days past bill print / grace.
-    // - overdue: positive past due, OR current bill unpaid and more than 20 days late (after grace)
-    // - late: current bill unpaid, days past grace ≤ 20 (includes 20-day grace period: calLate === 0)
-    // - current: otherwise
+    // Update customer payment status: overdue if past due or 30-60-90 timer ≥ configured deposit threshold; late if owe and past bill grace on per-bill timer.
     function updateCustomerPaymentStatus(customer) {
       // Don't change status if it's inactive or pending closing (these are manually set)
       if (isCustomerManualLifecycleStatus(customer)) {
@@ -3606,19 +3780,31 @@
         return;
       }
 
-      const calLate = getCalendarDaysLateAfterGrace(customer, 20);
-      const totalOwed = getTotalOwedForLateTracking(customer, calLate);
+      const lateFeeAmt = compute21DayLateFeeDollars(customer);
+      const totalOwed = getTotalOwedForLateTracking(customer, lateFeeAmt);
 
       if (totalOwed <= 0.005) {
         customer.paymentStatus = 'current';
         return;
       }
 
-      if (calLate > 20) {
+      const continuous306090 = getContinuousDelinquencyDays(customer);
+      if (continuous306090 >= getDepositWithdrawDelinquencyDays()) {
         customer.paymentStatus = 'overdue';
-      } else {
-        customer.paymentStatus = 'late';
+        return;
       }
+
+      if (dsp >= getLateFeeTimerDays()) {
+        customer.paymentStatus = 'late';
+        return;
+      }
+
+      if (dsp > 0) {
+        customer.paymentStatus = 'late';
+        return;
+      }
+
+      customer.paymentStatus = 'current';
     }
 
     /** Badge CSS for customer payment status (tables, search, payment module). */
@@ -3654,14 +3840,13 @@
       }
       if (ps === 'late') {
         if (!customer.lastBillPrintDate) return 'Late';
-        const calLate = getCalendarDaysLateAfterGrace(customer, 20);
         const dsp = getDaysSinceLastBillPrint(customer);
-        if (calLate > 0) {
+        const cont = getContinuousDelinquencyDays(customer);
+        if (dsp !== null && dsp > 0) {
           return autoApplyLateFees
-            ? `Late (${calLate} days)`
-            : `Late (${calLate} days past grace — fees toggle off)`;
+            ? `Late (${dsp} days on bill cycle; ${cont} on 30-60-90)`
+            : `Late (${dsp} days on bill cycle — auto late fees off)`;
         }
-        if (dsp !== null && dsp > 0) return `Late (${dsp} days)`;
         return 'Late';
       }
       return ps.charAt(0).toUpperCase() + ps.slice(1);
@@ -4084,7 +4269,7 @@
           await window.__billModuleCustomersReady;
         }
       } catch (e) {
-        console.warn('Bill module: waiting for customer data', e);
+
       }
       resetBillForm();
     };
@@ -4107,7 +4292,7 @@
           await window.__billModuleCustomersReady;
         }
       } catch (e) {
-        console.warn('Add client module: waiting for dashboard data', e);
+
       }
       resetAddClientForm();
       setTimeout(() => {
@@ -4432,7 +4617,7 @@
         const pastDue = calc.pastDue;
         const lateFeeAmount = calc.lateFeeAmount;
 
-        const dueDateStr = getBillDueDateStr(customer, 20);
+        const dueDateStr = getBillDueDateStr(customer);
 
         // Set up status indicator
         const statusClass = getPaymentStatusBadgeClass(customer);
@@ -4464,157 +4649,121 @@
     function traceAutomaticLateFeeAmount(customer, payload) {
       try {
         const id = customer && (customer.accountNumber || customer.id);
-        const calLate = customer ? getCalendarDaysLateAfterGrace(customer, 20) : 0;
+        const calLate = customer ? getCalendarDaysLateAfterGrace(customer) : 0;
         const all = typeof window !== 'undefined' && window.LATE_FEE_TRACE_ALL;
         const skipQuiet = !all && calLate <= 0 && payload.reason === 'not_past_grace';
         if (skipQuiet) return;
-        console.log('[LateLogic] getAutomaticLateFeeAmount TRACE', {
-          accountNumber: id,
-          ...payload,
-          autoApplyLateFees,
-          lateFeeMode,
-          lateFeeFlat,
-          lateFeePercent
-        });
+
       } catch (e) { /* ignore */ }
     }
 
-    // Helper to calculate automatic late fee amount based on days late and toggle
+    // Helper: automatic late fee = one charge when per-bill timer reaches configured day and balance owed > 0.
     function getAutomaticLateFeeAmount(customer) {
       if (!customer) {
         traceAutomaticLateFeeAmount(customer, { reason: 'no_customer', fee: 0 });
         return 0;
       }
 
-      const calLate = getCalendarDaysLateAfterGrace(customer, 20);
-      const anchorIso = getLateFeeTrackingPrintDateIso(customer);
       const dsp = getDaysSinceLastBillPrint(customer);
+      const calLateAfterGrace = getCalendarDaysLateAfterGrace(customer);
+      const continuous306090 = getContinuousDelinquencyDays(customer);
 
-      // Respect global toggle - when OFF, calendar "days late" may still show in UI but fees stay $0
       if (!autoApplyLateFees) {
-        const totalOwedIf = calLate > 0 ? getTotalOwedForLateTracking(customer, calLate) : null;
         traceAutomaticLateFeeAmount(customer, {
           reason: 'autoApplyLateFees_disabled',
           fee: 0,
           hint: 'Enable Settings → Toggles → Auto apply late fees (Firestore: settings/toggles.autoApplyLateFees)',
-          calLate,
-          daysSinceAnchorOrLastPrint: dsp,
+          daysSinceLastBillPrint: dsp,
+          calLateAfterGrace,
+          continuous306090Days: continuous306090,
           lateFeeAnchorPrintDate: customer.lateFeeAnchorPrintDate,
           lastBillPrintDate: customer.lastBillPrintDate,
-          totalOwedForLatePath: totalOwedIf,
-          lateFeeBase: getLateFeeBaseAmountBeforeFees(customer),
-          cyclesIfToggleOn: calLate > 0 ? (1 + Math.max(0, Math.floor((calLate - 1) / 30))) : 0
+          totalOwedForLatePath: dsp !== null && dsp >= getLateFeeTimerDays() ? getTotalDueExcludingAutoLateFee(customer) : null,
+          lateFeeBase: getLateFeeBaseAmountBeforeFees(customer)
         });
         return 0;
       }
 
-      // Fee tiers are based on days *past the grace period*, not days since print
-      if (calLate <= 0) {
-        traceAutomaticLateFeeAmount(customer, {
-          reason: 'not_past_grace',
-          fee: 0,
-          calLate,
-          daysSinceAnchorOrLastPrint: dsp,
-          anchorIso
-        });
-        return 0;
-      }
-
-      const totalOwed = getTotalOwedForLateTracking(customer, calLate);
-      if (totalOwed <= 0.005) {
-        traceAutomaticLateFeeAmount(customer, {
-          reason: 'nothing_owed_for_late_path',
-          fee: 0,
-          calLate,
-          totalOwed,
-          pastDueRaw: customer.pastDue,
-          currentMonthPaid: customer.currentMonthPaid,
-          lateFeeAnchorPrintDate: customer.lateFeeAnchorPrintDate,
-          lastBillPrintDate: customer.lastBillPrintDate
-        });
-        return 0;
-      }
-
+      const fee = compute21DayLateFeeDollars(customer);
+      const totalOwed = getTotalOwedForLateTracking(customer, fee);
       const base = getLateFeeBaseAmountBeforeFees(customer);
-      const cycles = getLateFeeCycleCount(calLate);
-      const fee = getLateFeeAmountForCustomerAndDaysLate(customer, calLate);
+      const owedExclLate = getTotalDueExcludingAutoLateFee(customer);
+      const graceBlocks =
+        fee <= 0.005 &&
+        dsp !== null &&
+        dsp >= getLateFeeTimerDays() &&
+        owedExclLate > 0.005 &&
+        isLateFeeBlockedByGraceAmount(customer);
 
       traceAutomaticLateFeeAmount(customer, {
-        reason: fee > 0 ? 'ok' : 'computed_fee_zero',
+        reason: fee > 0
+          ? 'ok'
+          : dsp === null || dsp < getLateFeeTimerDays()
+            ? 'under_late_fee_timer'
+            : graceBlocks
+              ? 'within_late_fee_grace_amount'
+              : 'nothing_owed_at_late_fee_day',
         fee,
-        calLate,
+        daysSinceLastBillPrint: dsp,
+        calLateAfterGrace,
+        continuous306090Days: continuous306090,
         totalOwed,
         baseBeforeFees: base,
-        cycles,
-        daysSinceAnchorOrLastPrint: dsp
+        lastBillPrintDate: customer.lastBillPrintDate
       });
 
       return fee;
     }
 
-    // Add charge-history rows when a new late-fee cycle is reached for the current bill.
+    // One charge-history row per bill print when the 21-day late fee first applies.
     function maybeAppendLateFeeChargeHistory(customer) {
       if (!customer || !customer.lastBillPrintDate) return;
       if (!Array.isArray(customer.chargeHistory)) customer.chargeHistory = [];
-      const calLate = getCalendarDaysLateAfterGrace(customer, 20);
-      const cycles = getLateFeeCycleCount(calLate);
-      if (cycles <= 0) return;
+      if (!autoApplyLateFees) return;
 
-      const totalOwedForFees = getTotalOwedForLateTracking(customer, calLate);
-      if (totalOwedForFees <= 0.005) return;
+      const fee = compute21DayLateFeeDollars(customer);
+      if (fee <= 0.005) return;
+      if (getTotalDueExcludingAutoLateFee(customer) <= 0.005) return;
 
-      const billKey = customer.lateFeeAnchorPrintDate || customer.lastBillPrintDate;
+      const billKey = customer.lastBillPrintDate;
+      const alreadyLogged = customer.chargeHistory.some(e =>
+        e && e.source === 'lateFeeAdded' && e.billPrintDate === billKey
+      );
+      if (alreadyLogged) return;
+
+      const dsp = getDaysSinceLastBillPrint(customer);
       const now = window.getCurrentDate ? window.getCurrentDate() : new Date();
       const formattedFallback = (now.getMonth() + 1).toString().padStart(2, '0') + '/' +
         now.getDate().toString().padStart(2, '0') + '/' + now.getFullYear();
 
-      let addedAny = false;
-      for (let cycle = 1; cycle <= cycles; cycle++) {
-        const alreadyLogged = customer.chargeHistory.some(e =>
-          e &&
-          e.source === 'lateFeeAdded' &&
-          e.billPrintDate === billKey &&
-          parseInt(e.lateFeeCycle || 0, 10) === cycle
-        );
-        if (alreadyLogged) continue;
+      const eventDate = getFirstCalendarDateWhenLateFeeAfter21Days(customer);
+      const rowDateStr = eventDate ? formatSlashMDYFromDate(eventDate) : formattedFallback;
+      const rowTs = eventDate
+        ? new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate(), 12, 0, 0).toISOString()
+        : now.toISOString();
 
-        const daysAtCycle = 1 + ((cycle - 1) * 30);
-        const feeAtCycle = Math.round(Math.max(0, getLateFeeAmountForCustomerAndDaysLate(customer, daysAtCycle)) * 100) / 100;
-        const prevFee = cycle > 1
-          ? Math.round(Math.max(0, getLateFeeAmountForCustomerAndDaysLate(customer, 1 + ((cycle - 2) * 30))) * 100) / 100
-          : 0;
-        const feeIncrement = Math.round(Math.max(0, feeAtCycle - prevFee) * 100) / 100;
-        if (feeIncrement <= 0) continue;
-        const runningDueAfterCycle = Math.round(Math.max(0, getTotalOwedForLateTracking(customer, daysAtCycle)) * 100) / 100;
+      const runningDue = Math.round(Math.max(0, getTotalOwedForLateTracking(customer, fee)) * 100) / 100;
 
-        const eventDate = getFirstCalendarDateWhenLateFeeCycleStarts(customer, cycle);
-        const rowDateStr = eventDate ? formatSlashMDYFromDate(eventDate) : formattedFallback;
-        const rowTs = eventDate
-          ? new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate(), 12, 0, 0).toISOString()
-          : now.toISOString();
+      customer.chargeHistory.push({
+        date: rowDateStr,
+        timestamp: rowTs,
+        ledgerOrder: nextLedgerOrder(customer),
+        source: 'lateFeeAdded',
+        billPrintDate: billKey,
+        lateFeeCycle: 1,
+        calendarDaysLate: dsp != null ? dsp : 0,
+        chargeType: 'Late fee added',
+        chargeSubtype: `Late fee added (per-bill timer day ${dsp != null ? dsp : '?'}; applies from day ${getLateFeeTimerDays()})`,
+        sewerChargeOnBill: 0,
+        pastDueOnBill: 0,
+        surchargesOnBill: 0,
+        taxCodesOnBill: 0,
+        pucSurchargeOnBill: 0,
+        lateFeeAmount: fee,
+        currentDue: runningDue
+      });
 
-        customer.chargeHistory.push({
-          date: rowDateStr,
-          timestamp: rowTs,
-          ledgerOrder: nextLedgerOrder(customer),
-          source: 'lateFeeAdded',
-          billPrintDate: billKey,
-          lateFeeCycle: cycle,
-          calendarDaysLate: daysAtCycle,
-          chargeType: 'Late fee added',
-          chargeSubtype: `Late fee added (${daysAtCycle} days late)`,
-          sewerChargeOnBill: 0,
-          pastDueOnBill: 0,
-          surchargesOnBill: 0,
-          taxCodesOnBill: 0,
-          pucSurchargeOnBill: 0,
-          lateFeeAmount: feeIncrement,
-          currentDue: runningDueAfterCycle
-        });
-        addedAny = true;
-      }
-
-      if (addedAny && typeof saveSingleCustomerToFirestore === 'function') {
+      if (typeof saveSingleCustomerToFirestore === 'function') {
         saveSingleCustomerToFirestore(customer).catch(() => {});
       }
     }
@@ -4792,14 +4941,6 @@
 
       updateCustomerPaymentStatus(customer);
 
-      console.log('[BillingRoll] applyBillProductionRollForward:', {
-        customerId: customer.id,
-        accountNumber: customer.accountNumber,
-        grossCurrentOwed,
-        unpaidCurrentRolledIntoPastDue: unpaidCurrent,
-        rollUnpaidCurrentIntoPastDue: rollUnpaidCurrentIntoPastDue !== false,
-        newPastDue: customer.pastDue
-      });
     }
 
     /**
@@ -4967,15 +5108,10 @@
       return baseServiceCost;
     }
 
-    /** Calendar days late (after print + grace) before security deposit auto-pay runs. */
-    const DEPOSIT_AUTO_APPLY_DAYS_LATE = 60;
-
     /**
      * Shown on the next bill PDF after deposit auto-apply (see pendingDepositBillExplanation).
-     * Threshold is DEPOSIT_AUTO_APPLY_DAYS_LATE days after the 20-day grace period.
+     * Threshold is settings/toggles.depositWithdrawDelinquencyDays on the continuous 30-60-90 delinquency timer.
      */
-    const DEPOSIT_AUTO_APPLY_BILL_LATE_PHRASE = '91+';
-
     function getPendingDepositAutoApplyExplanationText(customer) {
       const pending = customer && customer.pendingDepositBillExplanation;
       if (!pending || typeof pending !== 'object') return '';
@@ -4983,7 +5119,7 @@
       if (!anchor || !pending.triggerDateStr) return '';
       const amt = Math.round((parseFloat(pending.amountApplied) || 0) * 100) / 100;
       return (
-        `You were marked as ${DEPOSIT_AUTO_APPLY_BILL_LATE_PHRASE} days late on ${pending.triggerDateStr} ` +
+        `You were marked as ${getDepositWithdrawBillLatePhrase()} days late on ${pending.triggerDateStr} ` +
         `due to you not paying your bill since ${anchor}. As a result, an amount of $${amt.toFixed(2)} was ` +
         'taken from your deposit and used to pay your amount due.'
       );
@@ -5008,24 +5144,15 @@
         if (!customer.lastBillPrintDate) return;
         if (customer.lastBill60DayDepositApplied) {
           if (shouldLogDeposit) {
-            console.log('[LateLogic] maybeApplyDepositAt60Days SKIP (already applied)', {
-              customerId: customer.id,
-              accountNumber: customer.accountNumber,
-              lastBill60DayDepositApplied: customer.lastBill60DayDepositApplied
-            });
+
           }
           return;
         }
 
-        const calendarLate = getCalendarDaysLateAfterGrace(customer, 20);
-        if (calendarLate < DEPOSIT_AUTO_APPLY_DAYS_LATE) {
+        const continuous306090 = getContinuousDelinquencyDays(customer);
+        if (continuous306090 < getDepositWithdrawDelinquencyDays()) {
           if (shouldLogDeposit) {
-            console.log('[LateLogic] maybeApplyDepositAt60Days SKIP (not late enough)', {
-              customerId: customer.id,
-              accountNumber: customer.accountNumber,
-              calendarLate,
-              requiredDaysLate: DEPOSIT_AUTO_APPLY_DAYS_LATE
-            });
+
           }
           return;
         }
@@ -5033,10 +5160,7 @@
         const deposit = parseFloat(customer.deposit || 0);
         if (!(deposit > 0)) {
           if (shouldLogDeposit) {
-            console.log('[LateLogic] maybeApplyDepositAt60Days SKIP (no deposit)', {
-              customerId: customer.id,
-              accountNumber: customer.accountNumber
-            });
+
           }
           return;
         }
@@ -5062,12 +5186,7 @@
           : Math.max(0, parseFloat(calcUi.lateFeeAmount) || 0);
         if (balanceOwed <= 0.005) {
           if (shouldLogDeposit) {
-            console.log('[LateLogic] maybeApplyDepositAt60Days SKIP (nothing owed)', {
-              customerId: customer.id,
-              accountNumber: customer.accountNumber,
-              balanceOwed,
-              usedFrozenDue: hasFrozenDue
-            });
+
           }
           return;
         }
@@ -5076,11 +5195,7 @@
         const applied = Math.round(appliedRaw * 100) / 100;
         if (applied <= 0) {
           if (shouldLogDeposit) {
-            console.log('[LateLogic] maybeApplyDepositAt60Days SKIP (nothing to apply)', {
-              customerId: customer.id,
-              accountNumber: customer.accountNumber,
-              applied
-            });
+
           }
           return;
         }
@@ -5101,28 +5216,8 @@
         const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, lateFeeAmt, parts);
 
         if (shouldLogDeposit) {
-          console.log('[LateLogic] maybeApplyDepositAt60Days CHECK', {
-            customerId: customer.id,
-            accountNumber: customer.accountNumber,
-            calendarLate,
-            balanceOwed,
-            currentDue,
-            pastDueNum,
-            deposit,
-            lastBillPrintDate: customer.lastBillPrintDate
-          });
-        }
 
-        console.log('[LateLogic] maybeApplyDepositAt60Days BEFORE:', {
-          customerId: customer.id,
-          accountNumber: customer.accountNumber,
-          calendarLate,
-          balanceOwed,
-          currentDue,
-          pastDueNum,
-          deposit,
-          applied
-        });
+        }
 
         // Latest charges first: apply to current cycle, then positive past due
         let remaining = applied;
@@ -5189,7 +5284,7 @@
           triggerDateStr: depDateStr,
           anchorPrintDateIso: anchorIsoForBill,
           amountApplied: applied,
-          daysLateAfterGraceAtTrigger: calendarLate
+          daysLateAfterGraceAtTrigger: continuous306090
         };
 
         const allocSewer = Math.round((parseFloat(customer.currentMonthPaidSewer || 0) - beforeSewer) * 100) / 100;
@@ -5234,15 +5329,6 @@
           saveSingleCustomerToFirestore(customer).catch(() => {});
         }
 
-        console.log('[LateLogic] maybeApplyDepositAt60Days AFTER:', {
-          customerId: customer.id,
-          accountNumber: customer.accountNumber,
-          calendarLate,
-          newPastDue: customer.pastDue,
-          newCurrentMonthPaid: customer.currentMonthPaid,
-          newDeposit: customer.deposit,
-          lastBill60DayDepositApplied: customer.lastBill60DayDepositApplied
-        });
       } catch (e) {
         // Fail silently for now; logic will re-evaluate on next calculation if needed
       }
@@ -5395,7 +5481,7 @@
             total: liveTotal,
             pastDue,
             lateFee: liveLate,
-            dueDateStr: getBillDueDateStr(customer, 20),
+            dueDateStr: getBillDueDateStr(customer),
             fromFrozen: false
           };
         }
@@ -5403,7 +5489,7 @@
           total: frozenTotal,
           pastDue: Math.max(0, parseFloat(frozen.pastDue) || 0),
           lateFee: frozenLate,
-          dueDateStr: frozen.dueDateStr || getBillDueDateStr(customer, 20),
+          dueDateStr: frozen.dueDateStr || getBillDueDateStr(customer),
           fromFrozen: true
         };
       }
@@ -5416,7 +5502,7 @@
         total: Math.max(0, calc.total),
         pastDue,
         lateFee: Math.max(0, calc.lateFeeAmount || 0),
-        dueDateStr: getBillDueDateStr(customer, 20),
+        dueDateStr: getBillDueDateStr(customer),
         fromFrozen: false
       };
     }
@@ -5429,7 +5515,7 @@
         const totalAmount = amts.total;
         const pastDueDisplay = amts.pastDue;
         const lateFeeAmount = amts.lateFee;
-        const dueDateStr = amts.dueDateStr || getBillDueDateStr(customer, 20);
+        const dueDateStr = amts.dueDateStr || getBillDueDateStr(customer);
         let statusClass;
         let statusLabel;
         if (frozen && typeof frozen.amountDue === 'number') {
@@ -5439,15 +5525,6 @@
           statusClass = getPaymentStatusBadgeClass(customer);
           statusLabel = getPaymentStatusBadgeLabel(customer);
         }
-
-        console.log('[LateLogic] showCustomerBillInfo:', {
-          customerId: customer.id,
-          accountNumber: customer.accountNumber,
-          frozen: !!frozen,
-          totalAmount,
-          lateFeeAmount,
-          pastDueDisplay
-        });
 
         document.getElementById('billAmountDue').textContent = `$${totalAmount.toFixed(2)}`;
         document.getElementById('billPastDue').textContent = `$${pastDueDisplay.toFixed(2)}`;
@@ -5604,16 +5681,6 @@
       }
 
       try {
-        console.log('[LateLogic] produceBill START for customer:', {
-          customerId: customer.id,
-          accountNumber: customer.accountNumber,
-          pastDue: customer.pastDue,
-          deposit: customer.deposit,
-          autoApplyLateFees,
-          lateFeeAnchorPrintDate: customer.lateFeeAnchorPrintDate,
-          lastBillPrintDate: customer.lastBillPrintDate,
-          lastBill60DayDepositApplied: customer.lastBill60DayDepositApplied
-        });
 
         // Full accrual: late fees and prior-statement balance apply at bill generation only (not while browsing / sim date).
         const calc = calculateCustomerTotal(customer, { billUiSnapshot: false });
@@ -5681,49 +5748,25 @@
 
         const totalAmountRecalc = Math.max(0, calc.total);
 
-        console.log('[LateLogic] produceBill amounts:', {
-          customerId: customer.id,
-          accountNumber: customer.accountNumber,
-          baseServiceCost: calc.baseServiceCost,
-          factor,
-          adjustedServiceCost,
-          pastDue,
-          lateFeeAmount,
-          pucSurchargeAmountRecalc,
-          totalSurcharge,
-          subtotalBeforePuc,
-          currentDue: calc.currentDue,
-          totalAmountRecalc
-        });
-
         formData.append('total_amount', `$${pdfTotalAmount.toFixed(2)}`);
         formData.append('due_date', dueDateStr);
 
         // Bill status text for PDF — align with late-fee toggle (fees $0 when autoApplyLateFees is off)
-        const calLatePdf = getCalendarDaysLateAfterGrace(customer, 20);
+        const contPdf = getContinuousDelinquencyDays(customer);
         const daysLateForBill = getCustomerDaysLate(customer);
-        const totalOwPdf = getTotalOwedForLateTracking(customer, calLatePdf);
+        const lateFeePdf = compute21DayLateFeeDollars(customer);
+        const totalOwPdf = getTotalOwedForLateTracking(customer, lateFeePdf);
         let statusText = 'Status: Current';
         if (autoApplyLateFees && daysLateForBill > 0) {
           statusText = `Status: ${daysLateForBill} days late`;
-        } else if (!autoApplyLateFees && calLatePdf > 0 && totalOwPdf > 0.005) {
-          statusText = `Status: ${calLatePdf} days past due (auto late fees off)`;
+        } else if (!autoApplyLateFees && contPdf > 0 && totalOwPdf > 0.005) {
+          statusText = `Status: ${contPdf} days on delinquency timer (auto late fees off)`;
         } else if (!autoApplyLateFees && parseFloat(customer.pastDue || 0) > 0.005) {
           statusText = 'Status: Past-due balance (auto late fees off)';
-        } else if (parseFloat(customer.pastDue || 0) > 0.005 && calLatePdf <= 0) {
+        } else if (parseFloat(customer.pastDue || 0) > 0.005 && contPdf <= 0) {
           statusText = 'Status: Past-due balance';
         }
         formData.append('status', statusText);
-
-        console.log('[LateLogic] produceBill status for PDF:', {
-          customerId: customer.id,
-          accountNumber: customer.accountNumber,
-          autoApplyLateFees,
-          calLatePdf,
-          daysLateForBill,
-          totalOwPdf,
-          statusText
-        });
 
         const hadPendingDepositExplanation = !!customer.pendingDepositBillExplanation;
         const depositExplanationPdf = getPendingDepositAutoApplyExplanationText(customer);
@@ -5830,14 +5873,6 @@
 
           syncProcessBillPanelFrozenSnapshot(customer, pdfTotalAmount, pdfPreviousCharges, pdfLateFee);
 
-          console.log('[LateLogic] produceBill AFTER PDF:', {
-            customerId: customer.id,
-            accountNumber: customer.accountNumber,
-            savedLastBillPrintDate: customer.lastBillPrintDate,
-            lastBill60DayDepositApplied: customer.lastBill60DayDepositApplied,
-            pastDueAfterRoll: customer.pastDue
-          });
-
           if (typeof saveSingleCustomerToFirestore === 'function') {
             await saveSingleCustomerToFirestore(customer);
           }
@@ -5855,7 +5890,7 @@
             updateDashboard();
           }
         } catch (e) {
-          console.error('[LateLogic] produceBill: failed to persist roll-forward / lastBillPrintDate', e);
+
         }
 
         alert('Bill PDF generated successfully!');
@@ -6051,17 +6086,18 @@
               customerSnapshot.pdfData.deposit_explanation || ''
             );
 
-            const calLateBatch = getCalendarDaysLateAfterGrace(customer, 20);
+            const contBatch = getContinuousDelinquencyDays(customer);
             const daysLateForBill = getCustomerDaysLate(customer);
-            const totalOwBatch = getTotalOwedForLateTracking(customer, calLateBatch);
+            const lateFeeBatch = compute21DayLateFeeDollars(customer);
+            const totalOwBatch = getTotalOwedForLateTracking(customer, lateFeeBatch);
             let statusText = 'Status: Current';
             if (autoApplyLateFees && daysLateForBill > 0) {
               statusText = `Status: ${daysLateForBill} days late`;
-            } else if (!autoApplyLateFees && calLateBatch > 0 && totalOwBatch > 0.005) {
-              statusText = `Status: ${calLateBatch} days past due (auto late fees off)`;
+            } else if (!autoApplyLateFees && contBatch > 0 && totalOwBatch > 0.005) {
+              statusText = `Status: ${contBatch} days on delinquency timer (auto late fees off)`;
             } else if (!autoApplyLateFees && parseFloat(customer.pastDue || 0) > 0.005) {
               statusText = 'Status: Past-due balance (auto late fees off)';
-            } else if (parseFloat(customer.pastDue || 0) > 0.005 && calLateBatch <= 0) {
+            } else if (parseFloat(customer.pastDue || 0) > 0.005 && contBatch <= 0) {
               statusText = 'Status: Past-due balance';
             }
             formData.append('status', statusText);
@@ -16412,7 +16448,7 @@
 
       } catch (error) {
         const msg = error && error.message ? error.message : String(error);
-        console.error('processTransferOwnership', error);
+
         alert('Error processing transfer: ' + msg);
       } finally {
         if (transferBtn) {
@@ -16638,12 +16674,17 @@
       if (fieldType === 'type') {
         const newType = newValue;
         code.type = newType;
-        // If switching types, preserve amount value
         if (!code.amount && code.percentage !== undefined) {
           code.amount = code.percentage;
         }
-        if (newType === 'percentage' && code.amount > 100) {
-          code.amount = 100;
+        if (newType === 'percentage') {
+          let a = parseFloat(code.amount);
+          if (isNaN(a)) a = 0;
+          if (a > 100) a = 100;
+          code.amount = a;
+          code.percentage = a;
+        } else {
+          code.percentage = undefined;
         }
       }
 
@@ -16867,13 +16908,14 @@
     };
 
     function getLateFeeStatusSummary() {
+      const n = getLateFeeTimerDays();
       if (lateFeeMode === 'percent') {
-        return `Current value: ${lateFeePercent.toFixed(2)}% of past due`;
+        return `Current value: ${lateFeePercent.toFixed(2)}% of past due when per-bill timer reaches day ${n}`;
       }
       if (lateFeeMode === 'combination') {
-        return `Current value: max($${lateFeeFlat.toFixed(2)} or ${lateFeePercent.toFixed(2)}% of past due)`;
+        return `Current value: max($${lateFeeFlat.toFixed(2)} or ${lateFeePercent.toFixed(2)}% of past due) when per-bill timer reaches day ${n}`;
       }
-      return `Current value: $${lateFeeFlat.toFixed(2)} per 30‑day late period`;
+      return `Current value: $${lateFeeFlat.toFixed(2)} when per-bill timer reaches day ${n} (one charge per bill cycle)`;
     }
 
     // Update late fee display
@@ -17180,13 +17222,17 @@
         // Update the code object in the array directly
         codes[codeIndex].amount = amount;
         if (codeType === 'percentage') {
-          codes[codeIndex].percentage = amount; // Keep for backward compatibility
+          codes[codeIndex].percentage = amount;
+        } else {
+          codes[codeIndex].percentage = undefined;
         }
 
         // Also update the local code variable for consistency
         code.amount = amount;
         if (codeType === 'percentage') {
           code.percentage = amount;
+        } else {
+          code.percentage = undefined;
         }
 
         // Update table immediately to show the change
@@ -17307,7 +17353,7 @@
 
         alert('Location added successfully!');
       } catch (error) {
-        console.error('addLocation', error);
+
         alert('Could not save location: ' + (error && error.message ? error.message : String(error)));
       } finally {
         setSaving(false);
@@ -18089,7 +18135,7 @@
           const pa = parseFloat(prevAmt);
           if (!isNaN(pa) && pa > 0) {
             pastDue = pa;
-            console.log('[LateLogic] pastDue from PastDue flag + PrevAmt:', acct, '$' + pastDue.toFixed(2));
+
           }
         }
       }
@@ -18144,7 +18190,6 @@
       updateSettingsCustomerTable();
       updateDashboard();
 
-      console.log('[LateLogic] syncPastDueFromImportData: saving all customers to Firestore…');
       await saveCustomersToFirestore();
 
       alert(`Sync complete! Updated ${updated} customers. ${errors > 0 ? errors + ' errors occurred.' : ''}`);
@@ -18400,7 +18445,7 @@
           }
           updated++;
         } catch (e) {
-          console.error('test306090FreshStart customer error', customer?.id, e);
+
         }
       });
 
@@ -19595,26 +19640,23 @@
             `;
             lateFeeDetailsEl.appendChild(baseRow);
 
-            // Explain 30/60/90 cycles; deposit auto-pay starts at DEPOSIT_AUTO_APPLY_DAYS_LATE days late
-            const calLateLbl = getCalendarDaysLateAfterGrace(customer, 20);
-            const feeCycles = getLateFeeCycleCount(calLateLbl);
-            if (autoApplyLateFees && feeCycles > 0) {
+            if (autoApplyLateFees) {
               const hint = document.createElement('div');
               hint.className = 'text-xs text-slate-500 dark:text-slate-400 py-1';
-              if (lateFeeMode === 'flat') {
-                hint.textContent =
-                  `${feeCycles} late-fee cycle${feeCycles === 1 ? '' : 's'} (adds every 30 calendar days past the due date). ` +
-                  `Per cycle: $${Number(lateFeeFlat).toFixed(2)} → total late fee $${(panel.lateFee || 0).toFixed(2)}. ` +
-                  `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
-              } else if (lateFeeMode === 'percent') {
-                hint.textContent =
-                  `${Number(lateFeePercent).toFixed(2)}% of past due (not multiplied by the number of 30‑day late periods). ` +
-                  `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
-              } else {
-                hint.textContent =
-                  `Combination: max($${Number(lateFeeFlat).toFixed(2)}, ${Number(lateFeePercent).toFixed(2)}% of past due). ` +
-                  `Security deposit auto-pay applies at ${DEPOSIT_AUTO_APPLY_DAYS_LATE}+ days late (after bill print + grace).`;
+              const dspBill = getDaysSinceLastBillPrint(customer);
+              const dspStr = dspBill === null ? '—' : String(dspBill);
+              const d306090 = getContinuousDelinquencyDays(customer);
+              const lateN = getLateFeeTimerDays();
+              const depN = getDepositWithdrawDelinquencyDays();
+              let hintText =
+                `Per-bill late timer: ${dspStr} day(s) since last bill print — one late fee at day ${lateN} if amount owed is not $0 (restarts each bill). ` +
+                `30-60-90 timer: ${d306090} day(s) while you owe (does not restart on rebill until paid in full). ` +
+                `Security deposit auto-pay after ${depN}+ days on the 30-60-90 timer.`;
+              if (lateFeeGraceAmountEnabled && getLateFeeGraceAmountDollars() > 0.005) {
+                hintText +=
+                  ` Late fee grace: no automatic late fee if total due (before that fee) is $${getLateFeeGraceAmountDollars().toFixed(2)} or less.`;
               }
+              hint.textContent = hintText;
               lateFeeDetailsEl.appendChild(hint);
             }
 
@@ -19701,8 +19743,8 @@
         }
       }
 
-      // Due date is bill print date + 20-day grace (day 21 is first late day); prefer panel string to match Process Bill
-      const dueDateObj = getBillDueDateObj(customer, 20);
+      // Due date is bill print date + grace (late fee day − 1); prefer panel string to match Process Bill
+      const dueDateObj = getBillDueDateObj(customer);
       const dueDateStr = panel.dueDateStr && String(panel.dueDateStr).trim()
         ? panel.dueDateStr
         : formatDateMMDDYYYY(dueDateObj);
@@ -19880,6 +19922,28 @@
       const lastAmountDueEl = document.getElementById('amountDetailsLastAmountDue');
       if (lastAmountDueEl) {
         lastAmountDueEl.textContent = lastAmountDue;
+      }
+
+      const days306090El = document.getElementById('amountDetails306090Days');
+      if (days306090El) {
+        const d =
+          typeof getContinuousDelinquencyDays === 'function'
+            ? getContinuousDelinquencyDays(customer)
+            : 0;
+        days306090El.textContent = d === 1 ? '1 day' : `${d} days`;
+      }
+
+      const perBillDaysEl = document.getElementById('amountDetailsPerBillTimerDays');
+      if (perBillDaysEl) {
+        const dsp =
+          typeof getDaysSinceLastBillPrint === 'function'
+            ? getDaysSinceLastBillPrint(customer)
+            : null;
+        if (dsp === null || dsp === undefined) {
+          perBillDaysEl.textContent = '—';
+        } else {
+          perBillDaysEl.textContent = dsp === 1 ? '1 day' : `${dsp} days`;
+        }
       }
 
       // Combined ledger button (payments + charges)
@@ -22004,12 +22068,6 @@
         updateCustomerTable();
         updateSettingsCustomerTable();
 
-        console.log('[LateLogic] saveCustomerDeposit:', {
-          customerId,
-          deposit: customer.deposit,
-          lastBill60DayDepositApplied: customer.lastBill60DayDepositApplied
-        });
-
         const button = input.nextElementSibling;
         const originalText = button ? button.textContent : 'Save';
         if (button) {
@@ -23480,7 +23538,7 @@
               <div class="flex justify-between items-center mb-4">
                 <div>
                   <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Late Fee</h4>
-                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Flat per 30‑day late period (up to 3), percent of past due (not stacked each period), or combination (greater of the flat $ or % of past due — same as most printed policies).</p>
+                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">One late fee per bill when the per-bill timer reaches the day set in System Toggles (default 21; if amount owed is not $0): flat, percent of past due, or combination. The 30-60-90 delinquency timer is separate (search / deposit auto-withdraw threshold is also in Toggles).</p>
                 </div>
               </div>
               <div class="flex flex-wrap items-center gap-4 mb-4">
@@ -23500,7 +23558,7 @@
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
                 <div id="lateFeeFlatFieldWrap" class="flex-1">
-                  <label id="lateFeeFlatLabel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Flat amount per cycle ($)</label>
+                  <label id="lateFeeFlatLabel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Flat amount per bill late event ($)</label>
                   <input 
                     type="number" 
                     id="lateFeeFlatInput" 
@@ -23681,9 +23739,10 @@
                     </button>
                     <button 
                       type="button"
+                      id="advanceTestDateByLateFeeTimerBtn"
                       onclick="advanceTestDateBy21Days()" 
                       class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors font-medium"
-                      title="Set test date to 21 days after the current simulated date (runs advancing calendar animation)"
+                      title="Set test date forward by the configured per-bill late-fee timer (runs advancing calendar animation)"
                     >
                       21+ days
                     </button>
@@ -23967,7 +24026,7 @@
                   <div class="flex-1">
                     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Automatically apply late fees</h3>
                     <p class="text-sm text-slate-600 dark:text-slate-300">
-                      When enabled, PUBS will automatically apply late fees based on how many days a bill is late (30/60/90 day cycles) using the default Late Fee amount.
+                      When enabled, PUBS applies one late fee per bill cycle when the per-bill timer reaches the configured day and the account still owes (30-60-90 is a separate delinquency timer for search and deposit rules). Set day counts below.
                     </p>
                   </div>
                   <label class="relative inline-flex items-center cursor-pointer">
@@ -23979,6 +24038,74 @@
                     />
                     <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
                   </label>
+                </div>
+              </div>
+
+              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Billing timers</h3>
+                <p class="text-sm text-slate-600 dark:text-slate-300 mb-4">
+                  Late fee eligibility is based on days since the last bill print. Deposit auto-withdraw uses the continuous 30–60–90 delinquency timer while the account owes; choose which day on that scale triggers withdrawal.
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label for="toggleLateFeeTimerDays" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Late fee day (per-bill timer)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="365"
+                      id="toggleLateFeeTimerDays"
+                      class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                      onchange="saveTogglesSettings()"
+                      onblur="saveTogglesSettings()"
+                    />
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Default 21: late fee can apply starting this many days after the bill print date.</p>
+                  </div>
+                  <div>
+                    <label for="toggleDepositWithdrawDelinquencyDays" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Deposit auto-withdraw (30–60–90 timer)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="365"
+                      id="toggleDepositWithdrawDelinquencyDays"
+                      class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                      onchange="saveTogglesSettings()"
+                      onblur="saveTogglesSettings()"
+                    />
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Default 60: when continuous delinquency reaches this many days, security deposit may auto-apply toward the balance.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                <div class="flex items-center justify-between gap-4">
+                  <div class="flex-1">
+                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Late fee grace amount</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-300">
+                      When enabled, at the per-bill late-fee day the system only adds a late fee if total due (before that fee) is <strong>greater</strong> than the dollar amount you set. Balances at or below that amount are not charged a late fee.
+                    </p>
+                  </div>
+                  <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      id="toggleLateFeeGraceAmountEnabled"
+                      class="sr-only peer"
+                      onchange="saveTogglesSettings(); updateLateFeeGraceAmountInputsVisibility();"
+                    />
+                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <div id="lateFeeGraceAmountWrap" class="mt-4 hidden">
+                  <label for="toggleLateFeeGraceAmountDollars" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Maximum total due without a late fee ($)</label>
+                  <input
+                    type="number"
+                    id="toggleLateFeeGraceAmountDollars"
+                    min="0"
+                    step="0.01"
+                    class="w-full max-w-xs px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
+                    onchange="saveTogglesSettings()"
+                    onblur="saveTogglesSettings()"
+                  />
+                  <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Example: 10 means customers who owe $10.00 or less at the late-fee day will not receive an automatic late fee.</p>
                 </div>
               </div>
 
@@ -24678,6 +24805,14 @@
               <div class="flex justify-between items-center">
                 <span class="text-sm text-blue-600 dark:text-blue-300">Last Amount Due</span>
                 <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsLastAmountDue">$0.00</span>
+              </div>
+              <div class="flex justify-between items-center gap-2">
+                <span class="text-sm text-blue-600 dark:text-blue-300">Total Days Late (30-60-90 counter)</span>
+                <span class="text-sm font-medium text-blue-800 dark:text-blue-200 tabular-nums shrink-0" id="amountDetails306090Days">0 days</span>
+              </div>
+              <div class="flex justify-between items-center gap-2">
+                <span class="text-sm text-blue-600 dark:text-blue-300">Cycle Days Late (21 day timer)</span>
+                <span class="text-sm font-medium text-blue-800 dark:text-blue-200 tabular-nums shrink-0" id="amountDetailsPerBillTimerDays">0 days</span>
               </div>
               <div class="flex justify-center mt-2">
                 <button 
