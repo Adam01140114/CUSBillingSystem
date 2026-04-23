@@ -1963,8 +1963,26 @@
       const startD = getEffectiveTestCalendarDate();
       const tgt = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
       tgt.setDate(tgt.getDate() + getLateFeeTimerDays());
-      await window.setTestDate(formatLocalYMD(tgt), {});
+      await window.setTestDate(formatLocalYMD(tgt), { skipAnimation: true });
     };
+
+    /** Move simulated calendar forward 30 days (e.g. Ctrl+Shift / Cmd+Shift). */
+    window.advanceTestDateBy30Days = async function() {
+      const startD = getEffectiveTestCalendarDate();
+      const tgt = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
+      tgt.setDate(tgt.getDate() + 30);
+      await window.setTestDate(formatLocalYMD(tgt), { skipAnimation: true });
+    };
+
+    document.addEventListener('keydown', function(event) {
+      if (event.repeat) return;
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey) {
+        event.preventDefault();
+        if (typeof window.advanceTestDateBy30Days === 'function') {
+          void window.advanceTestDateBy30Days();
+        }
+      }
+    });
 
     /** Wall-clock today (not the simulated date) — for Reset. */
     window.resetTestDateToRealToday = async function() {
@@ -3398,6 +3416,31 @@
     }
 
     /**
+     * True when the (simulated) "today" calendar month is strictly after the month of the last bill print.
+     * Used for total-owed: after advancing to a new month, the full unpaid last statement (stmtUnpaid) is owed
+     * in addition to new current-cycle charges, even if current due exceeds the last statement (e.g. new sewer
+     * + late is numerically > previous statement only because of the new late fee). Without this, the
+     * reprint/same-statement shortcut (currentDue >= stmtUnpaid) would drop the whole prior period when
+     * first bill has not yet rolled into customer.pastDue and stmtUnpaid is still the prior statement.
+     */
+    function isCalendarPeriodAfterLastBillPrint(customer) {
+      if (!customer || !customer.lastBillPrintDate) return false;
+      const now = window.getCurrentDate ? window.getCurrentDate() : new Date();
+      let last;
+      try {
+        last = new Date(customer.lastBillPrintDate);
+      } catch (e) {
+        return false;
+      }
+      if (!last || isNaN(last.getTime())) return false;
+      const ny = now.getFullYear();
+      const nm = now.getMonth();
+      const ly = last.getFullYear();
+      const lm = last.getMonth();
+      return ny > ly || (ny === ly && nm > lm);
+    }
+
+    /**
      * Unpaid balance from the last printed bill (lastPrintedStatementTotalDue minus payments after that bill).
      * Used when pastDue has not yet been rolled forward but the prior statement is still owed (e.g. before 2nd bill).
      */
@@ -3677,8 +3720,13 @@
       const stmtUnpaid = getOutstandingLastStatementUnpaid(customer);
       const priorChain = stmtUnpaid > 0.005 ? stmtUnpaid : pastDue;
       // If currentDue already includes at least the unpaid prior statement (same statement with fee changes),
-      // do not add stmtUnpaid again or totals will double-count principal.
-      if (stmtUnpaid > 0.005 && currentDue + 0.02 >= stmtUnpaid) {
+      // do not add stmtUnpaid again or totals will double-count principal. Skip that shortcut in a *new*
+      // calendar billing period, where current cycle charges add on top of the last statement.
+      if (
+        !isCalendarPeriodAfterLastBillPrint(customer) &&
+        stmtUnpaid > 0.005 &&
+        currentDue + 0.02 >= stmtUnpaid
+      ) {
         return Math.max(0, Math.round((currentDue - credit) * 100) / 100);
       }
       return Math.max(0, Math.round((currentDue + priorChain - credit) * 100) / 100);
@@ -4843,8 +4891,13 @@
       const priorChain = stmtUnpaid > 0.005 ? stmtUnpaid : pastDue;
       let total;
       // If currentDue already carries the unpaid statement (and possibly new late-fee increments),
-      // use currentDue only; adding priorChain would double-count the same principal.
-      if (stmtUnpaid > 0.005 && currentDue + 0.02 >= stmtUnpaid) {
+      // use currentDue only; adding priorChain would double-count the same principal. Do not use that
+      // shortcut in a new calendar month after the last print (unpaid last statement is additive).
+      if (
+        !isCalendarPeriodAfterLastBillPrint(customer) &&
+        stmtUnpaid > 0.005 &&
+        currentDue + 0.02 >= stmtUnpaid
+      ) {
         total = Math.round((currentDue - credit) * 100) / 100;
       } else {
         total = Math.round((currentDue + priorChain - credit) * 100) / 100;
@@ -18318,35 +18371,30 @@
     }
 
     /**
-     * Test 30-60-90: set test date to real today, reset deposits to $1,000, past due to $0,
-     * clear bill print & 60-day flags, clear POS sessions, then simulate full pay of current charges today.
+     * Test 30-60-90: reset deposits to $1,000, past due to $0, clear bill print & 60-day flags,
+     * clear POS sessions, then simulate full pay of current charges on the current (real or test) “today”.
+     * Does not change the test date.
      */
     window.test306090FreshStart = async function() {
       if (!confirm(
         'This will:\n\n' +
-        '• Set the TEST DATE to today (real calendar date)\n' +
         '• Set every customer deposit to $1,000\n' +
         '• Set every customer past due to $0\n' +
         '• Clear bill print dates (30/60/90 timers start fresh)\n' +
         '• Clear payment processing sessions\n' +
-        '• Record a full payment TODAY for each customer’s current charges (Total Due → $0)\n' +
+        '• Record a full payment for each customer’s current charges (Total Due → $0) on the current test/real “today”\n' +
         '  and fill Last payment / Last amount due on the Amount Breakdown\n\n' +
+        'The test date in Settings is not changed.\n\n' +
         'This cannot be undone. Continue?'
       )) {
         return;
       }
 
-      const real = new Date();
-      const y = real.getFullYear();
-      const m = String(real.getMonth() + 1).padStart(2, '0');
-      const d = String(real.getDate()).padStart(2, '0');
-      const todayStr = `${y}-${m}-${d}`;
-
-      const testDateInput = document.getElementById('testDateInput');
-      if (testDateInput) {
-        testDateInput.value = todayStr;
-      }
-      await window.setTestDate(todayStr, { skipAnimation: true });
+      const eff = window.getCurrentDate ? window.getCurrentDate() : new Date();
+      const payLabelY = eff.getFullYear();
+      const payLabelM = String(eff.getMonth() + 1).padStart(2, '0');
+      const payLabelD = String(eff.getDate()).padStart(2, '0');
+      const payDateLabel = `${payLabelY}-${payLabelM}-${payLabelD}`;
 
       if (typeof window.clearPaymentProcessingSession === 'function') {
         window.clearPaymentProcessingSession('test306090FreshStart');
@@ -18428,9 +18476,9 @@
 
       alert(
         `Test 30-60-90 fresh start complete.\n\n` +
-        `Test date: ${todayStr}\n` +
+        `Payments dated using current “today”: ${payDateLabel} (test date was not changed).\n` +
         `Updated ${updated} customer(s).\n\n` +
-        `Each account has a simulated “full pay” of current charges dated today (see Amount Breakdown).`
+        `Each account has a simulated “full pay” of current charges (see Amount Breakdown).`
       );
     };
 
@@ -23708,7 +23756,7 @@
                       id="advanceTestDateByLateFeeTimerBtn"
                       onclick="advanceTestDateBy21Days()" 
                       class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors font-medium"
-                      title="Set test date forward by the configured per-bill late-fee timer (runs advancing calendar animation)"
+                      title="Jump test date forward by the configured per-bill late-fee timer (no day-by-day animation)"
                     >
                       21+ days
                     </button>
@@ -23722,15 +23770,15 @@
               <div class="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-xl border border-indigo-200 dark:border-indigo-700">
                 <h3 class="font-semibold text-indigo-800 dark:text-indigo-200 mb-2">Test 30-60-90</h3>
                 <p class="text-sm text-indigo-600 dark:text-indigo-300 mb-4">
-                  Set the test date to <strong>today</strong>, reset every account&apos;s deposit to <strong>$1,000</strong>, past due to <strong>$0</strong>, clear all payment history and current-month payments, and clear bill-print metadata so you can test 30/60/90-day flows from a clean slate.
+                  Reset every account&apos;s deposit to <strong>$1,000</strong>, past due to <strong>$0</strong>, clear all payment history and current-month payments, and clear bill-print metadata so you can test 30/60/90-day flows from a clean slate. The test date in Settings is <strong>not</strong> changed; full-pay rows use your current test or real &quot;today&quot;.
                 </p>
                 <button
                   type="button"
                   onclick="test306090FreshStart()"
                   class="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors font-medium"
-                  title="Reset test date, deposits, past due, and payments for all customers"
+                  title="Reset deposits, past due, and payments for all customers (keeps test date as-is)"
                 >
-                  Fresh start (today + reset all)
+                  Fresh start (reset all)
                 </button>
               </div>
 

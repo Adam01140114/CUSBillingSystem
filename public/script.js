@@ -18441,11 +18441,14 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebas
       document.getElementById('paymentHistoryModal').classList.add('hidden');
     };
 
-    // Keyboard shortcut: Ctrl+Shift or Cmd+Shift opens settings menu
+    // Keyboard shortcut: Ctrl+Shift or Cmd+Shift advances test date by 30 days (see index.html)
     document.addEventListener('keydown', function(event) {
+      if (event.repeat) return;
       if ((event.ctrlKey || event.metaKey) && event.shiftKey) {
         event.preventDefault();
-        if (typeof window.showSettingsModule === 'function') {
+        if (typeof window.advanceTestDateBy30Days === 'function') {
+          void window.advanceTestDateBy30Days();
+        } else if (typeof window.showSettingsModule === 'function') {
           window.showSettingsModule();
         }
       }
