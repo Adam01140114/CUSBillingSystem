@@ -69,6 +69,14 @@ Let **`priorChain`** = `stmtUnpaid` if it is positive, else **`pastDue`** (the r
 
 Then **total** = `currentDue - credit` only, so the same principal is not added twice. This matters when the “current” view still embodies the last statement before roll-forward.
 
+**After partial payments**, the shortcut often **no longer** applies (`currentDue` drops below `stmtUnpaid`). The naive fallback `total = currentDue + priorChain` with `priorChain = stmtUnpaid` can **double-count**: `stmtUnpaid` is already “remaining on the last printed statement,” while `currentDue` still carries the **current-cycle slice** of that same statement. The implementation therefore compares:
+
+- **`rolled`** = `currentDue + pastDue - credit` (field past due + current cycle remainder),
+- **`stmtNet`** = `stmtUnpaid - credit`,
+- **`combined`** = `currentDue + priorChain - credit` (legacy sum).
+
+When `stmtUnpaid` is material, **`combined` is materially larger than `rolled`**, and **`rolled` matches `stmtNet` within tolerance**, **`total` uses `rolled`** so the headline total matches what customers owe (and matches the ledger) instead of an inflated `combined`.
+
 When **total** hits zero, **`lateFeeAnchorPrintDate`** may be cleared.
 
 ---
@@ -150,12 +158,27 @@ This is why, after multiple unpaid cycles, **Past Due → View details** can sho
 **`getProcessBillPanelAmounts`**:
 
 - If a frozen snapshot exists:
-  - **While “today” is still in the same calendar month as `lastBillPrintDate`:** **Past Due** and **due date** (and status from UI path) stay at frozen PDF values. **Late fee line** = **frozen PDF late** + **live** `calculateCustomerTotal(..., { billUiSnapshot: true }).lateFeeAmount` so a **second** 21-day accrual after the print still increases the line. **Total** = `frozenTotal - frozenLate + displayLate` so the total moves with that late accrual without double-counting the frozen late chunk.
-  - **When the simulated calendar month is strictly after the bill print month** (`isCalendarPeriodAfterLastBillPrint`): **Total**, **Past Due**, and **Late Fee** switch to the **live** `billUiSnapshot` calculation so new current-cycle service (and rolled balances) match **`calculateCustomerTotal`** — the same basis **`maybeApplyDepositAt60Days`** uses. Otherwise the frozen total would ignore the new month’s sewer/tax/PUC while deposit still applied the full live amount.
+  - **Past Due** and **due date** (and status from UI path) stay at frozen PDF values until the next Produce Bill.
+  - **Late fee line** = **frozen PDF late** + **live** `calculateCustomerTotal(..., { billUiSnapshot: true }).lateFeeAmount` so a second 21-day accrual after print still increases the line.
+  - **Total** = `frozenTotal - frozenLate + displayLate`, so only post-print late accrual changes the frozen total.
 
 Without a frozen snapshot, amounts come from **live** calc, with **Past Due** optionally overridden by **`lastBillPdfPastDueLine`** when set.
 
-**`showCustomerPaymentInfo`** (payment module) uses **live** `calculateCustomerTotal` only — it does **not** use the frozen snapshot path.
+**`showCustomerPaymentInfo`** (payment module) uses **`getProcessBillPanelAmounts`** so **Total / Past Due / Late Fee / Due date / status badge** match the Process Bill statement (frozen snapshot + post-print late accrual), same as **`showCustomerBillInfo`**.
+
+### 7.1 Payment module: `amountDue` on `paymentHistory` rows
+
+When recording a payment from **Payment Processing** (`processPaymentFromModule`), **`amountDue`** (and check overpayment math that keys off it) must match the **same headline total** the cashier saw—**`getProcessBillPanelAmounts(customer).total`**, not necessarily raw **`calculateCustomerTotal(customer).total`**. Raw `calc.total` can diverge from the panel when `stmtUnpaid` / `priorChain` interacts with frozen PDF state; the panel is authoritative for POS. The **All Previous Payments / Charges** column **Balance After** uses `amountDue − amountPaid`, so a mismatched `amountDue` would show a wrong running balance even when customer balances were updated correctly.
+
+**Register / tax breakdown:** When updating the current payment-processing register, any proportional split of tax vs PUC applied on that payment uses **`calcBeforePayment.totalSurcharge`** and **`calcBeforePayment.pucSurchargeAmount`** to derive the denominator (never an undefined `taxCodesTotal`).
+
+### 7.2 Late-fee “View details” parity (Process Bill vs ledger)
+
+- **Process Bill / Payment module** (live customer): **`buildProcessBillLateFeeDetailPack`** + **`getUiLateFeeDisplayRows`**, with footer text from **`buildLateFeeTimerHintForCustomer`** (per-bill days since print, 30–60–90 days, deposit threshold).
+- **All Previous Payments / Charges** — **Payment** rows with a prior **`billingCharge`**: same row labels via **`getUiLateFeeDisplayRows(customer, statementLateFee, 0)`** where the statement late is the amount shown on that row; header line **`· Process Bill`** when enriched.
+- **Charge** rows (`source: 'billingCharge'`): late-fee modal uses the **historical** **`lateFeeAmount` on that `chargeHistory` row** and **`ledgerLateFeeCycleLabelForBillingCharge`** (prior bill print date for “from billing cycle on …”), **not** a live **`buildProcessBillLateFeeDetailPack`** call (which would read `$0` late after the fee was paid down). Header **`· Process Bill`** and the same timer footer.
+
+Process Bill and the payment module also expose **Late Fee → View Details** for the **live** customer; that path uses **`getUiLateFeeDisplayRows`** for split rows (e.g. prior-cycle late on the PDF plus a new 21-day accrual) plus the shared timer footer above.
 
 ---
 
@@ -197,7 +220,29 @@ User-facing copy clarifies: **rolled late fees stay inside the Past Due total**;
 
 ## 11. Security deposit auto-apply
 
-**`maybeApplyDepositAt60Days`** runs inside **`calculateCustomerTotal`** (unless skipped). When continuous delinquency days exceed **`getDepositWithdrawDelinquencyDays()`**, deposit may be applied via **`applyCustomerPaymentByHierarchy`** with **`billUiSnapshot: true`** / **`skipDepositAutoApply`** orchestration so recursion and logging remain consistent. **`lastBill60DayDepositApplied`** prevents repeat application.
+**`maybeApplyDepositAt60Days`** runs inside **`calculateCustomerTotal`** (unless skipped). When continuous delinquency days exceed **`getDepositWithdrawDelinquencyDays()`**, deposit may be applied via **`applyCustomerPaymentByHierarchy`** with **`billUiSnapshot: true`** / **`skipDepositAutoApply`** orchestration so recursion and logging remain consistent.
+
+Deposit trigger amount basis:
+
+- If no frozen Process Bill snapshot exists, deposit uses live `calculateCustomerTotal(..., { billUiSnapshot: true }).total`.
+- If a frozen Process Bill snapshot exists, deposit uses the same displayed statement basis as Process Bill (`frozenTotal - frozenLate + (frozenLate + liveLate)`), i.e. frozen statement total plus post-print late accrual only.
+
+This keeps auto-deposit `amountPaid` aligned with what the operator sees on Process Bill at trigger time. **`lastBill60DayDepositApplied`** prevents repeat application.
+
+Ledger display alignment:
+
+- Deposit auto-pay rows persist a late-fee detail snapshot (`lateFeeDetailsRows`) when available.
+- In **All Previous Payments/Charges**, the **Late Fee** column has **Late Fee Details** and uses the saved snapshot for deposit rows so displayed line items match the statement total composition at trigger time.
+
+### 11.1 Settings load order, test date, and deposit auto-apply
+
+On app init, **`loadTogglesSettings()`** runs **before** **`loadCustomersFromFirestore()`** so the first **`updateCustomerTable` → `calculateCustomerTotal` → `maybeApplyDepositAt60Days`** pass sees the persisted **test date** and **`depositWithdrawDelinquencyDays`**, not real wall-clock time with in-memory defaults (which caused spurious deposit rows and wrong timestamps). Other reload paths (e.g. settings fallback customer load, delete customer, wipe billing data) also load toggles before customers where relevant.
+
+**`updateSettingsDrawersTable`** reloads toggles via **`loadTogglesSettings()`** but must **not** assign **`testDate = null`** merely because the returned object omits `testDate`; that would clear a valid simulated date after a partial read.
+
+### 11.2 Drawers after “Fresh start (reset all)”
+
+**`test306090FreshStart`** may change the simulated calendar day. Drawer availability is keyed off **`lastCountDate`** matching **`getCurrentDate()`**. **`preserveDrawerSodAfterBillingFreshStart`** re-stamps **`lastCountDate`** to local noon on the **new** effective day for any drawer that **already** had an SOD count, so a billing-only fresh start does **not** force cashiers to redo **Start of day** for physical drawers. (Supervisor **EOD verify** still clears `lastCountDate` by design.)
 
 ---
 
@@ -221,10 +266,16 @@ User-facing copy clarifies: **rolled late fees stay inside the Past Due total**;
 2. **21 days after print** — Late fee appears; **Past Due** unchanged if everything was current except timing.
 3. **Bill with unpaid prior** — Past Due line = rolled composition; Late Fee line = current period auto fee only.
 4. **Second 21-day window without new bill (same month as print)** — Frozen panel **total** and **late** grow per **`getProcessBillPanelAmounts`** (frozen late + live late).
-5. **Advance to month after last bill without printing** — Panel **total** / **past due** / **late** match live calc so deposit auto-apply and Process Bill agree (no understated total vs full `amountPaid`).
+5. **Advance to month after last bill without printing** — Process Bill remains on frozen statement basis (plus post-print late accrual only), and deposit auto-apply uses that same basis so `amountPaid` matches visible Total Due.
 6. **Past Due → View details** after multiple rolls — Sewer/tax/PUC scale with rolled cycles; **no** standalone **Past due amount** row when expand logic applies.
 7. **Payment** — Hierarchy order changes allocation; past due payments shrink composition proportionally.
+8. **Deposit trigger with stacked late fees** — If statement Late Fee is e.g. `$10.00` (rolled `$5` + new `$5`), deposit auto-pay row should show Late Fee `$10.00` and Late Fee Details split rows, while Amount Paid matches statement Total Due.
+9. **Keyboard date advance (Ctrl/Cmd+Shift)** — Advances to next month using day-by-day simulation (overlay shown), not an instant jump.
+10. **Partial pay after Produce Bill** — Payment panel **Total** matches ledger **Balance After** chain (no `currentDue + stmtUnpaid` inflation); e.g. \$361.98 − \$100 → \$261.98 headline.
+11. **Ledger late fee on old billing row after pay** — **Late Fee Details** on the **Feb `billingCharge`** row still shows the **\$5** cycle line and **· Process Bill** + timer footer, not “current statement” \$0.
+12. **Ledger late fee on check row** — Same **\$5 / prior cycle** copy as the bill row for the payment that applied to that statement.
+13. **Payment `amountDue` on history row** — Matches **`getProcessBillPanelAmounts`** at pay time (aligned with Process Bill / payment header).
 
 ---
 
-*Last aligned with application logic in `public/index.html` as of documentation authoring (April 2026).*
+*Last aligned with application logic in `public/index.html` (April 2026).*

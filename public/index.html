@@ -507,6 +507,43 @@
       }
     }
 
+    /** Local noon on the effective calendar day (real or test) — stable SOD timestamp storage. */
+    function drawerLastCountDateISOForEffectiveToday() {
+      const t = window.getCurrentDate ? window.getCurrentDate() : new Date();
+      return new Date(t.getFullYear(), t.getMonth(), t.getDate(), 12, 0, 0, 0).toISOString();
+    }
+
+    /**
+     * Billing-only fresh start should not invalidate physical drawer SOD. Re-stamp lastCountDate to the
+     * current effective day for any drawer that already had a count, so POS availability stays aligned
+     * after setTestDate / simulated day changes.
+     */
+    async function preserveDrawerSodAfterBillingFreshStart() {
+      if (!Array.isArray(drawers) || drawers.length === 0) return;
+      let any = false;
+      for (let i = 0; i < drawers.length; i++) {
+        const drawer = drawers[i];
+        if (!drawer || !drawer.lastCountDate) continue;
+        drawer.lastCountDate = drawerLastCountDateISOForEffectiveToday();
+        any = true;
+      }
+      if (!any) return;
+      try {
+        if (typeof saveDrawersToFirestore === 'function') {
+          await saveDrawersToFirestore();
+        }
+      } catch (e) {
+        /* non-fatal: customers already saved */
+      }
+      try {
+        if (typeof updateSettingsDrawersTable === 'function') {
+          await updateSettingsDrawersTable();
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
     // Save all customers to Firestore (used for imports - replaces all customers)
     async function saveAllCustomersToFirestore(progressCallback) {
       try {
@@ -764,7 +801,7 @@
                 : deleteField()
           };
 
-          await setDoc(codeRef, codeToSave);
+          await setDoc(codeRef, codeToSave, { merge: true });
 
           // Verify what was actually saved by reading it back immediately
           const verifyDoc = await getDoc(codeRef);
@@ -2056,7 +2093,7 @@
     window.advanceTestDateBy30Days = async function() {
       const startD = getEffectiveTestCalendarDate();
       const tgt = new Date(startD.getFullYear(), startD.getMonth() + 1, 1);
-      await window.setTestDate(formatLocalYMD(tgt), { skipAnimation: true });
+      await window.setTestDate(formatLocalYMD(tgt));
     };
 
     document.addEventListener('keydown', function(event) {
@@ -3251,6 +3288,11 @@
 
         await loadLocationsFromFirestore();
 
+        // Toggles (test date + deposit delinquency days, etc.) MUST load before customers so the first
+        // updateCustomerTable → calculateCustomerTotal → maybeApplyDepositAt60Days pass uses simulated
+        // date and saved thresholds, not real wall-clock time with defaults.
+        await loadTogglesSettings();
+
         await loadCustomersFromFirestore();
 
         await loadUsersFromFirestore();
@@ -3258,8 +3300,6 @@
         await loadDrawersFromFirestore();
 
         await loadPaymentProcessingSessionsFromFirestore();
-
-        await loadTogglesSettings();
 
         const buttonContainerAfter = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
 
@@ -4070,14 +4110,14 @@
         const row = document.createElement('tr');
         row.className = 'border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800';
 
-        // Amount Due = same as Amount Breakdown (calculateCustomerTotal only — no date heuristics)
-        const calcRow = calculateCustomerTotal(customer);
+        // Amount Due source must match Process Bill / Amount Breakdown panel values.
+        const panelRow = getProcessBillPanelAmounts(customer);
         updateCustomerPaymentStatus(customer);
 
         const statusClass = getPaymentStatusBadgeClass(customer);
         const statusLabel = getPaymentStatusBadgeLabel(customer);
 
-        const totalAmount = Math.max(0, calcRow.total);
+        const totalAmount = Math.max(0, panelRow.total);
 
         row.innerHTML = `
           <td class="px-6 py-4 whitespace-nowrap text-center">
@@ -4488,6 +4528,7 @@
         if (customers.length === 0) {
 
           try {
+            await loadTogglesSettings();
             await loadCustomersFromFirestore();
             await loadLocationsFromFirestore();
             await loadUsersFromFirestore();
@@ -4748,16 +4789,23 @@
     function showCustomerPaymentInfo(customerId) {
       const customer = customers.find(c => c.id === customerId);
       if (customer) {
-        // Use shared calculation function to ensure consistency
-        const calc = calculateCustomerTotal(customer);
-        const totalAmount = calc.total;
-        const pastDue = calc.pastDue;
-        const lateFeeAmount = calc.lateFeeAmount;
+        // Match Process Bill / statement: frozen snapshot + post-print late accrual (same as getProcessBillPanelAmounts)
+        const frozen = customer.processBillPanelFrozenSnapshot;
+        const amts = getProcessBillPanelAmounts(customer);
+        const totalAmount = amts.total;
+        const pastDue = amts.pastDue;
+        const lateFeeAmount = amts.lateFee;
+        const dueDateStr = amts.dueDateStr || getBillDueDateStr(customer);
 
-        const dueDateStr = getBillDueDateStr(customer);
-
-        // Set up status indicator
-        const statusClass = getPaymentStatusBadgeClass(customer);
+        let statusClass;
+        let statusLabel;
+        if (frozen && typeof frozen.amountDue === 'number') {
+          statusClass = frozen.statusClass || getPaymentStatusBadgeClass(customer);
+          statusLabel = frozen.statusLabel != null ? frozen.statusLabel : getPaymentStatusBadgeLabel(customer);
+        } else {
+          statusClass = getPaymentStatusBadgeClass(customer);
+          statusLabel = getPaymentStatusBadgeLabel(customer);
+        }
 
         // Clamp totalAmount to never show negative (should be $0.00 minimum)
         const displayAmount = Math.max(0, totalAmount);
@@ -4770,7 +4818,7 @@
         // Update status indicator
         const statusIndicator = document.getElementById('paymentStatusIndicator');
         statusIndicator.className = `inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusClass}`;
-        statusIndicator.textContent = getPaymentStatusBadgeLabel(customer);
+        statusIndicator.textContent = statusLabel;
 
         // Update property location
         document.getElementById('paymentPropertyLocation').textContent = customer.address;
@@ -4989,7 +5037,21 @@
       ) {
         total = Math.round((currentDue - credit) * 100) / 100;
       } else {
-        total = Math.round((currentDue + priorChain - credit) * 100) / 100;
+        const rolled = Math.round((currentDue + pastDue - credit) * 100) / 100;
+        const stmtNet = Math.round((stmtUnpaid - credit) * 100) / 100;
+        const combined = Math.round((currentDue + priorChain - credit) * 100) / 100;
+        // When lastPrintedStatementTotalDue drives stmtUnpaid, it already includes the current-cycle
+        // slice that currentDue also carries after Produce Bill — adding both double-counts (e.g. after
+        // partial payment: combined >> rolled while rolled ≈ stmtNet).
+        if (
+          stmtUnpaid > 0.005 &&
+          combined > rolled + 0.02 &&
+          Math.abs(rolled - stmtNet) <= Math.max(0.05, Math.min(10, 0.02 * stmtNet))
+        ) {
+          total = rolled;
+        } else {
+          total = combined;
+        }
       }
 
       if (customer.lateFeeAnchorPrintDate && total <= 0.005) {
@@ -5510,13 +5572,30 @@
           return;
         }
 
-        // Full amount owed (same total as Amount Breakdown / calculateCustomerTotal), not the frozen PDF cap,
-        // so the deposit cannot leave a stranded past-due slice.
+        // Deposit auto-pay should match what Process Bill shows before a new bill is printed.
         const calcBeforeDeposit = calculateCustomerTotal(customer, {
           billUiSnapshot: true,
           skipDepositAutoApply: true
         });
-        const trueOwed = Math.round(Math.max(0, parseFloat(calcBeforeDeposit.total) || 0) * 100) / 100;
+        let trueOwed = Math.round(Math.max(0, parseFloat(calcBeforeDeposit.total) || 0) * 100) / 100;
+        let lateFeeAmt = Math.max(0, parseFloat(calcBeforeDeposit.lateFeeAmount) || 0);
+        const frozenSnapForDeposit = customer.processBillPanelFrozenSnapshot;
+        let lateFeeDetailsRows = null;
+        if (frozenSnapForDeposit && typeof frozenSnapForDeposit.amountDue === 'number') {
+          const frozenTotalForDeposit = Math.max(0, parseFloat(frozenSnapForDeposit.amountDue) || 0);
+          const frozenLateForDeposit = Math.max(0, parseFloat(frozenSnapForDeposit.lateFee) || 0);
+          const liveLateForDeposit = Math.max(0, parseFloat(calcBeforeDeposit.lateFeeAmount) || 0);
+          const displayLateForDeposit = Math.round((frozenLateForDeposit + liveLateForDeposit) * 100) / 100;
+          lateFeeDetailsRows =
+            typeof getUiLateFeeDisplayRows === 'function'
+              ? getUiLateFeeDisplayRows(customer, frozenLateForDeposit, liveLateForDeposit)
+              : null;
+          lateFeeAmt = displayLateForDeposit;
+          trueOwed = Math.max(
+            0,
+            Math.round((frozenTotalForDeposit - frozenLateForDeposit + displayLateForDeposit) * 100) / 100
+          );
+        }
         if (trueOwed <= 0.005) {
           if (shouldLogDeposit) {
 
@@ -5532,8 +5611,6 @@
           }
           return;
         }
-
-        const lateFeeAmt = Math.max(0, parseFloat(calcBeforeDeposit.lateFeeAmount) || 0);
 
         const beforeSewer = parseFloat(customer.currentMonthPaidSewer || 0) || 0;
         const beforeTax = parseFloat(customer.currentMonthPaidTaxCodes || 0) || 0;
@@ -5598,7 +5675,8 @@
           paymentMethod: 'Security deposit (auto)',
           source: 'depositAutoApply',
           paymentNumber: depositPaymentNumber,
-          appliedBreakdown: depositBreakdown
+          appliedBreakdown: depositBreakdown,
+          lateFeeDetailsRows: Array.isArray(lateFeeDetailsRows) ? lateFeeDetailsRows : undefined
         });
         clearProcessBillPanelDisplayData(customer);
 
@@ -5815,24 +5893,14 @@
         const liveCalc = calculateCustomerTotal(customer, { billUiSnapshot: true });
         const liveLate = Math.max(0, parseFloat(liveCalc.lateFeeAmount) || 0);
         const displayLate = Math.round((frozenLate + liveLate) * 100) / 100;
-        let displayTotal = Math.max(
+        const displayTotal = Math.max(
           0,
           Math.round((frozenTotal - frozenLate + displayLate) * 100) / 100
         );
-        let displayPastDue = Math.max(0, parseFloat(frozen.pastDue) || 0);
-        let displayLateOut = displayLate;
-        // After the calendar month moves past the bill print month, new current-cycle charges accrue on top
-        // of rolled balances. Frozen total only swapped late fees before, which understated total vs
-        // calculateCustomerTotal (e.g. deposit auto-apply) — align panel with live calc for that case.
-        if (isCalendarPeriodAfterLastBillPrint(customer)) {
-          displayTotal = Math.max(0, Math.round((parseFloat(liveCalc.total) || 0) * 100) / 100);
-          displayPastDue = Math.max(0, Math.round((parseFloat(liveCalc.pastDue) || 0) * 100) / 100);
-          displayLateOut = liveLate;
-        }
         return {
           total: displayTotal,
-          pastDue: displayPastDue,
-          lateFee: displayLateOut,
+          pastDue: Math.max(0, parseFloat(frozen.pastDue) || 0),
+          lateFee: displayLate,
           dueDateStr: frozen.dueDateStr || getBillDueDateStr(customer),
           fromFrozen: true
         };
@@ -5970,6 +6038,7 @@
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
                 <p id="billLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                <button type="button" onclick="openProcessBillLateFeeDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
               </div>
             </div>
 
@@ -6868,6 +6937,7 @@
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
                 <p id="billLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                <button type="button" onclick="openProcessBillLateFeeDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
               </div>
             </div>
 
@@ -7006,7 +7076,16 @@
         const lateFeeBeforePayment = Math.max(0, calcBeforePayment.lateFeeAmount || 0);
         const currentDueBeforePayment = calcBeforePayment.currentDue;
         const pastDueBeforePayment = calcBeforePayment.pastDue;
-        const totalOwedBeforePayment = Math.round(Math.max(0, calcBeforePayment.total) * 100) / 100;
+        // Match Payment Processing / Process Bill header (getProcessBillPanelAmounts). Raw calc.total can
+        // diverge (stmtUnpaid + pastDue double-count) while the panel shows the correct bill total.
+        const totalOwedBeforePayment = Math.round(
+          Math.max(
+            0,
+            typeof getProcessBillPanelAmounts === 'function'
+              ? parseFloat(getProcessBillPanelAmounts(customer).total) || 0
+              : calcBeforePayment.total
+          ) * 100
+        ) / 100;
         const checkOverpaymentAmount = paymentType === 'Check'
           ? Math.max(0, ((!isNaN(checkReceivedInput) ? checkReceivedInput : paymentAmount) - totalOwedBeforePayment))
           : 0;
@@ -7184,6 +7263,14 @@
         const taxCodesApplied =
           (categoryTotals['Tax Codes'] || 0) + (categoryTotals['Puc surcharge'] || 0);
         const taxCodeDetails = [];
+        const taxCodesTotal = Math.max(
+          0,
+          Math.round(
+            ((parseFloat(calcBeforePayment.totalSurcharge) || 0) +
+              (parseFloat(calcBeforePayment.pucSurchargeAmount) || 0)) *
+              100
+          ) / 100
+        );
         const totalTaxCodesDue = Math.max(0, taxCodesTotal);
 
         if (taxCodesApplied > 0 && totalTaxCodesDue > 0) {
@@ -7608,10 +7695,12 @@
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
                 <p id="paymentPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                <button type="button" onclick="openPaymentPastDueDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
               </div>
               <div>
                 <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
                 <p id="paymentLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                <button type="button" onclick="openPaymentLateFeeDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
               </div>
             </div>
 
@@ -11617,7 +11706,8 @@
             await saveLocationsToFirestore();
           }
 
-          // Reload data from Firestore to ensure UI is in sync
+          // Reload data from Firestore to ensure UI is in sync (toggles first so totals use test date / thresholds)
+          await loadTogglesSettings();
           await loadCustomersFromFirestore();
 
           // Re-apply current search filter if there is one
@@ -11753,6 +11843,7 @@
           deleteProgressStats.textContent = 'Refreshing lists…';
         }
 
+        await loadTogglesSettings();
         await loadCustomersFromFirestore();
         await loadLocationsFromFirestore();
         await loadCodesFromFirestore();
@@ -12004,14 +12095,14 @@
         const row = document.createElement('tr');
         row.className = 'border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800';
 
-        // Amount Due = same as Amount Breakdown (calculateCustomerTotal only — no date heuristics)
-        const calcRow = calculateCustomerTotal(customer);
+        // Amount Due source must match Process Bill / Amount Breakdown panel values.
+        const panelRow = getProcessBillPanelAmounts(customer);
         updateCustomerPaymentStatus(customer);
 
         const statusClass = getPaymentStatusBadgeClass(customer);
         const statusLabel = getPaymentStatusBadgeLabel(customer);
 
-        const totalAmount = Math.max(0, calcRow.total);
+        const totalAmount = Math.max(0, panelRow.total);
 
         row.innerHTML = `
           <td class="px-6 py-4 whitespace-nowrap text-center">
@@ -12345,17 +12436,11 @@
         return;
       }
 
-      // IMPORTANT: Load testDate from Firestore FIRST to ensure same date as supervisor screen
-      // This is critical - both screens must use the same date calculation
+      // Sync toggles (including test date) from Firestore. loadTogglesSettings() already assigns global
+      // testDate when present — do not clear testDate here on missing/undefined (avoids wiping sim date
+      // after a failed load or when the returned object omits testDate).
       try {
-        const togglesSettings = await loadTogglesSettings();
-        if (togglesSettings && togglesSettings.testDate) {
-          testDate = togglesSettings.testDate;
-
-        } else {
-          testDate = null;
-
-        }
+        await loadTogglesSettings();
       } catch (error) {
 
       }
@@ -16937,6 +17022,26 @@
       alert('Code added successfully!');
     };
 
+    function setEditCodeFieldSavingState(isSaving) {
+      const modal = document.getElementById('editCodeFieldModal');
+      if (!modal) return;
+      const cancelBtn = document.getElementById('editCodeFieldCancelBtn');
+      const closeBtn = document.getElementById('editCodeFieldCloseBtn');
+      const saveBtn = document.getElementById('editCodeFieldSaveBtn');
+      const spinner = document.getElementById('editCodeFieldSavingIndicator');
+      const input = document.getElementById('editCodeFieldValue');
+      if (cancelBtn) cancelBtn.disabled = !!isSaving;
+      if (closeBtn) closeBtn.disabled = !!isSaving;
+      if (saveBtn) {
+        saveBtn.disabled = !!isSaving;
+        saveBtn.classList.toggle('opacity-70', !!isSaving);
+        saveBtn.classList.toggle('cursor-not-allowed', !!isSaving);
+      }
+      if (spinner) spinner.classList.toggle('hidden', !isSaving);
+      if (input) input.disabled = !!isSaving;
+      modal.style.pointerEvents = isSaving ? 'auto' : '';
+    }
+
     // Save edit code field
     window.saveEditCodeField = async function() {
       const codeId = document.getElementById('editCodeFieldCodeId').value;
@@ -16962,14 +17067,21 @@
           code.percentage = undefined;
         }
       }
-
-      await saveCodesToFirestore();
-      updateCodesTable();
-      cancelEditCodeField();
+      setEditCodeFieldSavingState(true);
+      try {
+        await saveCodesToFirestore();
+        updateCodesTable();
+        cancelEditCodeField();
+      } catch (error) {
+        alert('Could not save code changes. Please try again.');
+      } finally {
+        setEditCodeFieldSavingState(false);
+      }
     };
 
     // Cancel edit code field
     window.cancelEditCodeField = function() {
+      setEditCodeFieldSavingState(false);
       document.getElementById('editCodeFieldModal').classList.add('hidden');
       document.getElementById('editCodeFieldInputContainer').innerHTML = '';
     };
@@ -18739,6 +18851,8 @@
       if (typeof loadPaymentProcessingSessionsFromFirestore === 'function') {
         await loadPaymentProcessingSessionsFromFirestore();
       }
+
+      await preserveDrawerSodAfterBillingFreshStart();
 
       alert(
         `Test 30-60-90 fresh start complete.\n\n` +
@@ -20926,6 +21040,11 @@
       if (el) el.classList.add('hidden');
     };
 
+    window.closeLedgerLateFeeBreakdownModal = function() {
+      const el = document.getElementById('ledgerLateFeeBreakdownModal');
+      if (el) el.classList.add('hidden');
+    };
+
     function renderPastDueSnapshotTable(sn) {
       if (!sn) return '';
       return `
@@ -20946,6 +21065,50 @@
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/"/g, '&quot;');
+    }
+
+    function renderLateFeeBreakdownModal(pack) {
+      if (!pack) return;
+      const meta = window.__ledgerPaymentBreakdownModalMeta;
+      let el = document.getElementById('ledgerLateFeeBreakdownModal');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'ledgerLateFeeBreakdownModal';
+        el.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden';
+        document.body.appendChild(el);
+      }
+      const rows = Array.isArray(pack.rows) ? pack.rows : [];
+      const rowsHtml = rows.length
+        ? rows.map((r) => `
+            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600 text-sm">
+              <span class="text-slate-700 dark:text-slate-300">${ledgerEscapeHtml(r.label || 'Late Fee')}</span>
+              <span class="font-medium text-slate-900 dark:text-slate-100">$${(Math.max(0, parseFloat(r.amount) || 0)).toFixed(2)}</span>
+            </div>`).join('')
+        : `<p class="text-xs text-slate-500 dark:text-slate-400 mb-3">No detailed late-fee rows were captured for this entry.</p>`;
+      const total = Math.max(0, parseFloat(pack.totalLateFee) || 0);
+      el.innerHTML = `
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4 border border-slate-200 dark:border-slate-600 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-start mb-4">
+            <div>
+              <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Late Fee details</h3>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">${meta && meta.customerLabel ? meta.customerLabel : ''}</p>
+              <p class="text-xs text-slate-500 dark:text-slate-400">${pack.dateTime || ''}${pack.subtype ? ` · ${pack.subtype}` : ''}</p>
+            </div>
+            <button type="button" onclick="closeLedgerLateFeeBreakdownModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1" aria-label="Close">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="rounded-lg border border-slate-200 dark:border-slate-600 overflow-hidden mb-3">
+            ${rowsHtml}
+            <div class="flex justify-between px-3 py-2 font-semibold text-sm bg-slate-50/80 dark:bg-slate-900/40 text-slate-800 dark:text-slate-100">
+              <span>Total Late Fee</span>
+              <span>$${total.toFixed(2)}</span>
+            </div>
+          </div>
+          ${pack.hint ? `<p class="text-xs text-slate-500 dark:text-slate-400 mb-3 leading-relaxed">${ledgerEscapeHtml(pack.hint)}</p>` : ''}
+          <button type="button" onclick="closeLedgerLateFeeBreakdownModal()" class="w-full bg-blue-600 text-white font-medium py-2 rounded-lg hover:bg-blue-700">Close</button>
+        </div>`;
+      el.classList.remove('hidden');
     }
 
     function collectAccountingPaymentRowsForLedger(customer) {
@@ -21238,6 +21401,74 @@
       openCustomerPastDueDetailsModal(cust);
     };
 
+    /** Payment module: same Past Due composition modal as Process Bill (uses selected customer). */
+    window.openPaymentPastDueDetailsModal = function() {
+      const id = window.selectedCustomerIdForPayment;
+      if (!id) return;
+      const cust = typeof customers !== 'undefined' ? customers.find((c) => c.id === id) : null;
+      if (!cust) return;
+      openCustomerPastDueDetailsModal(cust);
+    };
+
+    /** Shared footer copy for Late Fee details (Process Bill, Payment module, ledger). */
+    function buildLateFeeTimerHintForCustomer(customer) {
+      if (!customer) return '';
+      const dspBill = getDaysSinceLastBillPrint(customer);
+      const dspStr = dspBill === null ? '—' : String(dspBill);
+      const d306090 = getContinuousDelinquencyDays(customer);
+      return (
+        `Per-bill late timer: ${dspStr} day(s) since last bill print — one late fee at day ${getLateFeeTimerDays()} if amount owed is not $0 (restarts each bill). ` +
+        `30-60-90 timer: ${d306090} day(s) while you owe (does not restart on rebill until paid in full). Security deposit auto-pay after ${getDepositWithdrawDelinquencyDays()}+ days on the 30-60-90 timer.`
+      );
+    }
+
+    /** Payment module: same Late Fee breakdown modal as Process Bill (uses selected customer). */
+    window.openPaymentLateFeeDetailsModal = function() {
+      const id = window.selectedCustomerIdForPayment;
+      if (!id) return;
+      const cust = typeof customers !== 'undefined' ? customers.find((c) => c.id === id) : null;
+      if (!cust) return;
+      const pack = buildProcessBillLateFeeDetailPack(cust);
+      if (!pack) return;
+      renderLateFeeBreakdownModal(pack);
+    };
+
+    function buildProcessBillLateFeeDetailPack(customer) {
+      if (!customer) return null;
+      const panel = typeof getProcessBillPanelAmounts === 'function' ? getProcessBillPanelAmounts(customer) : null;
+      const frozen = customer.processBillPanelFrozenSnapshot;
+      const liveCalc = calculateCustomerTotal(customer, { billUiSnapshot: true });
+      const rows =
+        frozen && typeof frozen.amountDue === 'number'
+          ? getUiLateFeeDisplayRows(
+              customer,
+              Math.max(0, parseFloat(frozen.lateFee) || 0),
+              Math.max(0, parseFloat(liveCalc.lateFeeAmount) || 0)
+            )
+          : [{
+              label: 'Late Fee (current statement period)',
+              amount: Math.max(0, parseFloat(panel ? panel.lateFee : liveCalc.lateFeeAmount) || 0)
+            }];
+      const hint = buildLateFeeTimerHintForCustomer(customer);
+      return {
+        dateTime: '',
+        subtype: 'Process Bill',
+        totalLateFee: Math.max(0, parseFloat(panel ? panel.lateFee : 0) || 0),
+        rows,
+        hint
+      };
+    }
+
+    window.openProcessBillLateFeeDetailsModal = function() {
+      const id = typeof getBillSelectedCustomerId === 'function' ? getBillSelectedCustomerId() : '';
+      if (!id) return;
+      const customer = typeof customers !== 'undefined' ? customers.find((c) => c.id === id) : null;
+      if (!customer) return;
+      const pack = buildProcessBillLateFeeDetailPack(customer);
+      if (!pack) return;
+      renderLateFeeBreakdownModal(pack);
+    };
+
     window.openCustomerPastDueDetailsModal = function(customer) {
       if (!customer) return;
       if (typeof syncPastDueCompositionToPastDueField === 'function') {
@@ -21406,6 +21637,12 @@
       el.classList.remove('hidden');
     };
 
+    window.openLedgerLateFeeBreakdown = function(rowIdx) {
+      const pack = window.__ledgerLateFeeBreakdownByRow && window.__ledgerLateFeeBreakdownByRow[rowIdx];
+      if (!pack) return;
+      renderLateFeeBreakdownModal(pack);
+    };
+
     function displayAllLedgerModal(customer) {
       let modal = document.getElementById('allLedgerModal');
       if (!modal) {
@@ -21535,14 +21772,39 @@
         return before[before.length - 1];
       }
 
+      /** Prior Produce Bill charge strictly before this billing row (for late-fee cycle labels). */
+      function getPriorBillingChargeStrictlyBeforeCharge(customer, chargeEntry) {
+        const ch = Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [];
+        const bills = ch.filter((c) => c && c.source === 'billingCharge');
+        const before = bills.filter((c) => ledgerEntryStrictlyBefore(c, chargeEntry));
+        if (!before.length) return null;
+        before.sort((a, b) => {
+          const ma = getLedgerEntrySortMs(a);
+          const mb = getLedgerEntrySortMs(b);
+          if (ma !== mb) return ma - mb;
+          return getLedgerEntryOrder(a) - getLedgerEntryOrder(b);
+        });
+        return before[before.length - 1];
+      }
+
+      function ledgerLateFeeCycleLabelForBillingCharge(customer, chargeEntry) {
+        const prev = getPriorBillingChargeStrictlyBeforeCharge(customer, chargeEntry);
+        const datePart = prev
+          ? (formatLedgerDateTime(prev).split(' ')[0] || '—')
+          : (formatLedgerDateTime(chargeEntry).split(' ')[0] || '—');
+        return `Late Fee (from billing cycle on ${datePart})`;
+      }
+
       const paymentRows = paymentSortedAsc.map((p, i) => {
         const lateFeeFromSnapshot = Math.round(
           Math.max(
             0,
             parseFloat(
-              p.lateFeePaidFromPayment != null && p.lateFeePaidFromPayment !== ''
-                ? p.lateFeePaidFromPayment
-                : p.lateFeeAmount || 0
+              p.source === 'depositAutoApply'
+                ? p.lateFeeAmount || 0
+                : p.lateFeePaidFromPayment != null && p.lateFeePaidFromPayment !== ''
+                  ? p.lateFeePaidFromPayment
+                  : p.lateFeeAmount || 0
             )
           ) * 100
         ) / 100;
@@ -21570,6 +21832,9 @@
             pucAmt = sp.puc;
             combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
             lateFee = Math.round(Math.max(0, parseFloat(priorBill.lateFeeAmount || 0)) * 100) / 100;
+            if (p.source === 'depositAutoApply') {
+              lateFee = Math.max(lateFee, lateFeeFromSnapshot);
+            }
           } else {
             const br = mergeAppliedBreakdown(
               p.appliedBreakdown && typeof p.appliedBreakdown === 'object'
@@ -21685,6 +21950,7 @@
       };
       window.__ledgerPaymentBreakdownByRow = {};
       window.__ledgerPastDueBreakdownByRow = {};
+      window.__ledgerLateFeeBreakdownByRow = {};
 
       function getSortedBillingChargesForPastDueModal() {
         return (Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [])
@@ -21764,6 +22030,93 @@
             };
           }
           window.__ledgerPastDueBreakdownByRow[idx] = buildPastDueDetailPack(r);
+          const lateRows = (() => {
+            if (r.sourceKind === 'charge' && r.ledgerCharge && r.ledgerCharge.source === 'billingCharge' && r.lateFee > 0.005) {
+              const amt = Math.round(Math.max(0, r.lateFee) * 100) / 100;
+              return [{ label: ledgerLateFeeCycleLabelForBillingCharge(customer, r.ledgerCharge), amount: amt }];
+            }
+            if (r.sourceKind === 'payment' && r.ledgerPayment && Array.isArray(r.ledgerPayment.lateFeeDetailsRows) && r.ledgerPayment.lateFeeDetailsRows.length) {
+              return r.ledgerPayment.lateFeeDetailsRows.map((x) => ({
+                label: x && x.label ? x.label : 'Late Fee',
+                amount: Math.max(0, parseFloat(x && x.amount) || 0)
+              }));
+            }
+            if (
+              r.sourceKind === 'payment' &&
+              r.ledgerPayment &&
+              r.lateFee > 0.005
+            ) {
+              const priorBill = getMostRecentBillingChargeBeforePayment(customer, r.ledgerPayment);
+              if (priorBill) {
+                const lfStmt = Math.round(Math.max(0, r.lateFee) * 100) / 100;
+                const uiRows = getUiLateFeeDisplayRows(customer, lfStmt, 0);
+                if (uiRows.length) {
+                  return uiRows.map((x) => ({
+                    label: x && x.label ? x.label : 'Late Fee',
+                    amount: Math.max(0, parseFloat(x && x.amount) || 0)
+                  }));
+                }
+                return [
+                  {
+                    label: `Late Fee (from billing cycle on ${(formatLedgerDateTime(priorBill).split(' ')[0] || '—')})`,
+                    amount: lfStmt
+                  }
+                ];
+              }
+            }
+            if (r.lateFee > 0.005) {
+              return [{
+                label:
+                  r.sourceKind === 'charge'
+                    ? `Late Fee (from billing cycle on ${(r.dateTime || '').split(' ')[0] || '—'})`
+                    : 'Late Fee snapshot at payment time',
+                amount: r.lateFee
+              }];
+            }
+            return [];
+          })();
+          let ledgerLateFeeMetaPack = null;
+          if (r.sourceKind === 'charge' && r.ledgerCharge && r.ledgerCharge.source === 'billingCharge' && r.lateFee > 0.005) {
+            ledgerLateFeeMetaPack = {
+              dateTime: '',
+              subtype: 'Process Bill',
+              totalLateFee: Math.round(Math.max(0, r.lateFee) * 100) / 100,
+              hint: buildLateFeeTimerHintForCustomer(customer)
+            };
+          } else if (r.sourceKind === 'payment' && r.ledgerPayment && r.lateFee > 0.005) {
+            const hasStoredLateRows =
+              Array.isArray(r.ledgerPayment.lateFeeDetailsRows) && r.ledgerPayment.lateFeeDetailsRows.length;
+            const priorForPayment = getMostRecentBillingChargeBeforePayment(customer, r.ledgerPayment);
+            if ((hasStoredLateRows || priorForPayment) && lateRows.length) {
+              ledgerLateFeeMetaPack = {
+                dateTime: '',
+                subtype: 'Process Bill',
+                totalLateFee: Math.round(Math.max(0, r.lateFee) * 100) / 100,
+                hint: buildLateFeeTimerHintForCustomer(customer)
+              };
+            }
+          }
+          window.__ledgerLateFeeBreakdownByRow[idx] = {
+            dateTime:
+              ledgerLateFeeMetaPack && ledgerLateFeeMetaPack.dateTime != null
+                ? ledgerLateFeeMetaPack.dateTime
+                : (r.dateTime || ''),
+            subtype:
+              ledgerLateFeeMetaPack && ledgerLateFeeMetaPack.subtype
+                ? ledgerLateFeeMetaPack.subtype
+                : (r.subtype || ''),
+            totalLateFee:
+              ledgerLateFeeMetaPack && ledgerLateFeeMetaPack.totalLateFee != null
+                ? ledgerLateFeeMetaPack.totalLateFee
+                : (r.lateFee || 0),
+            rows: lateRows,
+            hint:
+              ledgerLateFeeMetaPack && ledgerLateFeeMetaPack.hint
+                ? ledgerLateFeeMetaPack.hint
+                : r.lateFee > 0.005
+                  ? buildLateFeeTimerHintForCustomer(customer)
+                  : ''
+          };
           const bal = (r.balanceAfter != null && !isNaN(r.balanceAfter)) ? `$${r.balanceAfter.toFixed(2)}` : '—';
           const showPayDetail =
             r.sourceKind === 'payment' && r.ledgerPayment && r.amountPaid > 0;
@@ -21779,6 +22132,12 @@
               <span class="text-slate-900 dark:text-slate-100">$${r.pastDue.toFixed(2)}</span>
               <button type="button" onclick="openLedgerPastDueBreakdown(${idx})" class="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline text-left">Past Due Details</button>
             </div>`;
+          const lateFeeCell = r.lateFee > 0.005
+            ? `<div class="flex flex-col gap-1 items-start min-w-[7rem]">
+                <span class="text-slate-900 dark:text-slate-100">$${r.lateFee.toFixed(2)}</span>
+                <button type="button" onclick="openLedgerLateFeeBreakdown(${idx})" class="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline text-left">Late Fee Details</button>
+              </div>`
+            : `$${r.lateFee.toFixed(2)}`;
           htmlRows += `
             <tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.dateTime}</td>
@@ -21788,7 +22147,7 @@
               <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${pastDueCell}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${tc.toFixed(2)}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${puc.toFixed(2)}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.lateFee.toFixed(2)}</td>
+              <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${lateFeeCell}</td>
               <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${amountPaidCell}</td>
               <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-slate-100">${bal}</td>
             </tr>
@@ -21848,6 +22207,9 @@
       }
       if (typeof window.closeLedgerPastDueBreakdownModal === 'function') {
         window.closeLedgerPastDueBreakdownModal();
+      }
+      if (typeof window.closeLedgerLateFeeBreakdownModal === 'function') {
+        window.closeLedgerLateFeeBreakdownModal();
       }
       if (typeof window.closeLedgerAccountingTotalModal === 'function') {
         window.closeLedgerAccountingTotalModal();
@@ -23302,10 +23664,12 @@
                 <div>
                   <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
                   <p id="paymentPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                  <button type="button" onclick="openPaymentPastDueDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
                 </div>
                 <div>
                   <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
                   <p id="paymentLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                  <button type="button" onclick="openPaymentLateFeeDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
                 </div>
               </div>
 
@@ -23403,6 +23767,7 @@
                 <div>
                   <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
                   <p id="billLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
+                  <button type="button" onclick="openProcessBillLateFeeDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
                 </div>
               </div>
 
@@ -25997,6 +26362,7 @@
         <div class="flex justify-between items-center mb-6">
           <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Edit <span id="editCodeFieldType">Field</span></h3>
           <button 
+            id="editCodeFieldCloseBtn"
             onclick="cancelEditCodeField()" 
             class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
           >
@@ -26016,6 +26382,7 @@
 
           <div class="flex gap-3">
             <button 
+              id="editCodeFieldCancelBtn"
               type="button"
               onclick="cancelEditCodeField()" 
               class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
@@ -26023,12 +26390,17 @@
               Cancel
             </button>
             <button 
+              id="editCodeFieldSaveBtn"
               type="button"
               onclick="saveEditCodeField()" 
               class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
             >
               Save Changes
             </button>
+          </div>
+          <div id="editCodeFieldSavingIndicator" class="hidden flex items-center justify-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+            <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" aria-hidden="true"></span>
+            <span>Saving changes...</span>
           </div>
         </div>
 
