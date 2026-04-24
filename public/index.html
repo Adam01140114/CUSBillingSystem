@@ -2049,7 +2049,7 @@
       const startD = getEffectiveTestCalendarDate();
       const tgt = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
       tgt.setDate(tgt.getDate() + getLateFeeTimerDays());
-      await window.setTestDate(formatLocalYMD(tgt), { skipAnimation: true });
+      await window.setTestDate(formatLocalYMD(tgt));
     };
 
     /** Jump simulated calendar to the first day of the next calendar month (Ctrl+Shift / Cmd+Shift). */
@@ -2080,7 +2080,7 @@
     window.applyTestDateFromInput = async function() {
       const input = document.getElementById('testDateInput');
       if (!input) return;
-      await window.setTestDate((input.value || '').trim(), { skipAnimation: true });
+      await window.setTestDate((input.value || '').trim());
     };
 
     // Update test date display
@@ -5815,14 +5815,24 @@
         const liveCalc = calculateCustomerTotal(customer, { billUiSnapshot: true });
         const liveLate = Math.max(0, parseFloat(liveCalc.lateFeeAmount) || 0);
         const displayLate = Math.round((frozenLate + liveLate) * 100) / 100;
-        const displayTotal = Math.max(
+        let displayTotal = Math.max(
           0,
           Math.round((frozenTotal - frozenLate + displayLate) * 100) / 100
         );
+        let displayPastDue = Math.max(0, parseFloat(frozen.pastDue) || 0);
+        let displayLateOut = displayLate;
+        // After the calendar month moves past the bill print month, new current-cycle charges accrue on top
+        // of rolled balances. Frozen total only swapped late fees before, which understated total vs
+        // calculateCustomerTotal (e.g. deposit auto-apply) — align panel with live calc for that case.
+        if (isCalendarPeriodAfterLastBillPrint(customer)) {
+          displayTotal = Math.max(0, Math.round((parseFloat(liveCalc.total) || 0) * 100) / 100);
+          displayPastDue = Math.max(0, Math.round((parseFloat(liveCalc.pastDue) || 0) * 100) / 100);
+          displayLateOut = liveLate;
+        }
         return {
           total: displayTotal,
-          pastDue: Math.max(0, parseFloat(frozen.pastDue) || 0),
-          lateFee: displayLate,
+          pastDue: displayPastDue,
+          lateFee: displayLateOut,
           dueDateStr: frozen.dueDateStr || getBillDueDateStr(customer),
           fromFrozen: true
         };
@@ -24281,7 +24291,7 @@
                       id="advanceTestDateByLateFeeTimerBtn"
                       onclick="advanceTestDateBy21Days()" 
                       class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors font-medium"
-                      title="Jump test date forward by the configured per-bill late-fee timer (no day-by-day animation)"
+                      title="Advance test date by the configured per-bill late-fee timer, one calendar day at a time"
                     >
                       21+ days
                     </button>
