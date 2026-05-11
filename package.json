@@ -6,7 +6,6 @@
   "scripts": {
     "build:css": "tailwindcss -i ./styles/tailwind-input.css -o ./public/tailwind-built.css --minify",
     "copy-vendor": "node tools/copy-vendor.cjs",
-    "postinstall": "node tools/copy-vendor.cjs",
     "start": "node server.js"
   },
   "dependencies": {
