@@ -734,6 +734,9 @@
             customer.currentMonthPaid = 0;
           }
           syncLedgerOrderCounterFromHistory(customer);
+          if (!Array.isArray(customer.billPdfSnapshots)) {
+            customer.billPdfSnapshots = [];
+          }
           customers.push(customer);
         });
         filteredCustomers = [...customers];
@@ -3298,7 +3301,7 @@
         return;
       }
 
-      const buttonContainerBefore = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+      const buttonContainerBefore = getMainDashboardActionButtonsEl();
 
       // Ensure Firebase Auth session before data load
       const initUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
@@ -3343,7 +3346,7 @@
 
         await loadPaymentProcessingSessionsFromFirestore();
 
-        const buttonContainerAfter = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+        const buttonContainerAfter = getMainDashboardActionButtonsEl();
 
         // Check if drawer count module is visible - if so, don't show buttons
         const drawerCountModule = document.getElementById('drawerCountModule');
@@ -4490,11 +4493,17 @@
       window.location.reload();
     };
 
+    function getMainDashboardActionButtonsEl() {
+      return (
+        document.getElementById('mainDashboardActionButtons') ||
+        document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white')
+      );
+    }
+
     // Function to hide/show dashboard buttons
     window.hideDashboardButtons = function() {
 
-      // Try to find button container by class selector
-      const buttonContainer = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+      const buttonContainer = getMainDashboardActionButtonsEl();
 
       // Also try to find by individual button IDs
       const sendBillBtn = document.getElementById('sendBillButton');
@@ -4567,8 +4576,7 @@
       const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
       const userRole = window.getEffectiveRole ? window.getEffectiveRole(effectiveUser) : null;
 
-      // Try to find button container by class selector
-      const buttonContainer = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+      const buttonContainer = getMainDashboardActionButtonsEl();
 
       // Also try to find by individual button IDs
       const addClientBtn = document.getElementById('addClientButton');
@@ -4875,20 +4883,35 @@
       });
     }
 
+    function setDepositWithdrawalNoticeModuleLoading(isLoading) {
+      const loadEl = document.getElementById('dwnModuleLoadingState');
+      const bodyEl = document.getElementById('dwnModuleInteractiveBody');
+      if (!loadEl || !bodyEl) return;
+      if (isLoading) {
+        loadEl.classList.remove('hidden');
+        bodyEl.classList.add('hidden');
+      } else {
+        loadEl.classList.add('hidden');
+        bodyEl.classList.remove('hidden');
+      }
+    }
+
     window.showDepositWithdrawalNoticeModule = async function showDepositWithdrawalNoticeModule() {
       hideAllModules(true);
       hideDashboardButtons();
+      const mod = document.getElementById('depositWithdrawalNoticeModule');
+      if (!mod) return;
+      setDepositWithdrawalNoticeModuleLoading(true);
+      mod.classList.remove('hidden');
+      mod.scrollIntoView({ behavior: 'smooth', block: 'start' });
       try {
         if (window.__billModuleCustomersReady) {
           await window.__billModuleCustomersReady;
         }
       } catch (e) {}
       bindDepositWithdrawalNoticeUiOnce();
-      const mod = document.getElementById('depositWithdrawalNoticeModule');
-      if (!mod) return;
-      mod.classList.remove('hidden');
+      setDepositWithdrawalNoticeModuleLoading(false);
       renderDepositWithdrawalNoticeCustomerList();
-      mod.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
 
     function bindDepositWithdrawalNoticeUiOnce() {
@@ -5119,6 +5142,10 @@
       if (settingsModule) settingsModule.classList.add('hidden');
       if (depositWithdrawalNoticeModule) {
         depositWithdrawalNoticeModule.classList.add('hidden');
+        const dwnLoad = document.getElementById('dwnModuleLoadingState');
+        const dwnBody = document.getElementById('dwnModuleInteractiveBody');
+        if (dwnLoad) dwnLoad.classList.add('hidden');
+        if (dwnBody) dwnBody.classList.remove('hidden');
         const dwnIframe = document.getElementById('depositWithdrawalNoticePdfViewer');
         if (dwnIframe && dwnIframe.src && dwnIframe.src.indexOf('blob:') === 0) {
           try {
@@ -6377,6 +6404,14 @@
       return hid && hid.value ? hid.value : '';
     };
 
+    function syncBillCycleNumberSectionVisibility() {
+      const section = document.getElementById('billCycleNumberSection');
+      if (!section) return;
+      const id = typeof getBillSelectedCustomerId === 'function' ? getBillSelectedCustomerId() : '';
+      const hasCustomer = !!(id && String(id).trim() !== '');
+      section.classList.toggle('hidden', hasCustomer);
+    }
+
     window.clearBillCustomerSearch = function() {
       const hid = document.getElementById('billSelectedCustomerId');
       const input = document.getElementById('billCustomerSearch');
@@ -6389,6 +6424,7 @@
       }
       hideCustomerBillInfo();
       hideBillPdfPreview();
+      syncBillCycleNumberSectionVisibility();
     };
 
     window.selectBillCustomerFromSearch = function(customerId) {
@@ -6409,6 +6445,7 @@
       if (cycleSelect) cycleSelect.value = '';
       if (produceBillingCycleContainer) produceBillingCycleContainer.classList.add('hidden');
       showCustomerBillInfo(customerId);
+      syncBillCycleNumberSectionVisibility();
     };
 
     window.handleBillCustomerSearchInput = function() {
@@ -6423,17 +6460,20 @@
           hid.value = '';
           hideCustomerBillInfo();
           hideBillPdfPreview();
+          syncBillCycleNumberSectionVisibility();
         }
       }
       if (!q || !q.trim()) {
         box.innerHTML = '';
         box.classList.add('hidden');
+        syncBillCycleNumberSectionVisibility();
         return;
       }
       const matches = filterCustomersForBillSearch(q).slice(0, 50);
       if (matches.length === 0) {
         box.innerHTML = '<div class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">No customers found</div>';
         box.classList.remove('hidden');
+        syncBillCycleNumberSectionVisibility();
         return;
       }
       box.innerHTML = matches.map(c => `
@@ -6444,6 +6484,7 @@
         </button>
       `).join('');
       box.classList.remove('hidden');
+      syncBillCycleNumberSectionVisibility();
     };
 
     function populateBillCustomerSelect() {
@@ -6459,6 +6500,7 @@
         }
       }
       hideCustomerBillInfo();
+      syncBillCycleNumberSectionVisibility();
     }
 
     /** Bill print ledger rows (billingCharge), newest first; unique timestamps. */
@@ -6684,41 +6726,52 @@
               />
               <div id="billCustomerSearchResults" class="hidden absolute z-50 left-0 right-0 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-lg"></div>
             </div>
+            <div class="mt-2">
+              <button
+                type="button"
+                onclick="showViewPastBills()"
+                class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                View Past Bills
+              </button>
+            </div>
           </div>
 
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Or Select Cycle Number</label>
-            <select id="billCycleSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200" onchange="handleCycleSelectChange()">
-              <option value="">Select cycle number...</option>
-              <option value="1">Cycle 1</option>
-              <option value="2">Cycle 2</option>
-              <option value="3">Cycle 3</option>
-              <option value="4">Cycle 4</option>
-              <option value="5">Cycle 5</option>
-              <option value="6">Cycle 6</option>
-              <option value="7">Cycle 7</option>
-              <option value="8">Cycle 8</option>
-              <option value="9">Cycle 9</option>
-              <option value="10">Cycle 10</option>
-            </select>
-          </div>
+          <div id="billCycleNumberSection">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Or Select Cycle Number</label>
+              <select id="billCycleSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200" onchange="handleCycleSelectChange()">
+                <option value="">Select cycle number...</option>
+                <option value="1">Cycle 1</option>
+                <option value="2">Cycle 2</option>
+                <option value="3">Cycle 3</option>
+                <option value="4">Cycle 4</option>
+                <option value="5">Cycle 5</option>
+                <option value="6">Cycle 6</option>
+                <option value="7">Cycle 7</option>
+                <option value="8">Cycle 8</option>
+                <option value="9">Cycle 9</option>
+                <option value="10">Cycle 10</option>
+              </select>
+            </div>
 
-          <div id="produceBillingCycleContainer" class="hidden">
-            <button 
-              onclick="produceBillingCycle()" 
-              class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
-            >
-              Produce Billing Cycle
-            </button>
-          </div>
+            <div id="produceBillingCycleContainer" class="hidden mt-4">
+              <button 
+                onclick="produceBillingCycle()" 
+                class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                Produce Billing Cycle
+              </button>
+            </div>
 
-          <div class="mt-4">
-            <button 
-              onclick="showPastBillingCycles()" 
-              class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
-            >
-              View Past Cycles
-            </button>
+            <div class="mt-4">
+              <button 
+                onclick="showPastBillingCycles()" 
+                class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                View Past Cycles
+              </button>
+            </div>
           </div>
 
           <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
@@ -6778,6 +6831,212 @@
       `;
 
       populateBillCustomerSelect();
+    };
+
+    const MAX_BILL_PDF_SNAPSHOTS_PER_CUSTOMER = 100;
+
+    function formDataToBillPdfDataRecord(formData) {
+      const pdfData = {};
+      if (!formData || typeof formData.entries !== 'function') return pdfData;
+      try {
+        for (const pair of formData.entries()) {
+          const v = pair[1];
+          pdfData[pair[0]] = typeof v === 'string' ? v : String(v);
+        }
+      } catch (e) {}
+      return pdfData;
+    }
+
+    function billPdfDataRecordToFormData(pdfData) {
+      const formData = new FormData();
+      if (!pdfData || typeof pdfData !== 'object') return formData;
+      Object.keys(pdfData).forEach((key) => {
+        const val = pdfData[key];
+        if (val === undefined || val === null) return;
+        formData.append(key, String(val));
+      });
+      return formData;
+    }
+
+    async function generateBillPdfBlobFromArchivedPdfData(pdfData) {
+      const formData = billPdfDataRecordToFormData(pdfData);
+      const response = await fetch('/edit_pdf?pdf=bill', {
+        method: 'POST',
+        body: formData
+      });
+      if (!response.ok) {
+        throw new Error('PDF request failed');
+      }
+      return response.blob();
+    }
+
+    function pushBillPdfSnapshotForCustomer(customer, pdfData, meta) {
+      if (!customer || !pdfData || typeof pdfData !== 'object') return;
+      if (!Array.isArray(customer.billPdfSnapshots)) {
+        customer.billPdfSnapshots = [];
+      }
+      let id = '';
+      try {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+          id = crypto.randomUUID();
+        }
+      } catch (e) {}
+      if (!id) {
+        id = `bill-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      }
+      const entry = {
+        id,
+        savedAtIso: (meta && meta.savedAtIso) || new Date().toISOString(),
+        source: (meta && meta.source) || 'singleBill',
+        cycleNumber: meta && meta.cycleNumber != null ? String(meta.cycleNumber) : null,
+        pdfData: JSON.parse(JSON.stringify(pdfData))
+      };
+      customer.billPdfSnapshots.unshift(entry);
+      while (customer.billPdfSnapshots.length > MAX_BILL_PDF_SNAPSHOTS_PER_CUSTOMER) {
+        customer.billPdfSnapshots.pop();
+      }
+    }
+
+    window.showViewPastBills = function showViewPastBills() {
+      const customerId = typeof getBillSelectedCustomerId === 'function' ? getBillSelectedCustomerId() : '';
+      if (!customerId) {
+        alert('Please select a customer first (search and pick an account).');
+        return;
+      }
+      const customer = customers.find((c) => c.id === customerId);
+      if (!customer) {
+        alert('Customer not found.');
+        return;
+      }
+      const raw = Array.isArray(customer.billPdfSnapshots) ? customer.billPdfSnapshots : [];
+      const entries = raw
+        .filter((e) => e && e.pdfData && typeof e.pdfData === 'object')
+        .sort((a, b) => {
+          const ta = Date.parse(a.savedAtIso || '') || 0;
+          const tb = Date.parse(b.savedAtIso || '') || 0;
+          return tb - ta;
+        });
+      window.__archivedBillList = {
+        customerId,
+        customerName: customer.name || customer.accountNumber || customerId,
+        entries
+      };
+
+      const escapeHtml = (s) =>
+        String(s || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/"/g, '&quot;');
+
+      const rows =
+        entries.length === 0
+          ? `<tr><td colspan="6" class="px-6 py-8 text-center text-slate-500 dark:text-slate-400">No archived bill PDF data for this account yet. Data is saved automatically when you use Produce Bill or when this account is included in Produce Billing Cycle (field values only; PDF files are not stored).</td></tr>`
+          : entries
+              .map((e, idx) => {
+                const pd = e.pdfData;
+                const printD = escapeHtml(pd.print_date || '—');
+                const stmt = escapeHtml(pd.statement_date || '—');
+                const tot = escapeHtml(pd.total_amount || '—');
+                const src =
+                  e.source === 'billingCycle'
+                    ? `Billing cycle ${escapeHtml(e.cycleNumber || '')}`
+                    : 'Produce Bill';
+                const when = escapeHtml(
+                  e.savedAtIso ? new Date(e.savedAtIso).toLocaleString('en-US') : '—'
+                );
+                return `<tr>
+                  <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100 whitespace-nowrap">${when}</td>
+                  <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${printD}</td>
+                  <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${stmt}</td>
+                  <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100 font-medium">${tot}</td>
+                  <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">${src}</td>
+                  <td class="px-4 py-3 text-right">
+                    <button type="button" onclick="reproduceArchivedBillPdfAtIndex(${idx})" class="text-blue-600 hover:text-blue-800 dark:text-blue-400 font-medium text-sm">Preview PDF</button>
+                  </td>
+                </tr>`;
+              })
+              .join('');
+
+      const billModule = document.getElementById('billModule');
+      if (!billModule) return;
+      billModule.innerHTML = `
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Past Bills (audit)</h3>
+          <button type="button" onclick="showProcessBillModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" aria-label="Close">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <p class="text-sm text-slate-600 dark:text-slate-400 mb-4">
+          Account: <span class="font-semibold text-slate-800 dark:text-slate-200">${escapeHtml(customer.name || customer.accountNumber || '')}</span>
+          — Rebuilds the bill PDF from stored form fields (same as at print time).
+        </p>
+        <div class="mb-4">
+          <button type="button" onclick="showProcessBillModal()" class="bg-slate-600 hover:bg-slate-700 text-white font-semibold py-2 px-4 rounded-xl text-sm">← Back to Process Bill</button>
+        </div>
+        <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-600">
+          <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-sm">
+            <thead class="bg-slate-50 dark:bg-slate-900/40">
+              <tr>
+                <th class="px-4 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Saved</th>
+                <th class="px-4 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Print date</th>
+                <th class="px-4 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Statement</th>
+                <th class="px-4 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Total</th>
+                <th class="px-4 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Source</th>
+                <th class="px-4 py-2 text-right font-medium text-slate-600 dark:text-slate-300"></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
+              ${rows}
+            </tbody>
+          </table>
+        </div>
+        <div id="archivedBillPdfWrap" class="hidden mt-6">
+          <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Reproduced bill PDF</h4>
+          <iframe id="archivedBillPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 520px;" title="Archived bill PDF preview"></iframe>
+        </div>
+        <p id="archivedBillPdfStatus" class="mt-2 text-sm text-amber-700 dark:text-amber-300 hidden"></p>
+      `;
+      billModule.classList.remove('hidden');
+    };
+
+    window.reproduceArchivedBillPdfAtIndex = async function reproduceArchivedBillPdfAtIndex(idx) {
+      const ctx = window.__archivedBillList;
+      if (!ctx || !ctx.entries || !ctx.entries[idx]) {
+        alert('Bill data not available. Go back to Process Bill and open View Past Bills again.');
+        return;
+      }
+      const pdfData = ctx.entries[idx].pdfData;
+      const statusEl = document.getElementById('archivedBillPdfStatus');
+      const wrap = document.getElementById('archivedBillPdfWrap');
+      const iframe = document.getElementById('archivedBillPdfViewer');
+      if (statusEl) {
+        statusEl.textContent = 'Generating PDF from archived field data…';
+        statusEl.classList.remove('hidden');
+      }
+      try {
+        const blob = await generateBillPdfBlobFromArchivedPdfData(pdfData);
+        const url = URL.createObjectURL(blob);
+        if (iframe && wrap) {
+          if (iframe.src && iframe.src.indexOf('blob:') === 0) {
+            try {
+              URL.revokeObjectURL(iframe.src);
+            } catch (e) {}
+          }
+          iframe.src = url;
+          wrap.classList.remove('hidden');
+          wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        if (statusEl) statusEl.classList.add('hidden');
+      } catch (err) {
+        if (statusEl) {
+          statusEl.textContent = 'Could not generate PDF from saved data.';
+          statusEl.classList.remove('hidden');
+        } else {
+          alert('Could not generate PDF from saved data.');
+        }
+      }
     };
 
     window.produceBill = async function() {
@@ -6914,6 +7173,8 @@
           }
         }
 
+        const pdfDataRecordForArchive = formDataToBillPdfDataRecord(formData);
+
         // Send to server
         const response = await fetch('/edit_pdf?pdf=bill', {
           method: 'POST',
@@ -6926,6 +7187,11 @@
 
         // Get the PDF blob
         const blob = await response.blob();
+
+        pushBillPdfSnapshotForCustomer(customer, pdfDataRecordForArchive, {
+          source: 'singleBill',
+          savedAtIso: now.toISOString()
+        });
 
         // Display the PDF below the button (no automatic download)
         const displayUrl = URL.createObjectURL(blob);
@@ -7264,6 +7530,8 @@
               }
             }
 
+            customerSnapshot.pdfData = formDataToBillPdfDataRecord(formData);
+
             const response = await fetch('/edit_pdf?pdf=bill', {
               method: 'POST',
               body: formData
@@ -7274,6 +7542,12 @@
             }
 
             const blob = await response.blob();
+
+            pushBillPdfSnapshotForCustomer(customer, customerSnapshot.pdfData, {
+              source: 'billingCycle',
+              cycleNumber: cycleNumber,
+              savedAtIso: snapshotDate
+            });
 
             if (
               customerSnapshot.pdfData.deposit_explaination ||
@@ -7617,41 +7891,52 @@
               />
               <div id="billCustomerSearchResults" class="hidden absolute z-50 left-0 right-0 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-lg"></div>
             </div>
+            <div class="mt-2">
+              <button
+                type="button"
+                onclick="showViewPastBills()"
+                class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                View Past Bills
+              </button>
+            </div>
           </div>
 
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Or Select Cycle Number</label>
-            <select id="billCycleSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200" onchange="handleCycleSelectChange()">
-              <option value="">Select cycle number...</option>
-              <option value="1">Cycle 1</option>
-              <option value="2">Cycle 2</option>
-              <option value="3">Cycle 3</option>
-              <option value="4">Cycle 4</option>
-              <option value="5">Cycle 5</option>
-              <option value="6">Cycle 6</option>
-              <option value="7">Cycle 7</option>
-              <option value="8">Cycle 8</option>
-              <option value="9">Cycle 9</option>
-              <option value="10">Cycle 10</option>
-            </select>
-          </div>
+          <div id="billCycleNumberSection">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Or Select Cycle Number</label>
+              <select id="billCycleSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200" onchange="handleCycleSelectChange()">
+                <option value="">Select cycle number...</option>
+                <option value="1">Cycle 1</option>
+                <option value="2">Cycle 2</option>
+                <option value="3">Cycle 3</option>
+                <option value="4">Cycle 4</option>
+                <option value="5">Cycle 5</option>
+                <option value="6">Cycle 6</option>
+                <option value="7">Cycle 7</option>
+                <option value="8">Cycle 8</option>
+                <option value="9">Cycle 9</option>
+                <option value="10">Cycle 10</option>
+              </select>
+            </div>
 
-          <div id="produceBillingCycleContainer" class="hidden">
-            <button 
-              onclick="produceBillingCycle()" 
-              class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
-            >
-              Produce Billing Cycle
-            </button>
-          </div>
+            <div id="produceBillingCycleContainer" class="hidden mt-4">
+              <button 
+                onclick="produceBillingCycle()" 
+                class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                Produce Billing Cycle
+              </button>
+            </div>
 
-          <div class="mt-4">
-            <button 
-              onclick="showPastBillingCycles()" 
-              class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
-            >
-              View Past Cycles
-            </button>
+            <div class="mt-4">
+              <button 
+                onclick="showPastBillingCycles()" 
+                class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+              >
+                View Past Cycles
+              </button>
+            </div>
           </div>
 
           <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
@@ -14358,7 +14643,7 @@
       // Double-check buttons are hidden after a short delay
       setTimeout(() => {
 
-        const buttonContainer = document.querySelector('.flex.flex-col.items-center.gap-4.mb-8.p-8.max-w-2xl.mx-auto.bg-white');
+        const buttonContainer = getMainDashboardActionButtonsEl();
         const sendBillBtn = document.getElementById('sendBillButton');
         const drawerCountBtn = document.getElementById('drawerCountButton');
 
@@ -19487,6 +19772,7 @@
         '• Set every customer deposit to $1,000\n' +
         '• Set every customer past due to $0\n' +
         '• Clear bill print dates (30/60/90 timers start fresh)\n' +
+        '• Clear saved bill PDF field snapshots (Past Bills audit)\n' +
         '• Clear payment processing sessions\n' +
         setDateHint +
         '• Record a full payment for each customer’s current charges (Total Due → $0) on that “today”\n' +
@@ -19560,6 +19846,7 @@
           customer.lastBill60DayDepositApplied = false;
           delete customer.daysLate;
           delete customer.pendingDepositBillExplanation;
+          customer.billPdfSnapshots = [];
 
           // Pay current-cycle charges in full on the (test) “today” so breakdown shows paid + $0 due
           applyTestFreshStartFullPayForCustomer(customer);
@@ -19587,6 +19874,10 @@
       }
 
       await preserveDrawerSodAfterBillingFreshStart();
+
+      try {
+        window.__archivedBillList = { customerId: '', customerName: '', entries: [] };
+      } catch (e) {}
 
       alert(
         `Test 30-60-90 fresh start complete.\n\n` +
@@ -24046,7 +24337,7 @@
         <div class="mb-4 flex justify-center">
           <img src="PUBS Logo.png" alt="PUBS Logo" class="h-32 w-auto object-contain">
         </div>
-        <h1 class="text-4xl font-bold text-slate-900 dark:text-slate-100 mb-2">PUBS Billing System v1.4</h1>
+        <h1 class="text-4xl font-bold text-slate-900 dark:text-slate-100 mb-2">PUBS Billing System v1.5</h1>
         <p class="text-sm text-slate-500 dark:text-slate-500 mt-2">Please enter your credentials to continue</p>
       </div>
 
@@ -24578,32 +24869,42 @@
         </div>
 
         <!-- Deposit withdrawal notice (admin / helpdesk) -->
-        <div id="depositWithdrawalNoticeModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 max-w-3xl mx-auto w-full">
-          <div class="flex justify-between items-center mb-4">
-            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Deposit Withdrawal Notice</h3>
-            <button type="button" onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" aria-label="Close">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-              </svg>
-            </button>
+        <div id="depositWithdrawalNoticeModule" class="hidden relative min-h-[320px] card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 max-w-3xl mx-auto w-full overflow-hidden">
+          <div
+            id="dwnModuleLoadingState"
+            class="hidden absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 rounded-3xl bg-white dark:bg-slate-800 px-6 text-center"
+          >
+            <div class="animate-spin rounded-full h-14 w-14 border-4 border-amber-200 border-t-amber-600 dark:border-amber-900 dark:border-t-amber-400"></div>
+            <p class="text-lg font-semibold text-slate-800 dark:text-slate-200">Loading account data…</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400 max-w-sm">Please wait while customer records finish loading.</p>
           </div>
-          <p class="text-sm text-slate-600 dark:text-slate-400 mb-4">
-            Open an account name to see every recorded security deposit withdrawal. Select one event, then generate a printable notice PDF (includes replenishment of the deposit to the required on-file level).
-          </p>
-          <div id="dwnCustomerList" class="space-y-2 max-h-[min(52vh,520px)] overflow-y-auto pr-1"></div>
-          <div class="mt-6">
-            <button
-              type="button"
-              id="dwnProducePdfBtn"
-              disabled
-              class="w-full bg-amber-600 hover:bg-amber-700 disabled:hover:bg-amber-600 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200 opacity-50 cursor-not-allowed"
-            >
-              Produce Deposit Withdrawal Notice PDF
-            </button>
-          </div>
-          <div id="depositWithdrawalNoticePdfDisplay" class="hidden mt-4">
-            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Notice preview</h4>
-            <iframe id="depositWithdrawalNoticePdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 720px;" title="Deposit withdrawal notice PDF preview"></iframe>
+          <div id="dwnModuleInteractiveBody">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Deposit Withdrawal Notice</h3>
+              <button type="button" onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" aria-label="Close">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+            <p class="text-sm text-slate-600 dark:text-slate-400 mb-4">
+              Open an account name to see every recorded security deposit withdrawal. Select one event, then generate a printable notice PDF (includes replenishment of the deposit to the required on-file level).
+            </p>
+            <div id="dwnCustomerList" class="space-y-2 max-h-[min(52vh,520px)] overflow-y-auto pr-1"></div>
+            <div class="mt-6">
+              <button
+                type="button"
+                id="dwnProducePdfBtn"
+                disabled
+                class="w-full bg-amber-600 hover:bg-amber-700 disabled:hover:bg-amber-600 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200 opacity-50 cursor-not-allowed"
+              >
+                Produce Deposit Withdrawal Notice PDF
+              </button>
+            </div>
+            <div id="depositWithdrawalNoticePdfDisplay" class="hidden mt-4">
+              <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Notice preview</h4>
+              <iframe id="depositWithdrawalNoticePdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 720px;" title="Deposit withdrawal notice PDF preview"></iframe>
+            </div>
           </div>
         </div>
 
@@ -25921,7 +26222,7 @@
 
       <!-- Main Action Buttons -->
       <br><br>
-      <div class="flex flex-col items-center gap-4 mb-8 p-8 max-w-2xl mx-auto bg-white dark:bg-slate-800 rounded-3xl border border-blue-100 dark:border-slate-700 shadow-md hover:shadow-2xl hover:scale-[1.02] focus-within:shadow-2xl focus-within:scale-[1.02] transition-all duration-300 ease-out cursor-default">
+      <div id="mainDashboardActionButtons" class="flex flex-col items-center gap-4 mb-8 p-8 max-w-2xl mx-auto bg-white dark:bg-slate-800 rounded-3xl border border-blue-100 dark:border-slate-700 shadow-md hover:shadow-2xl hover:scale-[1.02] focus-within:shadow-2xl focus-within:scale-[1.02] transition-all duration-300 ease-out cursor-default">
         <button 
           id="addClientButton"
           onclick="showAddClientModule()" 
