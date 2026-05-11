@@ -4,6 +4,9 @@
   "description": "CUS Billing System",
   "main": "server.js",
   "scripts": {
+    "build:css": "tailwindcss -i ./styles/tailwind-input.css -o ./public/tailwind-built.css --minify",
+    "copy-vendor": "node tools/copy-vendor.cjs",
+    "postinstall": "node tools/copy-vendor.cjs",
     "start": "node server.js"
   },
   "dependencies": {
@@ -14,13 +17,18 @@
     "express": "^4.22.1",
     "express-fileupload": "^1.5.0",
     "firebase-admin": "^12.1.1",
+    "jszip": "^3.10.1",
     "node-fetch": "^2.7.0",
     "nodemailer": "^6.9.14",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
-    "stripe": "^18.2.1"
+    "stripe": "^18.2.1",
+    "xlsx": "^0.18.5"
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
   }
 }

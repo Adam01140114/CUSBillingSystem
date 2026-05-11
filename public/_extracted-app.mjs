@@ -1,20 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1, viewport-fit=cover"
-  />
-  <title>PUBS Billing System V1.0 - Admin Portal</title>
-  <!-- Tailwind CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- SheetJS for Excel parsing -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <!-- JSZip for creating zip files -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <!-- Firebase SDK -->
-  <script type="module">
+
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
     import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, writeBatch, deleteField } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
@@ -4503,10 +4487,11 @@
       const makePaymentBtn = document.getElementById('makePaymentButton');
       const closeOutDrawerBtn = document.getElementById('closeOutDrawerButton');
       const addClientBtn = document.getElementById('addClientButton');
+      const depositWithdrawalNoticeBtn = document.getElementById('depositWithdrawalNoticeButton');
 
       // Hide individual buttons first (regardless of container)
       const buttonsToHide = [
-        addClientBtn, sendBillBtn, searchDatabaseBtn, drawerCountBtn, endOfDayDrawerCountBtn,
+        addClientBtn, sendBillBtn, depositWithdrawalNoticeBtn, searchDatabaseBtn, drawerCountBtn, endOfDayDrawerCountBtn,
         businessEndOfDayBtn, settingsBtn, logoutBtn, makePaymentBtn, closeOutDrawerBtn
       ];
       buttonsToHide.forEach((btn, index) => {
@@ -4542,6 +4527,7 @@
         'settingsModule',
         'paymentModule',
         'billModule',
+        'depositWithdrawalNoticeModule',
         'addClientModule',
         'searchModule',
         'drawerCountModule'
@@ -4575,6 +4561,7 @@
       const logoutBtn = document.getElementById('logoutButton');
       const makePaymentBtn = document.getElementById('makePaymentButton');
       const closeOutDrawerBtn = document.getElementById('closeOutDrawerButton');
+      const depositWithdrawalNoticeBtn = document.getElementById('depositWithdrawalNoticeButton');
 
       // Show container
       if (buttonContainer) {
@@ -4614,6 +4601,7 @@
         if (makePaymentBtn) makePaymentBtn.classList.add('hidden');
         if (closeOutDrawerBtn) closeOutDrawerBtn.classList.add('hidden');
         if (settingsBtn) settingsBtn.classList.add('hidden');
+        if (depositWithdrawalNoticeBtn) depositWithdrawalNoticeBtn.classList.add('hidden');
       } else if (userRole === 'pos') {
 
         if (makePaymentBtn) {
@@ -4650,13 +4638,14 @@
         }
         // Hide buttons that shouldn't be visible for POS
         if (sendBillBtn) sendBillBtn.classList.add('hidden');
+        if (depositWithdrawalNoticeBtn) depositWithdrawalNoticeBtn.classList.add('hidden');
         if (drawerCountBtn) drawerCountBtn.classList.add('hidden');
         if (endOfDayDrawerCountBtn) endOfDayDrawerCountBtn.classList.add('hidden');
         if (businessEndOfDayBtn) businessEndOfDayBtn.classList.add('hidden');
         if (settingsBtn) settingsBtn.classList.add('hidden');
       } else {
         // Admin/Helpdesk - show only Add Client, $, Payments, Send Bill, Search Clients, Log Out, Settings
-        const adminButtons = [addClientBtn, makePaymentBtn, sendBillBtn, searchDatabaseBtn, settingsBtn, logoutBtn];
+        const adminButtons = [addClientBtn, makePaymentBtn, sendBillBtn, depositWithdrawalNoticeBtn, searchDatabaseBtn, settingsBtn, logoutBtn];
         adminButtons.forEach((btn) => {
           if (btn) btn.classList.remove('hidden');
         });
@@ -4847,6 +4836,8 @@
         paymentModule.style.cssText = 'display: none !important; visibility: hidden !important; opacity: 0 !important;';
       }
       if (billModule) billModule.classList.add('hidden');
+      const depositWithdrawalNoticeModule = document.getElementById('depositWithdrawalNoticeModule');
+      if (depositWithdrawalNoticeModule) depositWithdrawalNoticeModule.classList.add('hidden');
       if (addClientModule) addClientModule.classList.add('hidden');
       if (searchModule) searchModule.classList.add('hidden');
       if (settingsModule) settingsModule.classList.add('hidden');
@@ -5782,6 +5773,192 @@
       }
     }
 
+    function formatDepositAppliedBreakdownForNotice(breakdown) {
+      if (!breakdown || typeof breakdown !== 'object') return '';
+      return Object.keys(breakdown)
+        .map((k) => {
+          const v = parseFloat(breakdown[k]);
+          if (!Number.isFinite(v) || v < 0.005) return null;
+          return `${k}: $${v.toFixed(2)}`;
+        })
+        .filter(Boolean)
+        .join('; ');
+    }
+
+    function appendPastBillPdfSnapshot(customer, pdfFields) {
+      if (!customer || !pdfFields || typeof pdfFields !== 'object') return;
+      if (!Array.isArray(customer.pastBillPdfSnapshots)) customer.pastBillPdfSnapshots = [];
+      const id =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `billpdf-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      customer.pastBillPdfSnapshots.push({
+        id,
+        savedAtIso: new Date().toISOString(),
+        accountNumber: customer.accountNumber || customer.id || '',
+        accountName: customer.name || '',
+        pdfFields: JSON.parse(JSON.stringify(pdfFields))
+      });
+      const MAX_SNAPS = 300;
+      if (customer.pastBillPdfSnapshots.length > MAX_SNAPS) {
+        customer.pastBillPdfSnapshots = customer.pastBillPdfSnapshots.slice(-MAX_SNAPS);
+      }
+    }
+
+    /**
+     * All string field names/values required to POST /edit_pdf?pdf=bill (for audit replay).
+     */
+    function buildCustomerBillPdfFieldMap(customer, precalc) {
+      if (!customer) return null;
+      const calc = precalc || calculateCustomerTotal(customer, { billUiSnapshot: false });
+      const adjustedServiceCost = calc.adjustedServiceCost;
+      const lateFeeAmount = calc.lateFeeAmount;
+      const taxCodeDetails = buildTaxCodeDetailsForPdf(customer, calc);
+
+      const now = window.getCurrentDate();
+      const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const statementDate =
+        (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') +
+        '/' +
+        lastDayOfMonth.getDate().toString().padStart(2, '0') +
+        '/' +
+        lastDayOfMonth.getFullYear();
+
+      const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const firstDayStr =
+        (firstDayOfMonth.getMonth() + 1).toString().padStart(2, '0') +
+        '/' +
+        firstDayOfMonth.getDate().toString().padStart(2, '0') +
+        '/' +
+        String(firstDayOfMonth.getFullYear()).slice(-2);
+      const lastDayStr =
+        (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') +
+        '/' +
+        lastDayOfMonth.getDate().toString().padStart(2, '0') +
+        '/' +
+        String(lastDayOfMonth.getFullYear()).slice(-2);
+      const cyclePeriod = `${firstDayStr} to ${lastDayStr}`;
+      const dueDateStr = formatDateMMDDYYYY(new Date(now.getTime() + 20 * 24 * 60 * 60 * 1000));
+      const daysInCycle = lastDayOfMonth.getDate();
+
+      const addressCityStateZip = getAddressCityStateZipForBill(customer);
+      const fullAddressForPdf = getFullAddressForBill(customer);
+
+      const pdfSewerChargeAmount = Math.max(0, Math.round(adjustedServiceCost * 100) / 100);
+      const pdfLateFee = Math.max(0, Math.round((lateFeeAmount || 0) * 100) / 100);
+      const pdfCurrentDue = getPdfCurrentDueFromSewerAndTaxCharges(pdfSewerChargeAmount, taxCodeDetails);
+      const pdfLineTotals = getPdfPreviousChargesReconciledToTotal(customer, calc, pdfCurrentDue, pdfLateFee);
+      const pdfPreviousCharges = pdfLineTotals.pdfPreviousCharges;
+      const pdfTotalAmount = pdfLineTotals.pdfTotalAmount;
+
+      const fields = {};
+      fields.account_no = customer.accountNumber || '';
+      fields.account_name = customer.name || '';
+      fields.account_address = customer.address || '';
+      fields.address_city_state_zip = addressCityStateZip;
+      fields.full_address = fullAddressForPdf;
+      fields.statement_date = statementDate;
+      fields.cycle_period = cyclePeriod;
+      fields.days_in_cycle = String(daysInCycle);
+      fields.print_date = formatDateMMDDYYYY(now);
+      fields.sewer_charge = 'Sewer Charge';
+      fields.sewer_charge_amount = `$${pdfSewerChargeAmount.toFixed(2)}`;
+      fields.current_due = `$${pdfCurrentDue.toFixed(2)}`;
+      fields.previous_charges = `$${pdfPreviousCharges.toFixed(2)}`;
+      fields.late_fee = `$${pdfLateFee.toFixed(2)}`;
+      fields.total_amount = `$${pdfTotalAmount.toFixed(2)}`;
+      fields.due_date = dueDateStr;
+
+      const contPdf = getContinuousDelinquencyDays(customer);
+      const daysLateForBill = getCustomerDaysLate(customer);
+      const lateFeePdf = compute21DayLateFeeDollars(customer);
+      const totalOwPdf = getTotalOwedForLateTracking(customer, lateFeePdf);
+      let statusText = 'Status: Current';
+      if (autoApplyLateFees && daysLateForBill > 0) {
+        statusText = `Status: ${daysLateForBill} days late`;
+      } else if (!autoApplyLateFees && contPdf > 0 && totalOwPdf > 0.005) {
+        statusText = `Status: ${contPdf} days on delinquency timer (auto late fees off)`;
+      } else if (!autoApplyLateFees && parseFloat(customer.pastDue || 0) > 0.005) {
+        statusText = 'Status: Past-due balance (auto late fees off)';
+      } else if (parseFloat(customer.pastDue || 0) > 0.005 && contPdf <= 0) {
+        statusText = 'Status: Past-due balance';
+      }
+      fields.status = statusText;
+
+      const depositExplanationPdf = getPendingDepositAutoApplyExplanationText(customer) || '';
+      fields.deposit_explaination = depositExplanationPdf;
+      fields.deposit_explanation = depositExplanationPdf;
+
+      const maxTaxCodes = 10;
+      for (let i = 0; i < maxTaxCodes; i++) {
+        const taxIndex = i + 1;
+        if (i < taxCodeDetails.length) {
+          const taxCode = taxCodeDetails[i];
+          fields[`tax${taxIndex}`] = taxCode.name || '';
+          fields[`tax_charge${taxIndex}`] = `$${taxCode.amount.toFixed(2)}`;
+        } else {
+          fields[`tax${taxIndex}`] = '';
+          fields[`tax_charge${taxIndex}`] = '';
+        }
+      }
+      return fields;
+    }
+
+    function formDataFromBillPdfFieldMap(fields) {
+      const fd = new FormData();
+      if (!fields) return fd;
+      Object.keys(fields).forEach((k) => {
+        fd.append(k, fields[k] == null ? '' : String(fields[k]));
+      });
+      return fd;
+    }
+
+    function billFormDataToFieldRecord(formData) {
+      const o = {};
+      if (!formData || typeof formData.forEach !== 'function') return o;
+      formData.forEach((value, key) => {
+        o[key] = value;
+      });
+      return o;
+    }
+
+    function getUnifiedDepositWithdrawalsForCustomer(customer) {
+      if (!customer) return [];
+      const fromHist = Array.isArray(customer.depositWithdrawalHistory)
+        ? customer.depositWithdrawalHistory.slice()
+        : [];
+      if (fromHist.length > 0) {
+        return fromHist.sort((a, b) => {
+          const ta = new Date(a.timestampIso || 0).getTime();
+          const tb = new Date(b.timestampIso || 0).getTime();
+          return tb - ta;
+        });
+      }
+      const ph = Array.isArray(customer.paymentHistory) ? customer.paymentHistory : [];
+      const legacy = ph.filter((p) => p && p.source === 'depositAutoApply');
+      return legacy
+        .map((p, idx) => ({
+          id: `legacy-ph-${p.ledgerOrder != null ? p.ledgerOrder : idx}-${p.date || idx}`,
+          ledgerOrder: p.ledgerOrder,
+          timestampIso: p.timestamp || '',
+          triggerDateStr: p.date || '',
+          anchorPrintDateIso: customer.lateFeeAnchorPrintDate || customer.lastBillPrintDate || null,
+          amountApplied: parseFloat(p.amountPaid) || 0,
+          daysLateAfterGraceAtTrigger: getDepositWithdrawDelinquencyDays(),
+          depositThresholdDays: getDepositWithdrawDelinquencyDays(),
+          depositOnFileBefore: null,
+          depositOnFileAfter: null,
+          totalBalanceAddressed: parseFloat(p.amountDue) || 0,
+          allocationSummary: formatDepositAppliedBreakdownForNotice(p.appliedBreakdown),
+          isLegacySynthetic: true
+        }))
+        .sort((a, b) => {
+          const ta = new Date(a.timestampIso || 0).getTime();
+          const tb = new Date(b.timestampIso || 0).getTime();
+          return tb - ta;
+        });
+    }
+
     /**
      * Apply dollars using Settings → Payment Application Hierarchy (same bucket rules as POS).
      * Mutates currentMonthPaid* and pastDue during the hierarchy pass.
@@ -6027,6 +6204,27 @@
           paymentNumber: depositPaymentNumber,
           appliedBreakdown: depositBreakdown,
           lateFeeDetailsRows: Array.isArray(lateFeeDetailsRows) ? lateFeeDetailsRows : undefined
+        });
+        const pushedPh = customer.paymentHistory[customer.paymentHistory.length - 1];
+        const dwId =
+          typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `dw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        if (!Array.isArray(customer.depositWithdrawalHistory)) customer.depositWithdrawalHistory = [];
+        customer.depositWithdrawalHistory.push({
+          id: dwId,
+          ledgerOrder: pushedPh.ledgerOrder,
+          timestampIso: today.toISOString(),
+          triggerDateStr: depDateStr,
+          anchorPrintDateIso: anchorIsoForBill,
+          amountApplied: applied,
+          daysLateAfterGraceAtTrigger: continuous306090,
+          depositThresholdDays: getDepositWithdrawDelinquencyDays(),
+          depositOnFileBefore: deposit,
+          depositOnFileAfter: customer.deposit,
+          totalBalanceAddressed: trueOwed,
+          lateFeeAmountShown: Math.round((lateFeeAmt || 0) * 100) / 100,
+          allocationSummary: formatDepositAppliedBreakdownForNotice(depositBreakdown)
         });
         billDiag('maybeApplyDepositAt60Days:applied', customer, {
           continuous306090Days: continuous306090,
@@ -6430,6 +6628,16 @@
             </button>
           </div>
 
+          <div class="mt-4">
+            <button 
+              type="button"
+              onclick="showPastBillsForSelectedCustomer()"
+              class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+            >
+              View Past Bills
+            </button>
+          </div>
+
           <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
@@ -6503,60 +6711,13 @@
       }
 
       try {
+        const hadPendingDepositExplanation = !!customer.pendingDepositBillExplanation;
 
         // Full accrual: late fees and prior-statement balance apply at bill generation only (not while browsing / sim date).
         const calc = calculateCustomerTotal(customer, { billUiSnapshot: false });
-        const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
-        const adjustedServiceCost = calc.adjustedServiceCost;
-        const pastDue = parseFloat(customer.pastDue || 0);
-        const lateFeeAmount = calc.lateFeeAmount;
-
         const taxCodeDetails = buildTaxCodeDetailsForPdf(customer, calc);
-
-        const totalSurcharge = calc.totalSurcharge;
-        const subtotalBeforePuc = calc.subtotalBeforePuc;
-        const pucSurchargeAmountRecalc = calc.pucSurchargeAmount;
-
-        // Calculate dates
-        const now = window.getCurrentDate();
-        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-        const statementDate = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
-                             lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
-                             lastDayOfMonth.getFullYear();
-
-        // Calculate billing cycle (first day of month to last day of month)
-        const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const firstDayStr = (firstDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
-                           firstDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
-                           String(firstDayOfMonth.getFullYear()).slice(-2);
-        const lastDayStr = (lastDayOfMonth.getMonth() + 1).toString().padStart(2, '0') + '/' + 
-                          lastDayOfMonth.getDate().toString().padStart(2, '0') + '/' + 
-                          String(lastDayOfMonth.getFullYear()).slice(-2);
-        const cyclePeriod = `${firstDayStr} to ${lastDayStr}`;
-
-        // Due date is tied to the bill print date (day 20 grace).
-        const dueDateStr = formatDateMMDDYYYY(
-          new Date(now.getTime() + (20 * 24 * 60 * 60 * 1000))
-        );
-
-        // Create FormData with all the required fields
-        const formData = new FormData();
-        const addressCityStateZip = getAddressCityStateZipForBill(customer);
-        const fullAddressForPdf = getFullAddressForBill(customer);
-
-        const daysInCycle = lastDayOfMonth.getDate();
-
-        formData.append('account_no', customer.accountNumber || '');
-        formData.append('account_name', customer.name || '');
-        formData.append('account_address', customer.address || '');
-        formData.append('address_city_state_zip', addressCityStateZip);
-        formData.append('full_address', fullAddressForPdf);
-        formData.append('statement_date', statementDate);
-        formData.append('cycle_period', cyclePeriod);
-        formData.append('days_in_cycle', String(daysInCycle));
-        formData.append('print_date', formatDateMMDDYYYY(now));
-        const pdfSewerChargeAmount = Math.max(0, Math.round(adjustedServiceCost * 100) / 100);
-        const pdfLateFee = Math.max(0, Math.round((lateFeeAmount || 0) * 100) / 100);
+        const pdfSewerChargeAmount = Math.max(0, Math.round(calc.adjustedServiceCost * 100) / 100);
+        const pdfLateFee = Math.max(0, Math.round((calc.lateFeeAmount || 0) * 100) / 100);
         const pdfCurrentDue = getPdfCurrentDueFromSewerAndTaxCharges(pdfSewerChargeAmount, taxCodeDetails);
         const pdfLineTotals = getPdfPreviousChargesReconciledToTotal(customer, calc, pdfCurrentDue, pdfLateFee);
         const pdfPreviousCharges = pdfLineTotals.pdfPreviousCharges;
@@ -6573,55 +6734,11 @@
           continuous306090: getContinuousDelinquencyDays(customer)
         });
 
-        // New PDF field mapping
-        formData.append('sewer_charge', 'Sewer Charge');
-        formData.append('sewer_charge_amount', `$${pdfSewerChargeAmount.toFixed(2)}`);
-        formData.append('current_due', `$${pdfCurrentDue.toFixed(2)}`);
-        formData.append('previous_charges', `$${pdfPreviousCharges.toFixed(2)}`);
-        formData.append('late_fee', `$${pdfLateFee.toFixed(2)}`);
-
-        const totalAmountRecalc = Math.max(0, calc.total);
-
-        formData.append('total_amount', `$${pdfTotalAmount.toFixed(2)}`);
-        formData.append('due_date', dueDateStr);
-
-        // Bill status text for PDF — align with late-fee toggle (fees $0 when autoApplyLateFees is off)
-        const contPdf = getContinuousDelinquencyDays(customer);
-        const daysLateForBill = getCustomerDaysLate(customer);
-        const lateFeePdf = compute21DayLateFeeDollars(customer);
-        const totalOwPdf = getTotalOwedForLateTracking(customer, lateFeePdf);
-        let statusText = 'Status: Current';
-        if (autoApplyLateFees && daysLateForBill > 0) {
-          statusText = `Status: ${daysLateForBill} days late`;
-        } else if (!autoApplyLateFees && contPdf > 0 && totalOwPdf > 0.005) {
-          statusText = `Status: ${contPdf} days on delinquency timer (auto late fees off)`;
-        } else if (!autoApplyLateFees && parseFloat(customer.pastDue || 0) > 0.005) {
-          statusText = 'Status: Past-due balance (auto late fees off)';
-        } else if (parseFloat(customer.pastDue || 0) > 0.005 && contPdf <= 0) {
-          statusText = 'Status: Past-due balance';
+        const fieldMap = buildCustomerBillPdfFieldMap(customer, calc);
+        if (!fieldMap) {
+          throw new Error('Could not build bill PDF fields');
         }
-        formData.append('status', statusText);
-
-        const hadPendingDepositExplanation = !!customer.pendingDepositBillExplanation;
-        const depositExplanationPdf = getPendingDepositAutoApplyExplanationText(customer);
-        formData.append('deposit_explaination', depositExplanationPdf || '');
-        formData.append('deposit_explanation', depositExplanationPdf || '');
-
-        // Populate tax code fields (tax1, tax2, tax3, etc. and tax_charge1, tax_charge2, tax_charge3, etc.)
-        // Limit to first 10 tax codes to match PDF field limits
-        const maxTaxCodes = 10;
-        for (let i = 0; i < maxTaxCodes; i++) {
-          const taxIndex = i + 1;
-          if (i < taxCodeDetails.length) {
-            const taxCode = taxCodeDetails[i];
-            formData.append(`tax${taxIndex}`, taxCode.name || '');
-            formData.append(`tax_charge${taxIndex}`, `$${taxCode.amount.toFixed(2)}`);
-          } else {
-            // Fill remaining fields with empty strings
-            formData.append(`tax${taxIndex}`, '');
-            formData.append(`tax_charge${taxIndex}`, '');
-          }
-        }
+        const formData = formDataFromBillPdfFieldMap(fieldMap);
 
         // Send to server
         const response = await fetch('/edit_pdf?pdf=bill', {
@@ -6635,6 +6752,8 @@
 
         // Get the PDF blob
         const blob = await response.blob();
+
+        appendPastBillPdfSnapshot(customer, fieldMap);
 
         // Display the PDF below the button (no automatic download)
         const displayUrl = URL.createObjectURL(blob);
@@ -6983,6 +7102,8 @@
             }
 
             const blob = await response.blob();
+
+            appendPastBillPdfSnapshot(customer, billFormDataToFieldRecord(formData));
 
             if (
               customerSnapshot.pdfData.deposit_explaination ||
@@ -7363,6 +7484,16 @@
             </button>
           </div>
 
+          <div class="mt-4">
+            <button 
+              type="button"
+              onclick="showPastBillsForSelectedCustomer()"
+              class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
+            >
+              View Past Bills
+            </button>
+          </div>
+
           <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
@@ -7420,6 +7551,346 @@
       `;
 
       populateBillCustomerSelect();
+    };
+
+    window.showDepositWithdrawalNoticeModule = async function() {
+      hideAllModules(true);
+      hideDashboardButtons();
+      const mod = document.getElementById('depositWithdrawalNoticeModule');
+      if (!mod) return;
+      mod.classList.remove('hidden');
+      try {
+        if (window.__billModuleCustomersReady) {
+          await window.__billModuleCustomersReady;
+        }
+      } catch (e) {
+        // ignore
+      }
+      window.__dwSelectedCustomerId = null;
+      window.__dwSelectedWithdrawal = null;
+      const produceBtn = document.getElementById('depositWithdrawalProduceBtn');
+      if (produceBtn) produceBtn.disabled = true;
+      const wrap = document.getElementById('depositWithdrawalNoticePdfWrap');
+      const viewer = document.getElementById('depositWithdrawalNoticePdfViewer');
+      if (wrap) wrap.classList.add('hidden');
+      if (viewer && viewer.src && viewer.src.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(viewer.src);
+        } catch (e2) {
+          // ignore
+        }
+        viewer.removeAttribute('src');
+      }
+      renderDepositWithdrawalNoticeScreen('customers');
+    };
+
+    window.renderDepositWithdrawalNoticeScreen = function(phase, customerId) {
+      const root = document.getElementById('depositWithdrawalNoticeContent');
+      if (!root) return;
+      const esc = function (s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;')
+          .replace(/\u003c/g, '&lt;')
+          .replace(/\u003e/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      };
+      if (phase === 'customers') {
+        window.__dwSelectedCustomerId = null;
+        window.__dwSelectedWithdrawal = null;
+        const produceBtn = document.getElementById('depositWithdrawalProduceBtn');
+        if (produceBtn) produceBtn.disabled = true;
+        const list = customers.filter((c) => getUnifiedDepositWithdrawalsForCustomer(c).length > 0);
+        root.innerHTML = `
+          <button type="button" class="text-sm text-blue-600 hover:underline dark:text-blue-400" onclick="hideAllModules()">← Back to dashboard</button>
+          <p class="text-sm text-slate-600 dark:text-slate-400 mt-2">Customers below have at least one automatic security-deposit withdrawal on file.</p>
+          <div class="space-y-2 mt-4">
+            ${
+              list.length === 0
+                ? '<p class="text-slate-500 dark:text-slate-400">No deposit withdrawals recorded yet.</p>'
+                : list
+                    .map(
+                      (c) => `
+              <button type="button" class="w-full text-left px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700"
+                onclick="renderDepositWithdrawalNoticeScreen('withdrawals', ${JSON.stringify(c.id)})">
+                <span class="font-medium text-slate-800 dark:text-slate-200">${esc(c.name)}</span>
+                <span class="text-slate-500 text-sm"> — ${esc(c.accountNumber || c.id)}</span>
+              </button>
+            `
+                    )
+                    .join('')
+            }
+          </div>
+        `;
+        return;
+      }
+      if (phase === 'withdrawals' && customerId) {
+        const c = customers.find((x) => x.id === customerId);
+        window.__dwSelectedCustomerId = customerId;
+        window.__dwSelectedWithdrawal = null;
+        const produceBtn = document.getElementById('depositWithdrawalProduceBtn');
+        if (produceBtn) produceBtn.disabled = true;
+        const rows = c ? getUnifiedDepositWithdrawalsForCustomer(c) : [];
+        root.innerHTML = `
+          <button type="button" class="text-sm text-blue-600 hover:underline dark:text-blue-400" onclick="renderDepositWithdrawalNoticeScreen('customers')">← Back to customers</button>
+          <p class="text-lg font-semibold text-slate-800 dark:text-slate-200 mt-3">${esc(c ? c.name : '')}</p>
+          <p class="text-sm text-slate-500">${esc(c ? c.accountNumber || c.id : '')}</p>
+          <p class="text-sm text-slate-600 dark:text-slate-400 mt-3">Select a withdrawal, then produce the PDF.</p>
+          <div class="space-y-2 mt-2 max-h-72 overflow-y-auto">
+            ${
+              rows.length === 0
+                ? '<p class="text-slate-500">No rows.</p>'
+                : rows
+                    .map((dw) => {
+                      const amt = (parseFloat(dw.amountApplied) || 0).toFixed(2);
+                      const when = esc(dw.triggerDateStr || dw.timestampIso || '');
+                      return `
+              <button type="button" class="w-full text-left px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 dw-row-select"
+                data-dw-id="${esc(dw.id)}"
+                onclick="selectDepositWithdrawalEntry(${JSON.stringify(customerId)}, ${JSON.stringify(dw.id)})">
+                <span class="font-medium text-slate-800 dark:text-slate-200">$${amt}</span>
+                <span class="text-slate-500 text-sm"> — ${when}</span>
+              </button>
+            `;
+                    })
+                    .join('')
+            }
+          </div>
+        `;
+      }
+    };
+
+    window.selectDepositWithdrawalEntry = function(customerId, withdrawalId) {
+      const c = customers.find((x) => x.id === customerId);
+      if (!c) return;
+      const rows = getUnifiedDepositWithdrawalsForCustomer(c);
+      const dw = rows.find((r) => r.id === withdrawalId);
+      window.__dwSelectedCustomerId = customerId;
+      window.__dwSelectedWithdrawal = dw || null;
+      const produceBtn = document.getElementById('depositWithdrawalProduceBtn');
+      if (produceBtn) produceBtn.disabled = !dw;
+      document.querySelectorAll('.dw-row-select').forEach((el) => {
+        el.classList.toggle('ring-2', el.getAttribute('data-dw-id') === withdrawalId);
+        el.classList.toggle('ring-amber-500', el.getAttribute('data-dw-id') === withdrawalId);
+      });
+    };
+
+    window.produceDepositWithdrawalNoticePdf = async function() {
+      const customerId = window.__dwSelectedCustomerId;
+      const dw = window.__dwSelectedWithdrawal;
+      const customer = customers.find((c) => c.id === customerId);
+      if (!customer || !dw) {
+        alert('Select a deposit withdrawal first.');
+        return;
+      }
+      const now = window.getCurrentDate ? window.getCurrentDate() : new Date();
+      const noticeDateStr =
+        (now.getMonth() + 1).toString().padStart(2, '0') +
+        '/' +
+        now.getDate().toString().padStart(2, '0') +
+        '/' +
+        now.getFullYear();
+      const anchorBillDateStr = dw.anchorPrintDateIso
+        ? formatIsoDateStringToMMDDYYYY(dw.anchorPrintDateIso) || 'N/A'
+        : 'N/A';
+      const thresholdDays =
+        dw.depositThresholdDays != null ? parseInt(dw.depositThresholdDays, 10) : getDepositWithdrawDelinquencyDays();
+      const contDays =
+        dw.daysLateAfterGraceAtTrigger != null
+          ? parseInt(dw.daysLateAfterGraceAtTrigger, 10)
+          : getDepositWithdrawDelinquencyDays();
+      const depositBefore = parseFloat(dw.depositOnFileBefore);
+      const depositAfter = parseFloat(dw.depositOnFileAfter);
+      const amountApplied = parseFloat(dw.amountApplied);
+      const totalBal = parseFloat(dw.totalBalanceAddressed);
+      const replenishTarget = Number.isFinite(depositBefore)
+        ? depositBefore
+        : Number.isFinite(depositAfter) && Number.isFinite(amountApplied)
+          ? Math.round((depositAfter + amountApplied) * 100) / 100
+          : NaN;
+      const shortfall =
+        Number.isFinite(replenishTarget) && Number.isFinite(depositAfter)
+          ? Math.max(0, Math.round((replenishTarget - depositAfter) * 100) / 100)
+          : Number.isFinite(amountApplied)
+            ? amountApplied
+            : NaN;
+
+      const payload = {
+        accountName: customer.name || '',
+        accountNumber: customer.accountNumber || customer.id || '',
+        serviceAddress: getFullAddressForBill(customer) || customer.address || '',
+        noticeDateStr,
+        triggerDateStr: dw.triggerDateStr || '',
+        anchorBillDateStr,
+        daysLatePhrase: getDepositWithdrawBillLatePhrase(),
+        depositThresholdDays: thresholdDays,
+        continuousDelinquencyDaysAtTrigger: contDays,
+        amountAppliedFromDeposit: Number.isFinite(amountApplied) ? amountApplied : dw.amountApplied,
+        depositOnFileBefore: Number.isFinite(depositBefore) ? depositBefore : dw.depositOnFileBefore,
+        depositOnFileAfter: Number.isFinite(depositAfter) ? depositAfter : dw.depositOnFileAfter,
+        totalBalanceAddressed: Number.isFinite(totalBal) ? totalBal : dw.totalBalanceAddressed,
+        replenishTargetAmount: Number.isFinite(replenishTarget) ? replenishTarget : null,
+        replenishShortfall: Number.isFinite(shortfall) ? shortfall : null,
+        allocationSummary: dw.allocationSummary || ''
+      };
+
+      try {
+        const res = await fetch('/api/generate-deposit-withdrawal-notice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          throw new Error('Server could not generate the PDF');
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const wrap = document.getElementById('depositWithdrawalNoticePdfWrap');
+        const viewer = document.getElementById('depositWithdrawalNoticePdfViewer');
+        if (viewer) {
+          if (viewer.src && viewer.src.startsWith('blob:')) {
+            URL.revokeObjectURL(viewer.src);
+          }
+          viewer.src = url;
+        }
+        if (wrap) {
+          wrap.classList.remove('hidden');
+          setTimeout(() => wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 80);
+        }
+      } catch (err) {
+        alert(err.message || 'Failed to generate notice PDF');
+      }
+    };
+
+    window.showPastBillsForSelectedCustomer = function() {
+      const customerId = getBillSelectedCustomerId();
+      if (!customerId) {
+        alert('Please select a customer first.');
+        return;
+      }
+      const customer = customers.find((c) => c.id === customerId);
+      if (!customer) {
+        alert('Customer not found.');
+        return;
+      }
+      const snaps = Array.isArray(customer.pastBillPdfSnapshots)
+        ? customer.pastBillPdfSnapshots.slice().sort((a, b) => {
+            const ta = new Date(a.savedAtIso || 0).getTime();
+            const tb = new Date(b.savedAtIso || 0).getTime();
+            return tb - ta;
+          })
+        : [];
+      const billModule = document.getElementById('billModule');
+      if (!billModule) return;
+      const esc = function (s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;')
+          .replace(/\u003c/g, '&lt;')
+          .replace(/\u003e/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      };
+      billModule.innerHTML = `
+        <div class="flex justify-between items-center mb-6">
+          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Past bills (audit)</h3>
+          <button type="button" onclick="resetBillForm()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <p class="text-sm text-slate-600 dark:text-slate-400 mb-2">Stored field data only (no PDF files). Select a row to regenerate the bill PDF for auditing.</p>
+        <p class="text-sm font-medium text-slate-800 dark:text-slate-200">${esc(customer.name)} <span class="text-slate-500">(${esc(customer.accountNumber || customer.id)})</span></p>
+        ${
+          snaps.length === 0
+            ? '<p class="mt-6 text-slate-500">No past bills stored yet. Bills are saved when you successfully use Produce Bill or Produce Billing Cycle after this update.</p>'
+            : `
+        <div class="overflow-x-auto mt-4">
+          <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-sm">
+            <thead class="bg-slate-50 dark:bg-slate-700">
+              <tr>
+                <th class="px-4 py-2 text-left text-slate-600 dark:text-slate-300">Saved (UTC)</th>
+                <th class="px-4 py-2 text-left text-slate-600 dark:text-slate-300">Print date</th>
+                <th class="px-4 py-2 text-right text-slate-600 dark:text-slate-300">Total</th>
+                <th class="px-4 py-2 text-right text-slate-600 dark:text-slate-300">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-600">
+              ${snaps
+                .map((s) => {
+                  const pf = s.pdfFields || {};
+                  const saved = esc(s.savedAtIso || '');
+                  const printD = esc(pf.print_date || '');
+                  const tot = esc(pf.total_amount || '');
+                  return `
+                <tr>
+                  <td class="px-4 py-2 text-slate-800 dark:text-slate-200">${saved}</td>
+                  <td class="px-4 py-2 text-slate-800 dark:text-slate-200">${printD}</td>
+                  <td class="px-4 py-2 text-right font-medium text-slate-800 dark:text-slate-200">${tot}</td>
+                  <td class="px-4 py-2 text-right">
+                    <button type="button" class="text-blue-600 hover:underline dark:text-blue-400"
+                      onclick="reproducePastBillPdfFromSnapshot(${JSON.stringify(customer.id)}, ${JSON.stringify(s.id)})">View PDF</button>
+                  </td>
+                </tr>`;
+                })
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+        <div id="pastBillAuditPdfWrap" class="hidden mt-6">
+          <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Bill PDF (reproduced)</h4>
+          <iframe id="pastBillAuditPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 720px;" title="Past bill PDF"></iframe>
+        </div>`
+        }
+      `;
+    };
+
+    window.reproducePastBillPdfFromSnapshot = async function(customerId, snapshotId) {
+      const customer = customers.find((c) => c.id === customerId);
+      const snap = customer && Array.isArray(customer.pastBillPdfSnapshots)
+        ? customer.pastBillPdfSnapshots.find((s) => s.id === snapshotId)
+        : null;
+      if (!snap || !snap.pdfFields) {
+        alert('Snapshot not found.');
+        return;
+      }
+      const formData = formDataFromBillPdfFieldMap(snap.pdfFields);
+      try {
+        const response = await fetch('/edit_pdf?pdf=bill', {
+          method: 'POST',
+          body: formData
+        });
+        if (!response.ok) {
+          throw new Error('Failed to regenerate PDF');
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        let wrap = document.getElementById('pastBillAuditPdfWrap');
+        let viewer = document.getElementById('pastBillAuditPdfViewer');
+        if (!wrap || !viewer) {
+          const billModule = document.getElementById('billModule');
+          if (billModule) {
+            wrap = document.createElement('div');
+            wrap.id = 'pastBillAuditPdfWrap';
+            wrap.className = 'mt-6';
+            wrap.innerHTML =
+              '<h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Bill PDF (reproduced)</h4>' +
+              '<iframe id="pastBillAuditPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 720px;" title="Past bill PDF"></iframe>';
+            billModule.appendChild(wrap);
+            viewer = document.getElementById('pastBillAuditPdfViewer');
+          }
+        }
+        if (viewer) {
+          if (viewer.src && viewer.src.startsWith('blob:')) {
+            URL.revokeObjectURL(viewer.src);
+          }
+          viewer.src = url;
+        }
+        if (wrap) {
+          wrap.classList.remove('hidden');
+          setTimeout(() => wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 80);
+        }
+      } catch (e) {
+        alert(e.message || 'Failed to reproduce bill');
+      }
     };
 
     window.processPaymentFromModule = async function() {
@@ -23720,3330 +24191,4 @@
       document.getElementById('paymentHistoryModal').classList.add('hidden');
     };
 
-  </script>
-  <style>
-    :root { color-scheme: light dark; }
-    body { background: radial-gradient(1200px 800px at 30% -10%, #e6f0ff 0%, #ffffff 45%) no-repeat; }
-    @media (prefers-color-scheme: dark) {
-      body { background: radial-gradient(1200px 800px at 30% -10%, #0b1220 0%, #0e1628 45%) no-repeat; }
-    }
-    .card { backdrop-filter: saturate(1.2) blur(8px); }
-    .modal-show { display: flex !important; }
-    .safe-pad { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
-    .tap { -webkit-tap-highlight-color: transparent; }
-
-  </style>
-</head>
-<body class="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 tap">
-  <!-- Firebase Auth Modal - Full Screen Homepage Style -->
-  <div id="firebaseAuthModal" class="fixed inset-0 bg-gradient-to-br from-blue-50 via-white to-slate-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 flex items-center justify-center z-50 hidden">
-    <div class="w-full max-w-md mx-4">
-      <div class="text-center mb-8">
-        <!-- PUBS Logo -->
-        <div class="mb-4 flex justify-center">
-          <img src="PUBS Logo.png" alt="PUBS Logo" class="h-32 w-auto object-contain">
-        </div>
-        <h1 class="text-4xl font-bold text-slate-900 dark:text-slate-100 mb-2">PUBS Billing System v1.4</h1>
-        <p class="text-sm text-slate-500 dark:text-slate-500 mt-2">Please enter your credentials to continue</p>
-      </div>
-
-      <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 border-4 border-blue-200 dark:border-blue-800 ring-4 ring-blue-100 dark:ring-blue-900/50">
-        <form id="firebaseAuthForm" class="space-y-6">
-        <div>
-          <label for="firebaseEmail" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Username</label>
-          <input 
-              type="text"
-            id="firebaseEmail" 
-            required
-              inputmode="email"
-            autocomplete="email"
-            class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-              placeholder="Enter Username"
-          >
-        </div>
-
-        <div>
-          <label for="firebasePassword" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Password</label>
-          <input 
-            type="password" 
-            id="firebasePassword" 
-            required
-            autocomplete="current-password"
-            class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-            placeholder="Enter password"
-          >
-        </div>
-
-        <div id="firebaseAuthError" class="text-red-600 dark:text-red-400 text-sm hidden"></div>
-
-        <button 
-          type="submit" 
-          id="firebaseAuthSubmit"
-          class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-xl transition-colors"
-        >
-          Sign In
-        </button>
-      </form>
-      </div>
-    </div>
-  </div>
-
-  <!-- Drawer Selection Modal (for POS users) -->
-  <div id="drawerSelectionModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
-      <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">Select Drawer</h2>
-      <p class="text-slate-600 dark:text-slate-400 mb-6">What drawer are you working with today?</p>
-
-      <div id="drawerSelectionList" class="space-y-2 mb-6 max-h-96 overflow-y-auto">
-        <!-- Drawer options will be populated dynamically -->
-      </div>
-
-      <div id="drawerSelectionError" class="text-red-600 dark:text-red-400 text-sm mb-4 hidden"></div>
-      <!-- No cancel button - POS users must select a drawer -->
-    </div>
-  </div>
-
-  <!-- Supervisor Drawer Selection Modal (for drawer counting) -->
-  <div id="supervisorDrawerSelectionModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
-      <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">Select Drawer for SOD Count</h2>
-      <p class="text-slate-600 dark:text-slate-400 mb-6">Which drawer would you like to count?</p>
-
-      <div id="supervisorDrawerSelectionList" class="space-y-2 mb-6 max-h-96 overflow-y-auto">
-        <!-- Drawer options will be populated dynamically -->
-      </div>
-
-      <button 
-        onclick="hideSupervisorDrawerSelectionModal()" 
-        class="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold py-3 px-4 rounded-xl transition-colors"
-      >
-        Close
-      </button>
-    </div>
-  </div>
-
-  <!-- Drawer Count History Modal -->
-      <div id="drawerCountHistoryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-      <div class="flex justify-between items-center mb-6">
-        <h2 id="drawerCountHistoryTitle" class="text-2xl font-bold text-slate-900 dark:text-slate-100">Drawer Count History</h2>
-        <button onclick="hideDrawerCountHistoryModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-          </svg>
-        </button>
-      </div>
-      <div id="drawerCountHistoryList" class="space-y-3">
-        <!-- History entries will be populated dynamically -->
-      </div>
-    </div>
-  </div>
-
-  <!-- Drawer Count Details Modal -->
-  <div id="drawerCountDetailsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70] hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-3xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-      <div class="flex justify-between items-center mb-6">
-        <h2 id="drawerCountDetailsTitle" class="text-2xl font-bold text-slate-900 dark:text-slate-100">Drawer Count Details</h2>
-        <button onclick="hideDrawerCountDetailsModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-          </svg>
-        </button>
-      </div>
-      <div id="drawerCountDetailsContent">
-        <!-- Details will be populated dynamically -->
-      </div>
-    </div>
-  </div>
-
-  <!-- Drawer Count Mismatch Modal -->
-  <div id="drawerCountMismatchModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
-      <div class="text-center mb-6">
-        <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-900 mb-4">
-          <svg class="h-6 w-6 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-          </svg>
-        </div>
-        <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">Count Does Not Match</h2>
-        <div id="drawerCountMismatchContent" class="text-slate-600 dark:text-slate-400 space-y-2 text-left mt-4">
-          <!-- Content will be populated dynamically -->
-        </div>
-      </div>
-      <div class="flex justify-end">
-        <button 
-          onclick="hideDrawerCountMismatchModal()" 
-          class="px-6 py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold rounded-lg transition-colors"
-        >
-          OK
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Payment Count Error Modal -->
-  <div id="paymentCountErrorModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
-      <div class="text-center mb-6">
-        <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-900 mb-4">
-          <svg class="h-6 w-6 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-          </svg>
-        </div>
-        <h2 id="paymentCountErrorTitle" class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">Count Error</h2>
-        <div id="paymentCountErrorContent" class="text-slate-600 dark:text-slate-400 space-y-2 text-left mt-4 whitespace-pre-line">
-          <!-- Content will be populated dynamically -->
-        </div>
-      </div>
-      <div class="flex justify-end">
-        <button 
-          onclick="hidePaymentCountErrorModal()" 
-          class="px-6 py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold rounded-lg transition-colors"
-        >
-          OK
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Drawer Count Success Modal -->
-  <div id="drawerCountSuccessModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
-      <div class="text-center mb-6">
-        <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 dark:bg-green-900 mb-4">
-          <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-          </svg>
-        </div>
-        <h2 id="drawerCountSuccessTitle" class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">Drawer Counted Successfully</h2>
-        <div id="drawerCountSuccessContent" class="text-slate-600 dark:text-slate-400 space-y-2">
-          <!-- Content will be populated dynamically -->
-        </div>
-      </div>
-      <div class="flex gap-3">
-        <button 
-          id="drawerCountSuccessPrintBtn"
-          onclick="printDrawerCountSuccessReceipt()" 
-          class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
-        >
-          Print Receipt
-        </button>
-        <button 
-          onclick="hideDrawerCountSuccessModal()" 
-          class="flex-1 px-4 py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold rounded-lg transition-colors"
-        >
-          OK
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Payment Submission Success Modal -->
-  <div id="paymentSubmissionSuccessModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
-      <div class="text-center mb-6">
-        <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 dark:bg-green-900 mb-4">
-          <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-          </svg>
-        </div>
-        <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">Payment Processing Session Submitted</h2>
-        <p class="text-slate-600 dark:text-slate-400">Register balanced.</p>
-      </div>
-      <div class="flex gap-3">
-        <button 
-          id="paymentSubmissionSuccessPrintBtn"
-          onclick="printPaymentSubmissionReceipt()" 
-          class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
-        >
-          Print Receipt
-        </button>
-        <button 
-          onclick="hidePaymentSubmissionSuccessModal()" 
-          class="flex-1 px-4 py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold rounded-lg transition-colors"
-        >
-          Continue
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- EOD Verification Success Modal -->
-  <div id="eodVerificationSuccessModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
-      <div class="text-center mb-6">
-        <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 dark:bg-green-900 mb-4">
-          <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-          </svg>
-        </div>
-        <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">Drawer Count Verified Successfully!</h2>
-        <div id="eodVerificationSuccessContent" class="text-slate-600 dark:text-slate-400 space-y-2 text-center mt-4">
-          <!-- Content will be populated dynamically -->
-        </div>
-      </div>
-      <div class="flex gap-3">
-        <button 
-          id="eodVerificationSuccessPrintBtn"
-          onclick="printEODVerificationReceipt()" 
-          class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
-        >
-          Print Receipt
-        </button>
-        <button 
-          onclick="hideEODVerificationSuccessModal()" 
-          class="flex-1 px-4 py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold rounded-lg transition-colors"
-        >
-          OK
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Drawer Count Success Modal -->
-  <div id="drawerCountSuccessModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
-      <div class="text-center mb-6">
-        <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 dark:bg-green-900 mb-4">
-          <svg class="h-6 w-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-          </svg>
-        </div>
-        <h2 id="drawerCountSuccessTitle" class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">Drawer Counted Successfully</h2>
-        <div id="drawerCountSuccessContent" class="text-slate-600 dark:text-slate-400 space-y-2">
-          <!-- Content will be populated dynamically -->
-        </div>
-      </div>
-      <div class="flex gap-3">
-        <button 
-          id="drawerCountSuccessPrintBtn"
-          onclick="printDrawerCountSuccessReceipt()" 
-          class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
-        >
-          Print Receipt
-        </button>
-        <button 
-          onclick="hideDrawerCountSuccessModal()" 
-          class="flex-1 px-4 py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold rounded-lg transition-colors"
-        >
-          OK
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Payment Receipt Popup Modal -->
-  <div id="paymentReceiptPopupModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
-      <div class="text-center mb-6">
-        <h2 class="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4">Payment Processed Successfully</h2>
-        <p class="text-slate-600 dark:text-slate-400">Do you want a receipt?</p>
-      </div>
-      <div class="flex gap-3">
-        <button 
-          id="paymentReceiptPopupYesBtn"
-          onclick="handleReceiptPopupYes()" 
-          class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
-        >
-          Yes
-        </button>
-        <button 
-          onclick="hidePaymentReceiptPopup()" 
-          class="flex-1 px-4 py-3 bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold rounded-lg transition-colors"
-        >
-          No
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <div class="mx-auto max-w-7xl px-4 pt-6 pb-24 safe-pad">
-
-    <!-- Dashboard Screen -->
-    <div id="dashboardScreen">
-      <!-- Header -->
-      <header class="mb-8">
-        <div class="text-center">
-          <br><br>
-          <!-- CUS Logo -->
-          <div class="mb-4 flex justify-center">
-            <img src="CUS Logo.jpeg" alt="CUS Logo" class="h-24 w-auto object-contain">
-          </div>
-          <h1 class="text-3xl font-bold text-slate-800 dark:text-slate-200">CUS Admin Dashboard</h1>
-          <p class="text-slate-600 dark:text-slate-400">Manage customer accounts and billing</p>
-        </div>
-      </header>
-
-      <!-- Action Modules -->
-      <div id="actionModules" class="mb-8">
-        <!-- Payment Module -->
-        <div id="paymentModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
-          <div class="flex justify-between items-center mb-6">
-            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Process Payment</h3>
-            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-              </svg>
-            </button>
-          </div>
-
-          <div class="space-y-4">
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Customer</label>
-              <select id="paymentCustomerSelect" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
-                <option value="">Choose a customer...</option>
-              </select>
-            </div>
-
-            <div id="customerPaymentInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
-              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Total Amount Due</p>
-                  <p id="paymentAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
-                  <button id="viewDetailsBtn" onclick="showPaymentDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
-                    View Details
-                  </button>
-                </div>
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
-                  <p id="paymentPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
-                  <button type="button" onclick="openPaymentPastDueDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
-                </div>
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
-                  <p id="paymentLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
-                  <button type="button" onclick="openPaymentLateFeeDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Property Location</p>
-                  <p id="paymentPropertyLocation" class="text-sm font-medium text-slate-800 dark:text-slate-200">--</p>
-                </div>
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Due Date</p>
-                  <p id="paymentDueDate" class="text-lg font-semibold text-slate-800 dark:text-slate-200">--/--/----</p>
-                </div>
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Account Status</p>
-                  <span id="paymentStatusIndicator" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium">
-                    <!-- Status will be populated by JavaScript -->
-                  </span>
-                </div>
-              </div>
-
-              <div class="mb-4">
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Type</label>
-                <select 
-                  id="paymentType" 
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                >
-                  <option value="">Select Payment Type</option>
-                  <option value="Check">Check</option>
-                  <option value="Cash">Cash</option>
-                </select>
-              </div>
-
-              <div class="mb-4">
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Amount</label>
-                <input 
-                  type="number" 
-                  id="paymentAmount" 
-                  step="0.01" 
-                  min="0" 
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="Enter payment amount"
-                >
-              </div>
-
-              <button 
-                onclick="processPaymentFromModule()" 
-                class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
-              >
-                Process Payment
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Bill Module -->
-        <div id="billModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
-          <div class="flex justify-between items-center mb-6">
-            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Process Bill</h3>
-            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-              </svg>
-            </button>
-          </div>
-
-          <div class="space-y-4">
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Customer</label>
-              <div class="relative">
-                <input type="hidden" id="billSelectedCustomerId" value="" />
-                <input type="text" id="billCustomerSearch" autocomplete="off"
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="Search by name, account number, address, or phone number..."
-                  oninput="handleBillCustomerSearchInput()"
-                  onfocus="handleBillCustomerSearchInput()"
-                />
-                <div id="billCustomerSearchResults" class="hidden absolute z-50 left-0 right-0 mt-1 max-h-60 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-lg"></div>
-              </div>
-            </div>
-
-            <div id="customerBillInfo" class="hidden bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
-              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Total Amount Due</p>
-                  <p id="billAmountDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
-                  <button id="viewBillDetailsBtn" onclick="showBillDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">
-                    View Details
-                  </button>
-                </div>
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Past Due</p>
-                  <p id="billPastDue" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
-                  <button type="button" onclick="openProcessBillPastDueDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
-                </div>
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Late Fee</p>
-                  <p id="billLateFee" class="text-lg font-semibold text-slate-800 dark:text-slate-200">$0.00</p>
-                  <button type="button" onclick="openProcessBillLateFeeDetailsModal()" class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 text-xs mt-1">View Details</button>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Property Location</p>
-                  <p id="billPropertyLocation" class="text-sm font-medium text-slate-800 dark:text-slate-200">--</p>
-                </div>
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Due Date</p>
-                  <p id="billDueDate" class="text-lg font-semibold text-slate-800 dark:text-slate-200">--/--/----</p>
-                </div>
-                <div>
-                  <p class="text-sm text-slate-600 dark:text-slate-400">Account Status</p>
-                  <span id="billStatusIndicator" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium">
-                    <!-- Status will be populated by JavaScript -->
-                  </span>
-                </div>
-              </div>
-
-              <!-- Bill Preview -->
-              <div id="billPreview" class="mb-4 p-4 bg-white dark:bg-slate-600 rounded-lg border-2 border-slate-300 dark:border-slate-500">
-                <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-3">Bill Preview</h4>
-                <div class="space-y-2 text-sm">
-                  <div class="flex justify-between">
-                    <span class="text-slate-600 dark:text-slate-400">Service Cost:</span>
-                    <span id="previewServiceCost" class="font-medium text-slate-800 dark:text-slate-200">$0.00</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span class="text-slate-600 dark:text-slate-400">Late Fee:</span>
-                    <span id="previewLateFee" class="font-medium text-slate-800 dark:text-slate-200">$0.00</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span class="text-slate-600 dark:text-slate-400">Surcharges:</span>
-                    <span id="previewSurcharges" class="font-medium text-slate-800 dark:text-slate-200">$0.00</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span class="text-slate-600 dark:text-slate-400">Factor Adjustment:</span>
-                    <span id="previewFactorAdjustment" class="font-medium text-slate-800 dark:text-slate-200">$0.00</span>
-                  </div>
-                  <div class="flex justify-between pt-2 border-t border-slate-300 dark:border-slate-500">
-                    <span class="font-semibold text-slate-800 dark:text-slate-200">Total Amount:</span>
-                    <span id="previewTotalAmount" class="font-bold text-lg text-slate-800 dark:text-slate-200">$0.00</span>
-                  </div>
-                </div>
-              </div>
-
-              <button 
-                onclick="produceBill()" 
-                class="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
-              >
-                Produce Bill
-              </button>
-
-              <!-- PDF Display Container -->
-              <div id="billPdfDisplay" class="hidden mt-4">
-                <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Generated Bill PDF</h4>
-                <iframe id="billPdfViewer" class="w-full border-2 border-slate-300 dark:border-slate-600 rounded-lg" style="height: min(85vh, 1000px); min-height: 720px;" title="Bill PDF Preview"></iframe>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Add Client Module -->
-        <div id="addClientModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
-          <div class="flex justify-between items-center mb-6">
-            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add New Client</h3>
-            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-              </svg>
-            </button>
-          </div>
-
-          <div class="mt-6 rounded-2xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 p-5 md:p-6 shadow-sm">
-            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Account Info</h4>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
-              <input 
-                type="text" 
-                id="newClientName" 
-                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                placeholder="Enter full name"
-                required
-              >
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email</label>
-              <input 
-                type="email" 
-                id="newClientEmail" 
-                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                placeholder="Enter email address"
-                required
-              >
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Phone Number</label>
-              <input 
-                type="tel" 
-                id="newClientPhone" 
-                oninput="formatPhoneInput(this)"
-                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                placeholder="(xxx)-xxx-xxxx"
-                required
-              >
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Deposit Amount</label>
-              <input 
-                type="number" 
-                id="newClientDeposit" 
-                step="0.01"
-                min="0"
-                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                placeholder="Enter deposit amount"
-                value="1000.00"
-                required
-              >
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Property Location</label>
-              <input type="hidden" id="newClientLocation" value="" />
-              <div class="relative">
-                <input
-                  type="text"
-                  id="newClientLocationInput"
-                  autocomplete="off"
-                  placeholder="Type to search locations…"
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                />
-                <div id="newClientLocationDropdown" class="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 shadow-lg hidden" role="listbox"></div>
-              </div>
-              <button type="button" onclick="showAddLocationModal()" class="mt-2 text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">+ Add New Location</button>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Entity Type</label>
-              <select id="newClientEntityType" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
-                <option value="">Select Entity Type</option>
-                <option value="Individual">Individual</option>
-                <option value="Business">Business</option>
-                <option value="Farmer">Farmer</option>
-              </select>
-            </div>
-            </div>
-          </div>
-
-          <!-- Identification Info Section -->
-          <div class="mt-6 rounded-2xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 p-5 md:p-6 shadow-sm">
-            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Identification Info</h4>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Social Security Number</label>
-                <input 
-                  type="text" 
-                  id="newClientSSN" 
-                  oninput="formatSSNInput(this)"
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="xxx-xx-xxxx"
-                  maxlength="11"
-                >
-              </div>
-
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Type</label>
-                <select id="newClientIDType" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
-                  <option value="">Select ID Type</option>
-                  <option value="Drivers License">Drivers License</option>
-                  <option value="ID">ID</option>
-                  <option value="Passport">Passport</option>
-                </select>
-              </div>
-
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ID Number</label>
-                <input 
-                  type="text" 
-                  id="newClientIDNumber" 
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="Enter ID number"
-                >
-              </div>
-
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Name</label>
-                <input 
-                  type="text" 
-                  id="newClientSecondaryContactName" 
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="Enter secondary contact name"
-                >
-              </div>
-
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Secondary Contact Number</label>
-                <input 
-                  type="tel" 
-                  id="newClientSecondaryContactPhone" 
-                  oninput="formatPhoneInput(this)"
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="(xxx)-xxx-xxxx"
-                >
-              </div>
-            </div>
-          </div>
-
-          <div class="mt-6 rounded-2xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 p-5 md:p-6 shadow-sm">
-            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Mailing Address</h4>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Street Address</label>
-                <input 
-                  type="text" 
-                  id="newClientMailingStreet" 
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="Enter street address"
-                >
-              </div>
-
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">City</label>
-                <input 
-                  type="text" 
-                  id="newClientMailingCity" 
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="Enter city"
-                >
-              </div>
-
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">State</label>
-                <select id="newClientMailingState" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200">
-                  <option value="">Select State</option>
-                  <option value="AL">Alabama</option>
-                  <option value="AK">Alaska</option>
-                  <option value="AZ">Arizona</option>
-                  <option value="AR">Arkansas</option>
-                  <option value="CA">California</option>
-                  <option value="CO">Colorado</option>
-                  <option value="CT">Connecticut</option>
-                  <option value="DE">Delaware</option>
-                  <option value="FL">Florida</option>
-                  <option value="GA">Georgia</option>
-                  <option value="HI">Hawaii</option>
-                  <option value="ID">Idaho</option>
-                  <option value="IL">Illinois</option>
-                  <option value="IN">Indiana</option>
-                  <option value="IA">Iowa</option>
-                  <option value="KS">Kansas</option>
-                  <option value="KY">Kentucky</option>
-                  <option value="LA">Louisiana</option>
-                  <option value="ME">Maine</option>
-                  <option value="MD">Maryland</option>
-                  <option value="MA">Massachusetts</option>
-                  <option value="MI">Michigan</option>
-                  <option value="MN">Minnesota</option>
-                  <option value="MS">Mississippi</option>
-                  <option value="MO">Missouri</option>
-                  <option value="MT">Montana</option>
-                  <option value="NE">Nebraska</option>
-                  <option value="NV">Nevada</option>
-                  <option value="NH">New Hampshire</option>
-                  <option value="NJ">New Jersey</option>
-                  <option value="NM">New Mexico</option>
-                  <option value="NY">New York</option>
-                  <option value="NC">North Carolina</option>
-                  <option value="ND">North Dakota</option>
-                  <option value="OH">Ohio</option>
-                  <option value="OK">Oklahoma</option>
-                  <option value="OR">Oregon</option>
-                  <option value="PA">Pennsylvania</option>
-                  <option value="RI">Rhode Island</option>
-                  <option value="SC">South Carolina</option>
-                  <option value="SD">South Dakota</option>
-                  <option value="TN">Tennessee</option>
-                  <option value="TX">Texas</option>
-                  <option value="UT">Utah</option>
-                  <option value="VT">Vermont</option>
-                  <option value="VA">Virginia</option>
-                  <option value="WA">Washington</option>
-                  <option value="WV">West Virginia</option>
-                  <option value="WI">Wisconsin</option>
-                  <option value="WY">Wyoming</option>
-                </select>
-              </div>
-
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ZIP Code</label>
-                <input 
-                  type="text" 
-                  id="newClientMailingZip" 
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="Enter ZIP code"
-                  maxlength="10"
-                >
-              </div>
-            </div>
-          </div>
-
-            <div class="mt-6 rounded-2xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 p-5 md:p-6 shadow-sm">
-              <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-                <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Tax Codes</h4>
-                <button type="button" onclick="openAddClientCodesModal()" class="shrink-0 px-4 py-2 rounded-xl text-sm font-semibold border-2 border-slate-500 dark:border-slate-400 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 transition-colors">Add Codes</button>
-              </div>
-              <div id="newClientCodesList" class="space-y-2">
-                <!-- Selected codes will be displayed here -->
-              </div>
-            </div>
-
-          <div class="mt-6 rounded-2xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 p-5 md:p-6 shadow-sm">
-            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-4">Factor</h4>
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Factor</label>
-              <input 
-                type="number" 
-                id="newClientFactor" 
-                step="any"
-                class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                placeholder="Enter factor"
-              >
-            </div>
-          </div>
-
-          <div class="mt-6">
-            <button 
-              onclick="addClientFromModule()" 
-              class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200"
-            >
-              Create Client Account
-            </button>
-          </div>
-        </div>
-
-        <!-- Search Module -->
-        <div id="searchModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
-          <div class="flex justify-between items-center mb-6">
-            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Search Accounts</h3>
-            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-              </svg>
-            </button>
-          </div>
-
-          <div class="space-y-4">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search by Name</label>
-                <input 
-                  type="text" 
-                  id="searchByName" 
-                  class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                  placeholder="Search by name, account number, address, or phone number..."
-                  oninput="performSearch()"
-                >
-              </div>
-
-              <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Filter by Status</label>
-                <select id="searchByStatus" class="w-full px-4 py-3 border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200" onchange="performSearch()">
-                  <option value="">All Status</option>
-                  <option value="current">Current</option>
-                  <option value="late">Late</option>
-                  <option value="overdue">Overdue</option>
-                  <option value="30days">30 days late</option>
-                  <option value="60days">60 days late</option>
-                  <option value="90days">90 days late</option>
-                </select>
-              </div>
-            </div>
-
-            <div id="searchResults" class="mt-6">
-              <!-- Search results will be displayed here -->
-            </div>
-          </div>
-        </div>
-
-        <!-- Drawer Count Module -->
-        <div id="drawerCountModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6">
-          <div class="flex justify-between items-center mb-6">
-            <div>
-              <h3 id="drawerCountTitle" class="text-2xl font-bold text-slate-800 dark:text-slate-200">Cash Register Count</h3>
-              <p class="text-sm text-slate-500 dark:text-slate-400">Enter quantities to establish the initial register balance.</p>
-            </div>
-            <button onclick="cancelDrawerCount()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-              </svg>
-              </button>
-            </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="space-y-3">
-              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Bills</h5>
-              <div id="drawerCountBillsContainer" class="grid grid-cols-2 gap-3">
-                <!-- Bills will be populated dynamically -->
-              </div>
-            </div>
-
-            <div class="space-y-3">
-              <h5 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Coins</h5>
-              <div id="drawerCountCoinsContainer" class="grid grid-cols-2 gap-3">
-                <!-- Coins will be populated dynamically -->
-              </div>
-            </div>
-          </div>
-
-          <div class="flex items-center justify-between mt-6">
-            <div>
-              <p id="drawerCountTotal" class="text-sm font-semibold text-slate-700 dark:text-slate-100">Total: $0.00</p>
-            </div>
-            <div class="flex gap-3">
-              <button onclick="clearDrawerCount()" class="px-4 py-2 text-sm bg-slate-200 rounded-lg">Clear</button>
-              <button onclick="saveDrawerCount()" class="px-4 py-2 text-sm bg-green-600 text-white rounded-lg">Save Drawer Count</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Settings Module -->
-        <div id="settingsModule" class="hidden card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 relative">
-          <!-- Loading Overlay -->
-          <div id="settingsLoadingOverlay" class="absolute inset-0 bg-white dark:bg-slate-800 bg-opacity-90 dark:bg-opacity-90 flex items-center justify-center z-50 rounded-3xl hidden">
-            <div class="text-center">
-              <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-              <p class="text-slate-700 dark:text-slate-300 font-medium">Loading settings data...</p>
-            </div>
-          </div>
-
-          <div class="flex justify-between items-center mb-6">
-            <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Settings & Management</h3>
-            <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-              </svg>
-            </button>
-      </div>
-
-      <!-- Tab Navigation -->
-      <div class="flex space-x-1 mb-6">
-            <button 
-              id="settingsAccountsTab"
-              onclick="switchSettingsView('accounts')" 
-              class="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium"
-            >
-              Accounts
-            </button>
-            <button 
-              id="settingsLocationsTab"
-              onclick="switchSettingsView('locations')" 
-              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
-            >
-              Locations
-            </button>
-            <button 
-              id="settingsCodesTab"
-              onclick="switchSettingsView('codes')" 
-              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
-            >
-              Codes
-            </button>
-            <button 
-              id="settingsUsersTab"
-              onclick="switchSettingsView('users')" 
-              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
-            >
-              Users
-            </button>
-            <button 
-              id="settingsCleanupTab"
-              onclick="switchSettingsView('cleanup')" 
-              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
-            >
-              Data Cleanup
-            </button>
-            <button 
-              id="settingsHierarchyTab"
-              onclick="switchSettingsView('hierarchy')" 
-              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
-            >
-              Hierarchy
-            </button>
-            <button 
-              id="settingsDrawersTab"
-              onclick="switchSettingsView('drawers')" 
-              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
-            >
-              Drawers
-            </button>
-            <button 
-              id="settingsTogglesTab"
-              onclick="switchSettingsView('toggles')" 
-              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
-            >
-              Toggles
-            </button>
-          </div>
-
-          <!-- Accounts Section -->
-          <div id="settingsAccountsContent">
-            <div class="flex justify-between items-center mb-6">
-              <div>
-                <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">Customer Accounts</h4>
-                <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                  Showing <span id="settingsCustomerCountDisplay" class="font-semibold">0</span> of <span id="settingsCustomerTotalDisplay" class="font-semibold">0</span> customers
-                </p>
-              </div>
-              <div class="flex flex-col gap-2">
-                <button 
-                  onclick="showImportCustomerDataModal()" 
-                  class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm"
-                >
-                  Import Customer Data
-                </button>
-                <button 
-                  onclick="deleteAllUserData()" 
-                  class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors text-sm"
-                >
-                  Delete User Data
-                </button>
-                <button 
-                  onclick="logout()" 
-                  class="bg-slate-600 text-white px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors text-sm"
-                >
-                  Logout
-                </button>
-              </div>
-            </div>
-
-            <!-- Search and Filter -->
-            <div class="flex flex-col md:flex-row gap-4 mb-6">
-              <div class="flex-1">
-                <input 
-                  id="settingsCustomerSearch" 
-                  type="text" 
-                  placeholder="Search by name, account number, address, or phone number..." 
-                  class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  oninput="searchCustomersTable()"
-                />
-              </div>
-              <div>
-                <select 
-                  onchange="filterByStatus(this.value)" 
-                  class="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="all">All Status</option>
-                  <option value="current">Current</option>
-                  <option value="late">Late</option>
-                  <option value="overdue">Overdue</option>
-                  <option value="no-codes">No codes</option>
-                  <option value="has-codes">Has codes</option>
-                </select>
-              </div>
-            </div>
-
-            <!-- Customer Table -->
-            <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-700">
-                  <tr>
-                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Account</th>
-                    <th class="px-0 py-3 pr-0 -mr-4 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider max-w-[180px]">Customer</th>
-                    <th class="px-0 py-3 pl-0 -ml-4 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider max-w-[180px]">Property</th>
-                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
-                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Due</th>
-                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Codes</th>
-                    <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="settingsCustomerTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-                  <!-- Customer rows will be populated by JavaScript -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Locations Section -->
-          <div id="settingsLocationsContent" class="hidden">
-            <div class="flex justify-between items-center mb-6">
-              <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">Property Locations</h4>
-              <div class="flex gap-3">
-                <button 
-                  onclick="showAddLocationModal()" 
-                  class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  Add Location
-                </button>
-                <button 
-                  onclick="showImportModal()" 
-                  class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
-                >
-                  Import Locations
-                </button>
-              </div>
-            </div>
-
-            <!-- Search and Filter -->
-            <div class="flex flex-col md:flex-row gap-4 mb-6">
-              <div class="flex-1">
-                <input 
-                  id="settingsLocationSearch" 
-                  type="text" 
-                  placeholder="Search locations..." 
-                  class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  onkeyup="searchLocations()"
-                />
-              </div>
-              <div>
-                <select 
-                  onchange="filterLocationsByStatus(this.value)" 
-                  class="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="all">All Status</option>
-                  <option value="occupied">Occupied</option>
-                  <option value="available">Available</option>
-                </select>
-              </div>
-            </div>
-
-            <!-- Locations Table -->
-            <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-700">
-                  <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Premise ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Owner & Resident</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
-                    <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="settingsLocationsTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-                  <!-- Location rows will be populated by JavaScript -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Codes Section -->
-          <div id="settingsCodesContent" class="hidden">
-            <!-- Sewer Charge Setting -->
-            <div class="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6 mb-6">
-              <div class="flex justify-between items-center mb-4">
-                <div>
-                  <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Sewer Charge</h4>
-                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Set the default sewer service charge amount</p>
-                </div>
-              </div>
-              <div class="flex items-center gap-4">
-                <div class="flex-1">
-                  <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Amount ($)</label>
-                  <input 
-                    type="number" 
-                    id="sewerChargeInput" 
-                    min="0" 
-                    step="0.01"
-                    class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="170.00"
-                  />
-                </div>
-                <div class="flex items-end">
-                  <button 
-                    onclick="saveSewerCharge()" 
-                    class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-              <div class="mt-2">
-                <p class="text-xs text-slate-500 dark:text-slate-400" id="sewerChargeStatus"></p>
-              </div>
-            </div>
-
-            <!-- Late Fee Setting -->
-            <div class="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6 mb-6">
-              <div class="flex justify-between items-center mb-4">
-                <div>
-                  <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">Late Fee</h4>
-                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">One late fee per bill when the per-bill timer reaches the day set in System Toggles (default 21; if amount owed is not $0): flat, percent of past due, or combination. The 30-60-90 delinquency timer is separate (search / deposit auto-withdraw threshold is also in Toggles).</p>
-                </div>
-              </div>
-              <div class="flex flex-wrap items-center gap-4 mb-4">
-                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Type:</span>
-                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
-                  <input type="radio" name="lateFeeMode" id="lateFeeModeFlat" value="flat" class="rounded-full border-slate-300" onchange="syncLateFeeModeLabels()" />
-                  Flat ($)
-                </label>
-                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
-                  <input type="radio" name="lateFeeMode" id="lateFeeModePercent" value="percent" class="rounded-full border-slate-300" onchange="syncLateFeeModeLabels()" />
-                  Percent of past due (%)
-                </label>
-                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
-                  <input type="radio" name="lateFeeMode" id="lateFeeModeCombination" value="combination" class="rounded-full border-slate-300" onchange="syncLateFeeModeLabels()" />
-                  Combination (max of flat vs %)
-                </label>
-              </div>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
-                <div id="lateFeeFlatFieldWrap" class="flex-1">
-                  <label id="lateFeeFlatLabel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Flat amount per bill late event ($)</label>
-                  <input 
-                    type="number" 
-                    id="lateFeeFlatInput" 
-                    min="0" 
-                    step="0.01"
-                    class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="10.00"
-                  />
-                </div>
-                <div id="lateFeePercentFieldWrap" class="flex-1">
-                  <label id="lateFeePercentLabel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Percent of past due (%)</label>
-                  <input 
-                    type="number" 
-                    id="lateFeePercentInput" 
-                    min="0" 
-                    max="100"
-                    step="0.01"
-                    class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="5.00"
-                  />
-                </div>
-                <div class="sm:col-span-2 flex justify-end">
-                  <button 
-                    onclick="saveLateFee()" 
-                    class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-              <div class="mt-2">
-                <p class="text-xs text-slate-500 dark:text-slate-400" id="lateFeeStatus"></p>
-              </div>
-            </div>
-
-            <!-- PUC Surcharge Setting -->
-            <div class="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-6 mb-6">
-              <div class="flex justify-between items-center mb-4">
-                <div>
-                  <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200">PUC Surcharge</h4>
-                  <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Set the PUC surcharge percentage (applied to all customers)</p>
-                </div>
-              </div>
-              <div class="flex items-center gap-4">
-                <div class="flex-1">
-                  <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Percentage (%)</label>
-                  <input 
-                    type="number" 
-                    id="pucSurchargeInput" 
-                    min="0" 
-                    max="100"
-                    step="0.01"
-                    class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0.00"
-                  />
-                </div>
-                <div class="flex items-end">
-                  <button 
-                    onclick="savePucSurcharge()" 
-                    class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-              <div class="mt-2">
-                <p class="text-xs text-slate-500 dark:text-slate-400" id="pucSurchargeStatus"></p>
-              </div>
-            </div>
-
-            <div class="flex justify-between items-center mb-6">
-              <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">Tax Codes</h4>
-              <button 
-                onclick="showAddCodeModal()" 
-                class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                Add Code
-              </button>
-            </div>
-
-            <!-- Codes Table -->
-            <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-700">
-                  <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Code Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Type</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Description</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Requirements</th>
-                    <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="settingsCodesTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-                  <!-- Code rows will be populated by JavaScript -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Users Section -->
-          <div id="settingsUsersContent" class="hidden">
-            <div class="flex justify-between items-center mb-6">
-              <h4 class="text-xl font-bold text-slate-800 dark:text-slate-200">System Users</h4>
-              <button 
-                onclick="showAddUserModal()" 
-                class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                Add User
-              </button>
-            </div>
-
-            <div class="flex flex-col md:flex-row gap-4 mb-6">
-              <div class="flex-1">
-                <input 
-                  id="settingsUserSearch" 
-                  type="text" 
-                  placeholder="Search users..." 
-                  class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  onkeyup="searchUsers()"
-                />
-              </div>
-            </div>
-
-            <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-700">
-                  <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Full Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">User Code</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Title</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Created</th>
-                    <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="settingsUsersTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-                  <!-- User rows populated dynamically -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Data Cleanup Section -->
-          <div id="settingsCleanupContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
-            <div class="mb-6">
-              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Data Cleanup</h2>
-              <p class="text-sm text-slate-500 dark:text-slate-400">
-                Tools to clean up and fix data issues in customer records
-              </p>
-            </div>
-
-            <div class="space-y-4">
-              <!-- Today's Date Input for Testing -->
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-4 rounded-xl border border-slate-200 dark:border-slate-700 mb-6">
-                <h3 class="font-semibold text-slate-800 dark:text-slate-200 mb-2">Test Date</h3>
-                <p class="text-sm text-slate-600 dark:text-slate-300 mb-4">
-                  Set a test date to simulate how the system behaves on different dates (e.g., when the month changes). Changes save automatically. Leave empty to use the real current date.
-                </p>
-                <div class="flex flex-wrap items-end gap-4">
-                  <div class="flex-1 min-w-[200px]">
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Today's Date</label>
-                    <input 
-                      type="date" 
-                      id="testDateInput" 
-                      class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      onclick="if (this.showPicker) this.showPicker()"
-                      onchange="applyTestDateFromInput()"
-                    />
-                  </div>
-                  <div class="flex flex-wrap items-end gap-2">
-                    <button 
-                      type="button"
-                      onclick="resetTestDateToRealToday()" 
-                      class="bg-slate-500 text-white px-4 py-2 rounded-lg hover:bg-slate-600 transition-colors font-medium"
-                      title="Set test date to today (real current calendar date)"
-                    >
-                      Reset
-                    </button>
-                    <button 
-                      type="button"
-                      id="advanceTestDateByLateFeeTimerBtn"
-                      onclick="advanceTestDateBy21Days()" 
-                      class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors font-medium"
-                      title="Advance test date by the configured per-bill late-fee timer, one calendar day at a time"
-                    >
-                      21+ days
-                    </button>
-                  </div>
-                </div>
-                <p class="text-xs text-slate-500 dark:text-slate-400 mt-2" id="testDateStatus">
-                  Using real current date: <span id="currentDateDisplay"></span>
-                </p>
-              </div>
-
-              <div class="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-xl border border-indigo-200 dark:border-indigo-700">
-                <h3 class="font-semibold text-indigo-800 dark:text-indigo-200 mb-2">Test 30-60-90</h3>
-                <p class="text-sm text-indigo-600 dark:text-indigo-300 mb-4">
-                  Reset every account&apos;s deposit to <strong>$1,000</strong>, past due to <strong>$0</strong>, clear all payment history and current-month payments, and clear bill-print metadata so you can test 30/60/90-day flows from a clean slate. Full-pay rows use the test date after Fresh start runs (see <strong>Set Date</strong> below).
-                </p>
-                <div class="flex flex-wrap items-center gap-4 mb-4">
-                  <label class="inline-flex items-center gap-2 cursor-pointer text-sm text-indigo-800 dark:text-indigo-200 select-none">
-                    <input type="checkbox" id="toggleFreshStartSetDate" class="rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500" onchange="onFreshStartSetDateCheckboxChange()" />
-                    Set Date
-                  </label>
-                  <div id="freshStartSetDateRow" class="hidden flex flex-wrap items-center gap-2">
-                    <label for="freshStartSetDateInput" class="text-sm text-indigo-800 dark:text-indigo-200">Fresh start date</label>
-                    <input
-                      type="date"
-                      id="freshStartSetDateInput"
-                      class="px-3 py-2 border border-indigo-300 dark:border-indigo-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      onclick="if (this.showPicker) this.showPicker()"
-                      onchange="saveFreshStartSetDateOptions()"
-                    />
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onclick="test306090FreshStart()"
-                  class="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors font-medium"
-                  title="Reset deposits, past due, and payments for all customers; optionally set test date from Set Date"
-                >
-                  Fresh start (reset all)
-                </button>
-              </div>
-
-              <div class="bg-teal-50 dark:bg-teal-900/20 p-4 rounded-xl border border-teal-200 dark:border-teal-700">
-                <h3 class="font-semibold text-teal-800 dark:text-teal-200 mb-2">City / state / zip (bill PDF)</h3>
-                <p class="text-sm text-teal-700 dark:text-teal-300 mb-4">
-                  Set <strong>City</strong> (Salinas), <strong>State</strong> (California), and <strong>Zip</strong> (93907) on every customer. These fields appear as extra columns in each customer&apos;s data profile and feed the <code class="text-xs bg-teal-100 dark:bg-teal-900/40 px-1 rounded">address_city_state_zip</code> line on generated bill PDFs.
-                </p>
-                <button
-                  type="button"
-                  onclick="applyDefaultCityStateZipAllCustomers()"
-                  class="bg-teal-600 text-white px-6 py-3 rounded-lg hover:bg-teal-700 transition-colors font-medium"
-                  title="Set mailing city, state, and zip for all customers (bill PDF)"
-                >
-                  City zip
-                </button>
-              </div>
-
-              <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-200 dark:border-blue-700">
-                <h3 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Data Synchronization</h3>
-                <p class="text-sm text-blue-600 dark:text-blue-300 mb-4">
-                  Re-sync past due amounts from imported Excel data
-                </p>
-                <button 
-                  onclick="syncPastDueFromImportData()" 
-                  class="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition-colors font-medium"
-                  title="Re-sync past due amounts from imported Excel data"
-                >
-                  Sync Past Due Amounts
-                </button>
-              </div>
-
-              <div class="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-xl border border-orange-200 dark:border-orange-700">
-                <h3 class="font-semibold text-orange-800 dark:text-orange-200 mb-2">Date Fixes</h3>
-                <p class="text-sm text-orange-600 dark:text-orange-300 mb-4">
-                  Fix Excel serial dates that appear as numbers (like 46053) in customer data
-                </p>
-                <div class="flex flex-col gap-3">
-                  <button 
-                    onclick="fixBillDates()" 
-                    class="bg-orange-600 text-white px-6 py-3 rounded-lg hover:bg-orange-700 transition-colors font-medium"
-                    title="Fix Bill Date column in all customer records"
-                  >
-                    Fix Dates
-                  </button>
-                  <button 
-                    onclick="fixExcelDates()" 
-                    class="bg-orange-500 text-white px-6 py-3 rounded-lg hover:bg-orange-600 transition-colors font-medium"
-                    title="Fix all Excel serial dates (like 46053) in customer importData"
-                  >
-                    Fix All Excel Dates
-                  </button>
-                </div>
-              </div>
-
-              <div class="bg-green-50 dark:bg-green-900/20 p-4 rounded-xl border border-green-200 dark:border-green-700">
-                <h3 class="font-semibold text-green-800 dark:text-green-200 mb-2">Cycle Number Assignment</h3>
-                <p class="text-sm text-green-600 dark:text-green-300 mb-4">
-                  Split all accounts evenly across cycles 1-10 (for testing purposes)
-                </p>
-                <button 
-                  onclick="splitAccountsByCycle()" 
-                  class="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors font-medium"
-                  title="Split all accounts evenly across cycles 1-10"
-                >
-                  Split Accounts by Cycle
-                </button>
-              </div>
-
-              <div class="bg-red-50 dark:bg-red-900/20 p-4 rounded-xl border border-red-200 dark:border-red-700">
-                <h3 class="font-semibold text-red-800 dark:text-red-200 mb-2">Credit Management</h3>
-                <p class="text-sm text-red-600 dark:text-red-300 mb-4">
-                  Reset all accounts with credits so that the credit is removed
-                </p>
-                <button 
-                  onclick="resetCredits()" 
-                  class="bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition-colors font-medium"
-                  title="Reset all accounts with credits (pastDue < 0) to have pastDue = 0"
-                >
-                  Reset Credits
-                </button>
-              </div>
-
-              <div class="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-xl border border-yellow-200 dark:border-yellow-700">
-                <h3 class="font-semibold text-yellow-800 dark:text-yellow-200 mb-2">Payment History</h3>
-                <p class="text-sm text-yellow-600 dark:text-yellow-300 mb-4">
-                  Reset all customers who have past payments so the data looks like they never paid any past payments
-                </p>
-                <button 
-                  onclick="resetPayments()" 
-                  class="bg-yellow-600 text-white px-6 py-3 rounded-lg hover:bg-yellow-700 transition-colors font-medium"
-                  title="Clear all payment history and reset lastPayment to 'Never' for all customers"
-                >
-                  Reset Payments
-                </button>
-              </div>
-
-              <div class="bg-red-50 dark:bg-red-900/20 p-4 rounded-xl border border-red-200 dark:border-red-700">
-                <h3 class="font-semibold text-red-800 dark:text-red-200 mb-2">Drawers</h3>
-                <p class="text-sm text-red-600 dark:text-red-300 mb-4">
-                  Reset all drawers by deleting and recreating them, clearing count history and requiring new SOD counts
-                </p>
-                <button 
-                  onclick="resetAllDrawers()" 
-                  class="bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition-colors font-medium"
-                  title="Reset all drawers and clear their count history"
-                >
-                  Reset Drawers
-                </button>
-              </div>
-
-              <div class="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-xl border border-purple-200 dark:border-purple-700">
-                <h3 class="font-semibold text-purple-800 dark:text-purple-200 mb-2">Deposit Management</h3>
-                <p class="text-sm text-purple-600 dark:text-purple-300 mb-4">
-                  Reset all customers' deposits back to $1000.00
-                </p>
-                <button 
-                  onclick="resetDeposits()" 
-                  class="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition-colors font-medium"
-                  title="Reset all deposits to $1000.00"
-                >
-                  Reset Deposits
-                </button>
-              </div>
-
-              <div class="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-xl border border-indigo-200 dark:border-indigo-700">
-                <h3 class="font-semibold text-indigo-800 dark:text-indigo-200 mb-2">Add Past Due Amount</h3>
-                <p class="text-sm text-indigo-600 dark:text-indigo-300 mb-4">
-                  Add $50.00 past due amount to account CUS-3000500
-                </p>
-                <button 
-                  onclick="addPastDueAmount()" 
-                  class="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors font-medium"
-                  title="Add $50.00 past due to account CUS-3000500"
-                >
-                  Add Past Due Amount
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Hierarchy Section -->
-          <div id="settingsHierarchyContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
-            <div class="mb-6">
-              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Payment Application Hierarchy</h2>
-              <p class="text-sm text-slate-500 dark:text-slate-400">
-                Define the order in which partial payments are applied to different charges. Drag items to reorder.
-              </p>
-            </div>
-
-            <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl border border-blue-200 dark:border-blue-700 mb-6">
-              <p class="text-sm text-blue-600 dark:text-blue-300">
-                <strong>How it works:</strong> When a customer makes a partial payment, the payment will be applied in the order shown below. For example, if the order is "Late fees, Past due amount, Current amount due, Puc surcharge, Tax Codes", the payment will first go toward late fees, then past due, and so on.
-              </p>
-            </div>
-
-            <div id="hierarchyList" class="space-y-3 mb-6">
-              <!-- Hierarchy items will be populated dynamically -->
-            </div>
-
-            <div class="flex justify-end gap-3">
-              <button 
-                onclick="saveHierarchyOrder()" 
-                class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
-              >
-                Save Order
-              </button>
-            </div>
-          </div>
-
-          <!-- Drawers Section -->
-          <div id="settingsDrawersContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
-            <div class="mb-6">
-              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Drawer Management</h2>
-              <p class="text-sm text-slate-500 dark:text-slate-400">
-                Manage cash register drawers. POS users will be prompted to select a drawer when they log in.
-              </p>
-            </div>
-
-            <div class="mb-6">
-              <div class="flex flex-col gap-4 mb-4">
-                <div class="flex items-center gap-4">
-                  <input 
-                    type="text" 
-                    id="newDrawerName" 
-                    placeholder="Enter drawer name (e.g., Drawer 1, Main Register, etc.)"
-                    class="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <input 
-                    type="number" 
-                    id="newDrawerFund" 
-                    step="0.01"
-                    min="0"
-                    placeholder="Drawer fund value ($)"
-                    class="w-48 px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <button 
-                    onclick="addDrawer()" 
-                    class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
-                  >
-                    Add Drawer
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-700">
-                  <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Drawer Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Fund Value</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">SOD Status</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">EOD Status</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Availability</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Created</th>
-                    <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="settingsDrawersTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-                  <!-- Drawer rows will be populated dynamically -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Toggles Section -->
-          <div id="settingsTogglesContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
-            <div class="mb-6">
-              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">System Toggles</h2>
-              <p class="text-sm text-slate-500 dark:text-slate-400">
-                Configure system behavior settings
-              </p>
-            </div>
-
-            <div class="space-y-6">
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div class="flex items-center justify-between">
-                  <div class="flex-1">
-                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Ask for user code for each transaction</h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-300">
-                      When enabled, POS users will be prompted to enter their user code every time they process a payment.
-                    </p>
-                  </div>
-                  <label class="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      id="toggleUserCodePerTransaction" 
-                      class="sr-only peer"
-                      onchange="saveTogglesSettings()"
-                    />
-                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-              </div>
-
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div class="flex items-center justify-between">
-                  <div class="flex-1">
-                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Automatically apply late fees</h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-300">
-                      When enabled, PUBS applies one late fee per bill cycle when the per-bill timer reaches the configured day and the account still owes (30-60-90 is a separate delinquency timer for search and deposit rules). Set day counts below.
-                    </p>
-                  </div>
-                  <label class="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      id="toggleAutoApplyLateFees" 
-                      class="sr-only peer"
-                      onchange="saveTogglesSettings()"
-                    />
-                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-              </div>
-
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Billing timers</h3>
-                <p class="text-sm text-slate-600 dark:text-slate-300 mb-4">
-                  Late fee eligibility is based on days since the last bill print. Deposit auto-withdraw uses the continuous 30–60–90 delinquency timer while the account owes; choose which day on that scale triggers withdrawal.
-                </p>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label for="toggleLateFeeTimerDays" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Late fee day (per-bill timer)</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="365"
-                      id="toggleLateFeeTimerDays"
-                      class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                      onchange="saveTogglesSettings()"
-                      onblur="saveTogglesSettings()"
-                    />
-                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Default 21: late fee can apply starting this many days after the bill print date.</p>
-                  </div>
-                  <div>
-                    <label for="toggleDepositWithdrawDelinquencyDays" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Deposit auto-withdraw (30–60–90 timer)</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="365"
-                      id="toggleDepositWithdrawDelinquencyDays"
-                      class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                      onchange="saveTogglesSettings()"
-                      onblur="saveTogglesSettings()"
-                    />
-                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Default 60: when continuous delinquency reaches this many days, security deposit may auto-apply toward the balance.</p>
-                  </div>
-                </div>
-              </div>
-
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div class="flex items-center justify-between gap-4">
-                  <div class="flex-1">
-                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Late fee grace amount</h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-300">
-                      When enabled, at the per-bill late-fee day the system only adds a late fee if total due (before that fee) is <strong>greater</strong> than the dollar amount you set. Balances at or below that amount are not charged a late fee.
-                    </p>
-                  </div>
-                  <label class="relative inline-flex items-center cursor-pointer shrink-0">
-                    <input
-                      type="checkbox"
-                      id="toggleLateFeeGraceAmountEnabled"
-                      class="sr-only peer"
-                      onchange="saveTogglesSettings(); updateLateFeeGraceAmountInputsVisibility();"
-                    />
-                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-                <div id="lateFeeGraceAmountWrap" class="mt-4 hidden">
-                  <label for="toggleLateFeeGraceAmountDollars" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Maximum total due without a late fee ($)</label>
-                  <input
-                    type="number"
-                    id="toggleLateFeeGraceAmountDollars"
-                    min="0"
-                    step="0.01"
-                    class="w-full max-w-xs px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                    onchange="saveTogglesSettings()"
-                    onblur="saveTogglesSettings()"
-                  />
-                  <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Example: 10 means customers who owe $10.00 or less at the late-fee day will not receive an automatic late fee.</p>
-                </div>
-              </div>
-
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div class="flex items-center justify-between">
-                  <div class="flex-1">
-                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Skip POS initial register count</h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-300">
-                      When enabled, POS users will skip the initial register count screen and go directly to payment processing. The initial count will be assumed to match the supervisor's start of day count.
-                    </p>
-                  </div>
-                  <label class="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      id="toggleSkipPOSInitialCount" 
-                      class="sr-only peer"
-                      onchange="saveTogglesSettings()"
-                    />
-                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-              </div>
-
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div class="flex items-start justify-between mb-4">
-                  <div class="flex-1">
-                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">After hours log out</h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-300 mb-4">
-                      When enabled, POS users will not be able to log in during the specified time range. This helps enforce after-hours restrictions.
-                    </p>
-                  </div>
-                  <label class="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      id="toggleAfterHoursLogout" 
-                      class="sr-only peer"
-                      onchange="saveTogglesSettings(); updateAfterHoursTimeInputs()"
-                    />
-                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-                <div id="afterHoursTimeInputs" class="space-y-3 hidden">
-                  <div>
-                    <label for="afterHoursStartTime" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Start Time</label>
-                    <input 
-                      type="time" 
-                      id="afterHoursStartTime" 
-                      class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                      onchange="saveTogglesSettings()"
-                    />
-                  </div>
-                  <div>
-                    <label for="afterHoursEndTime" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">End Time</label>
-                    <input 
-                      type="time" 
-                      id="afterHoursEndTime" 
-                      class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200"
-                      onchange="saveTogglesSettings()"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div class="flex items-center justify-between">
-                  <div class="flex-1">
-                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">POS Doesn't Close Out</h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-300">
-                      When enabled, the "Close Out Drawer" button will be hidden for POS users, preventing them from closing out their drawer.
-                    </p>
-                  </div>
-                  <label class="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      id="togglePOSDoesntCloseOut" 
-                      class="sr-only peer"
-                      onchange="saveTogglesSettings(); if (window.updateButtonVisibility) { window.updateButtonVisibility(window.getEffectiveUser ? window.getEffectiveUser() : null); }"
-                    />
-                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-              </div>
-
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div class="flex items-center justify-between">
-                  <div class="flex-1">
-                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Use username instead of user code</h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-300">
-                      When enabled, supervisors will not be asked to enter their user code when closing out a drawer. Instead, the system will use their logged-in username.
-                    </p>
-                  </div>
-                  <label class="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      id="toggleUseUsernameInsteadOfUserCode" 
-                      class="sr-only peer"
-                      onchange="saveTogglesSettings()"
-                    />
-                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Main Action Buttons -->
-      <br><br>
-      <div class="flex flex-col items-center gap-4 mb-8 p-8 max-w-2xl mx-auto bg-white dark:bg-slate-800 rounded-3xl border border-blue-100 dark:border-slate-700 shadow-md hover:shadow-2xl hover:scale-[1.02] focus-within:shadow-2xl focus-within:scale-[1.02] transition-all duration-300 ease-out cursor-default">
-        <button 
-          id="addClientButton"
-          onclick="showAddClientModule()" 
-          class="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
-        >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
-          </svg>
-          <span class="text-base">Add Client</span>
-        </button>
-
-        <button 
-          id="makePaymentButton"
-          onclick="showPaymentModule()" 
-          class="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
-        >
-          <span class="text-4xl font-black leading-none">$</span>
-          <span class="text-base">Payments</span>
-        </button>
-
-        <button 
-          id="sendBillButton"
-          onclick="showBillModule()" 
-          class="w-full bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
-        >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-          </svg>
-          <span class="text-base">Send Bill</span>
-        </button>
-
-        <button 
-          id="searchDatabaseButton"
-          onclick="showSearchModule()" 
-          class="w-full bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
-        >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-          </svg>
-          <span class="text-base">Search Clients</span>
-        </button>
-
-        <button 
-          id="drawerCountButton"
-          onclick="showDrawerCountSelection()" 
-          class="w-full bg-gradient-to-r from-teal-500 to-teal-600 hover:from-teal-600 hover:to-teal-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4 hidden"
-        >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
-          </svg>
-          <span class="text-base">Start Of Day Drawer Count</span>
-        </button>
-
-        <button 
-          id="settingsButton"
-          onclick="showSettingsModule()" 
-          class="w-full bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4"
-        >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-          </svg>
-          <span class="text-base">Settings</span>
-        </button>
-
-        <button 
-          id="logoutButton"
-          onclick="logout()" 
-          class="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-bold py-4 px-12 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 flex items-center justify-center space-x-4 hidden"
-        >
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-          </svg>
-          <span class="text-base">Log Out</span>
-        </button>
-      </div>
-
-      <!-- Tab Navigation -->
-      <div class="flex space-x-1 mb-6 hidden">
-        <button 
-          id="accountsTab"
-          onclick="switchView('accounts')" 
-          class="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium"
-        >
-          Accounts
-        </button>
-        <button 
-          id="locationsTab"
-          onclick="switchView('locations')" 
-          class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
-        >
-          Locations
-        </button>
-      </div>
-
-      <!-- Accounts Section -->
-      <div id="accountsContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
-        <div class="flex justify-between items-center mb-6">
-          <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Customer Accounts</h2>
-          <div class="flex flex-col gap-2">
-            <button 
-              onclick="showImportCustomerDataModal()" 
-              class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors text-sm"
-            >
-              Import Customer Data
-            </button>
-            <button 
-              onclick="syncPastDueFromImportData()" 
-              class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors text-sm"
-              title="Re-sync past due amounts from imported Excel data"
-            >
-              Sync Past Due Amounts
-            </button>
-                <button 
-                  onclick="fixBillDates()" 
-                  class="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors text-sm"
-                  title="Fix Bill Date column in all customer records"
-                >
-                  Fix Dates
-                </button>
-                <button 
-                  onclick="fixExcelDates()" 
-                  class="bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 transition-colors text-sm"
-                  title="Fix all Excel serial dates (like 46053) in customer importData"
-                >
-                  Fix All Excel Dates
-            </button>
-            <button 
-              onclick="deleteAllUserData()" 
-              class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors text-sm"
-            >
-              Delete User Data
-            </button>
-          </div>
-        </div>
-
-        <!-- Search and Filter -->
-        <div class="flex flex-col md:flex-row gap-4 mb-6">
-          <div class="flex-1">
-            <input 
-              id="customerSearch" 
-              type="text" 
-              placeholder="Search customers..." 
-              class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              onkeyup="searchCustomers()"
-            />
-          </div>
-          <div>
-            <select 
-              onchange="filterByStatus(this.value)" 
-              class="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Status</option>
-              <option value="current">Current</option>
-              <option value="late">Late</option>
-              <option value="overdue">Overdue</option>
-              <option value="no-codes">No codes</option>
-              <option value="has-codes">Has codes</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Customer Table -->
-        <div class="overflow-x-auto">
-          <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-            <thead class="bg-slate-50 dark:bg-slate-700">
-              <tr>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Account</th>
-                <th class="px-0 py-3 pr-0 -mr-2 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider max-w-[180px]">Customer</th>
-                <th class="px-0 py-3 pl-0 -ml-2 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider max-w-[180px]">Property</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Due</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Due Date</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Last Payment</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="customerTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-              <!-- Customer rows will be populated by JavaScript -->
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Locations Section -->
-      <div id="locationsContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
-        <div class="flex justify-between items-center mb-6">
-          <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Property Locations</h2>
-          <div class="flex gap-3">
-            <button 
-              onclick="showAddLocationModal()" 
-              class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Add Location
-            </button>
-            <button 
-              onclick="showImportModal()" 
-              class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
-            >
-              Import Locations
-            </button>
-          </div>
-        </div>
-
-        <!-- Search and Filter -->
-        <div class="flex flex-col md:flex-row gap-4 mb-6">
-          <div class="flex-1">
-            <input 
-              id="locationSearch" 
-              type="text" 
-              placeholder="Search locations..." 
-              class="w-full px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              onkeyup="searchLocations()"
-            />
-          </div>
-          <div>
-            <select 
-              onchange="filterLocationsByStatus(this.value)" 
-              class="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Status</option>
-              <option value="occupied">Occupied</option>
-              <option value="available">Available</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Locations Table -->
-        <div class="overflow-x-auto">
-          <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-            <thead class="bg-slate-50 dark:bg-slate-700">
-              <tr>
-                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Premise ID</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Property</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Owner & Resident</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Status</th>
-                <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="locationsTableBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-              <!-- Location rows will be populated by JavaScript -->
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- Add Location Modal -->
-    <div id="addLocationModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card relative rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
-        <div id="addLocationLoadingOverlay" class="hidden absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-3xl bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm">
-          <div class="animate-spin rounded-full h-12 w-12 border-4 border-blue-200 border-t-blue-600 dark:border-blue-900 dark:border-t-blue-400"></div>
-          <p class="text-sm font-semibold text-slate-700 dark:text-slate-200">Saving location…</p>
-        </div>
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add New Location</h3>
-          <button 
-            id="addLocationCloseBtn"
-            type="button"
-            onclick="hideAddLocationModal()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 disabled:opacity-40"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <form id="addLocationForm" class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Premise ID</label>
-            <input 
-              id="newLocationPremiseId" 
-              type="text" 
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-100 dark:bg-slate-600 text-slate-800 dark:text-slate-200"
-              readonly
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Street Address</label>
-            <input 
-              id="newLocationStreet" 
-              type="text" 
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="123 Main Street"
-              required
-            />
-          </div>
-
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">City</label>
-              <input 
-                id="newLocationCity" 
-                type="text" 
-                class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Sacramento"
-                required
-              />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">State</label>
-              <input 
-                id="newLocationState" 
-                type="text" 
-                class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="CA"
-                required
-              />
-            </div>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ZIP Code</label>
-            <input 
-              id="newLocationZip" 
-              type="text" 
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="95814"
-              required
-            />
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              id="addLocationCancelBtn"
-              type="button"
-              onclick="hideAddLocationModal()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button 
-              id="addLocationSubmitBtn"
-              type="button"
-              onclick="addLocation()" 
-              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200 disabled:opacity-70"
-            >
-              Add Location
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- Add Client — Tax codes picker (Add Codes) -->
-    <div id="addClientCodesModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[55] hidden" onclick="if (event.target === this) closeAddClientCodesModal()">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-lg w-full mx-4" onclick="event.stopPropagation()">
-        <div class="flex justify-between items-center mb-4">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add tax codes</h3>
-          <button type="button" onclick="closeAddClientCodesModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300" aria-label="Close">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-        <p class="text-sm text-slate-500 dark:text-slate-400 mb-3">Search and add codes to this client. Codes already on the client are marked as added.</p>
-        <input
-          id="addClientCodesModalSearch"
-          type="text"
-          autocomplete="off"
-          placeholder="Type to filter codes…"
-          oninput="refreshAddClientCodesModalList()"
-          class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
-        />
-        <div id="addClientCodesModalList" class="max-h-72 overflow-y-auto space-y-2 mb-6"></div>
-        <button type="button" onclick="closeAddClientCodesModal()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors duration-200">Done</button>
-      </div>
-    </div>
-
-    <!-- Add User Modal -->
-    <div id="addUserModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add System User</h3>
-          <button 
-            onclick="hideAddUserModal()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <form class="space-y-4" onsubmit="event.preventDefault(); addUser();">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
-            <input 
-              id="newUserFullName" 
-              type="text" 
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter full name"
-              required
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">User Code</label>
-            <input 
-              id="newUserCode" 
-              type="text" 
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter user code (optional)"
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Title</label>
-            <select 
-              id="newUserTitle" 
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              required
-            >
-              <option value="">Select a title</option>
-              <option value="Point Of Sale">Point Of Sale</option>
-              <option value="Supervisor">Supervisor</option>
-              <option value="Admin">Admin</option>
-            </select>
-          </div>
-
-          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
-            <p class="text-sm text-blue-800 dark:text-blue-200">
-              Users are stored in the users collection in Firestore using their full name.
-            </p>
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              type="button"
-              onclick="hideAddUserModal()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button 
-              type="submit"
-              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-            >
-              Add User
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- Payment Modal -->
-    <div id="paymentModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Record Payment</h3>
-          <button 
-            onclick="hidePaymentModal()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="space-y-4">
-          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
-            <h4 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Customer: <span id="paymentCustomerName"></span></h4>
-            <p class="text-sm text-blue-800 dark:text-blue-200">Current Balance: <span id="paymentCurrentAmount" class="font-bold"></span></p>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment Amount</label>
-            <input 
-              id="paymentAmount" 
-              type="number" 
-              step="0.01"
-              min="0.01"
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter payment amount"
-              required
-            />
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              type="button"
-              onclick="hidePaymentModal()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button 
-              type="button"
-              onclick="processPayment()" 
-              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-            >
-              Record Payment
-            </button>
-          </div>
-        </div>
-
-        <!-- Hidden input for tracking -->
-        <input type="hidden" id="paymentCustomerId" />
-      </div>
-    </div>
-
-    <!-- Payment History Modal -->
-    <div id="paymentHistoryModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-4xl w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Payment History - <span id="historyCustomerName"></span></h3>
-          <button 
-            onclick="hidePaymentHistory()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="overflow-x-auto">
-          <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-            <thead class="bg-slate-50 dark:bg-slate-700">
-              <tr>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Date</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Due</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Paid</th>
-                <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Remaining Balance</th>
-              </tr>
-            </thead>
-            <tbody id="paymentHistoryBody" class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-              <!-- Payment history rows will be populated by JavaScript -->
-            </tbody>
-          </table>
-        </div>
-
-        <div class="mt-6">
-          <button 
-            type="button"
-            onclick="hidePaymentHistory()" 
-            class="w-full bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Amount Details Modal -->
-    <div id="amountDetailsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden" onclick="if(event.target === this) hideAmountDetails()">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4 max-h-[90vh] flex flex-col" onclick="event.stopPropagation()">
-        <div class="flex justify-between items-center mb-6 flex-shrink-0">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Amount Breakdown</h3>
-          <button 
-            onclick="hideAmountDetails()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="space-y-4 overflow-y-auto flex-1 pr-2">
-          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
-            <h4 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Customer: <span id="amountDetailsCustomer"></span></h4>
-            <div class="space-y-2 pt-2 border-t border-blue-200 dark:border-blue-700 mt-2">
-              <div class="flex justify-between items-center" id="amountDetailsFactorRow" style="display: none;">
-                <span class="text-sm text-blue-600 dark:text-blue-300">Factor</span>
-                <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsFactor">1.0</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-sm text-blue-600 dark:text-blue-300">Due Date</span>
-                <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsDueDate">--/--/----</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-sm text-blue-600 dark:text-blue-300">Billing Cycle</span>
-                <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsBillingCycle">--/--/-- - --/--/--</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-sm text-blue-600 dark:text-blue-300">Last Payment Date</span>
-                <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsLastPayment">Never</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-sm text-blue-600 dark:text-blue-300">Last Payment Amount</span>
-                <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsLastPaymentAmount">$0.00</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-sm text-blue-600 dark:text-blue-300">Last Amount Due</span>
-                <span class="text-sm font-medium text-blue-800 dark:text-blue-200" id="amountDetailsLastAmountDue">$0.00</span>
-              </div>
-              <div class="flex justify-between items-center gap-2">
-                <span class="text-sm text-blue-600 dark:text-blue-300">Total Days Late (30-60-90 counter)</span>
-                <span class="text-sm font-medium text-blue-800 dark:text-blue-200 tabular-nums shrink-0" id="amountDetails306090Days">0 days</span>
-              </div>
-              <div class="flex justify-between items-center gap-2">
-                <span class="text-sm text-blue-600 dark:text-blue-300">Cycle Days Late (21 day timer)</span>
-                <span class="text-sm font-medium text-blue-800 dark:text-blue-200 tabular-nums shrink-0" id="amountDetailsPerBillTimerDays">0 days</span>
-              </div>
-              <div class="flex justify-center mt-2">
-                <button 
-                  id="viewAllLedgerBtn"
-                  onclick="showAllPreviousPaymentsChargesModal()" 
-                  class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium underline"
-                  style="display: none;"
-                >
-                  View All Previous Payments/Charges
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="space-y-3">
-            <!-- Sewer Charge Summary + Details -->
-            <div id="amountDetailsSewerSummaryRow">
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
-                <div class="flex items-center gap-2">
-                  <span class="text-slate-600 dark:text-slate-400">Sewer Charge</span>
-                  <button
-                    type="button"
-                    id="amountDetailsSewerToggleBtn"
-                    onclick="toggleAmountDetailsSection('sewer')"
-                    class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
-                  >
-                    View details
-                  </button>
-            </div>
-                <span class="font-medium" id="amountDetailsSewerTotal">$0.00</span>
-              </div>
-              <div id="amountDetailsSewerDetails" class="hidden mt-2 space-y-2 bg-slate-50 dark:bg-slate-700/40 rounded-xl p-3">
-                <!-- Filled by showAmountDetails() -->
-              </div>
-            </div>
-
-            <div id="amountDetailsFactorContainer"></div>
-
-            <!-- Tax Codes Summary + Details -->
-            <div id="amountDetailsTaxCodesSummaryRow" class="hidden">
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
-                <div class="flex items-center gap-2">
-                  <span class="text-slate-600 dark:text-slate-400">Charge Codes</span>
-                  <button
-                    type="button"
-                    id="amountDetailsTaxCodesToggleBtn"
-                    onclick="toggleAmountDetailsTaxCodes()"
-                    class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
-                  >
-                    View details
-                  </button>
-                </div>
-                <span class="font-medium" id="amountDetailsTaxCodesTotal">$0.00</span>
-              </div>
-              <div id="amountDetailsTaxCodesDetails" class="hidden mt-2 space-y-2 bg-slate-50 dark:bg-slate-700/40 rounded-xl p-3">
-                <!-- Filled by showAmountDetails() -->
-              </div>
-            </div>
-            <!-- Legacy containers kept for compatibility; left empty -->
-            <div id="amountDetailsCodesContainer" class="hidden"></div>
-            <div id="amountDetailsPucSurchargeContainer" class="hidden"></div>
-
-            <!-- Late Fee Summary + Details -->
-            <div id="amountDetailsLateFeeSummaryRow" class="hidden">
-              <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
-                <div class="flex items-center gap-2">
-                  <span class="text-slate-600 dark:text-slate-400">Late Fee</span>
-                  <button
-                    type="button"
-                    id="amountDetailsLateFeeToggleBtn"
-                    onclick="toggleAmountDetailsSection('latefee')"
-                    class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
-                  >
-                    View details
-                  </button>
-                </div>
-                <span class="font-medium" id="amountDetailsLateFeeTotal">$0.00</span>
-              </div>
-              <div id="amountDetailsLateFeeDetails" class="hidden mt-2 space-y-2 bg-slate-50 dark:bg-slate-700/40 rounded-xl p-3">
-                <!-- Filled by showAmountDetails() -->
-              </div>
-            </div>
-
-            <!-- Past Due Summary + Details -->
-            <div id="amountDetailsPastDueSummaryRow" class="hidden">
-              <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
-                <div class="flex items-center gap-2">
-              <span class="text-slate-600 dark:text-slate-400">Past Due</span>
-                  <button
-                    type="button"
-                    id="amountDetailsPastDueToggleBtn"
-                    onclick="toggleAmountDetailsSection('pastdue')"
-                    class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
-                  >
-                    View details
-                  </button>
-                </div>
-                <span class="font-medium" id="amountDetailsPastDueTotal">$0.00</span>
-              </div>
-              <div id="amountDetailsPastDueDetails" class="hidden mt-2 space-y-2 bg-slate-50 dark:bg-slate-700/40 rounded-xl p-3">
-                <!-- Filled by showAmountDetails() -->
-              </div>
-            </div>
-
-            <div style="height: 1rem;"></div>
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
-              <span class="font-bold text-slate-800 dark:text-slate-200">Current Due</span>
-              <span class="font-bold text-slate-800 dark:text-slate-200" id="amountDetailsCurrentDue">$0.00</span>
-            </div>
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600" id="amountDetailsPastDueRow">
-              <span class="font-bold text-slate-800 dark:text-slate-200">Past Due</span>
-              <span class="font-bold text-slate-800 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 p-2 rounded" 
-                    id="amountDetailsPastDue" 
-                    ondblclick="editPastDueFromModal()"
-                    title="Double-click to edit">$0.00</span>
-            </div>
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600" id="amountDetailsCreditRow" style="display: none;">
-              <span class="font-bold text-green-600 dark:text-green-400">Credit</span>
-              <span class="font-bold text-green-600 dark:text-green-400" id="amountDetailsCredit">$0.00</span>
-            </div>
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600" id="amountDetailsLateFeeRow" style="display: none;">
-              <span class="font-bold text-slate-800 dark:text-slate-200">Late Fee</span>
-              <span class="font-bold text-slate-800 dark:text-slate-200" id="amountDetailsLateFee">$0.00</span>
-            </div>
-            <div class="flex justify-between items-center py-3 bg-slate-50 dark:bg-slate-700 rounded-lg px-4">
-              <span class="font-semibold text-slate-800 dark:text-slate-200">Total Due</span>
-              <span class="font-bold text-lg" id="amountDetailsTotal">$0.00</span>
-            </div>
-            </div>
-          </div>
-
-          <button 
-            type="button"
-            onclick="hideAmountDetails()" 
-          class="w-full bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200 flex-shrink-0 mt-4"
-          >
-            Close
-          </button>
-      </div>
-    </div>
-
-    <!-- Edit Field Modal -->
-    <div id="editFieldModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Edit <span id="editFieldType">Field</span></h3>
-          <button 
-            onclick="cancelFieldEdit()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">New Value</label>
-            <div id="editFieldInputContainer">
-              <input 
-                id="editFieldValue" 
-                type="text" 
-                class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Enter new value"
-                required
-              />
-            </div>
-          </div>
-
-          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
-            <p class="text-sm text-blue-800 dark:text-blue-200">
-              <strong>Tip:</strong> For status, use "available" or "occupied". For residents, use "Available" to make the property available.
-            </p>
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              type="button"
-              onclick="cancelFieldEdit()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button 
-              type="button"
-              onclick="saveFieldEdit()" 
-              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-            >
-              Save Changes
-            </button>
-          </div>
-        </div>
-
-        <!-- Hidden inputs for tracking -->
-        <input type="hidden" id="editFieldLocationId" />
-        <input type="hidden" id="editFieldFieldType" />
-      </div>
-    </div>
-
-    <!-- Import Locations Modal -->
-    <div id="importModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Import Locations</h3>
-          <button 
-            onclick="hideImportModal()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select JSON File</label>
-            <input 
-              id="locationFileInput" 
-              type="file" 
-              accept=".json"
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div class="bg-green-50 dark:bg-green-900/20 p-4 rounded-xl">
-            <p class="text-sm text-green-800 dark:text-green-200">
-              <strong>JSON Format:</strong> Your file should contain a "locations" array with objects having properties like id, address, propertyType, bedrooms, bathrooms, squareFootage.
-            </p>
-          </div>
-
-          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
-            <p class="text-sm text-blue-800 dark:text-blue-200">
-              <strong>Sample:</strong> You can use the provided locations.json file as a template.
-            </p>
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              type="button"
-              onclick="hideImportModal()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button 
-              type="button"
-              onclick="importLocations()" 
-              class="flex-1 bg-green-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-green-700 transition-colors duration-200"
-            >
-              Import Locations
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Import Customer Data Modal -->
-    <div id="importCustomerDataModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Import Customer Data</h3>
-          <button 
-            onclick="hideImportCustomerDataModal()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Select Excel File (ImportData.xlsx)</label>
-            <input 
-              id="customerDataFileInput" 
-              type="file" 
-              accept=".xlsx,.xls"
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
-            <p class="text-sm text-blue-800 dark:text-blue-200">
-              <strong>Note:</strong> All data from the Excel file will be imported and saved to Firebase. The first row should contain column headers. The system will match customers by account number if they already exist, or create new ones.
-            </p>
-          </div>
-
-          <div id="importPreview" class="hidden">
-            <h4 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Preview (first 5 rows)</h4>
-            <div class="overflow-x-auto border border-slate-300 dark:border-slate-600 rounded-lg">
-              <table id="previewTable" class="min-w-full text-sm">
-                <thead class="bg-slate-100 dark:bg-slate-700">
-                  <!-- Headers will be populated by JavaScript -->
-                </thead>
-                <tbody class="bg-white dark:bg-slate-800">
-                  <!-- Rows will be populated by JavaScript -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- Import Progress Indicator -->
-          <div id="importProgress" class="hidden">
-            <div class="bg-blue-50 dark:bg-blue-900/20 p-6 rounded-xl border-2 border-blue-500 mb-4">
-              <div class="flex items-center justify-between mb-4">
-                <h4 class="text-lg font-semibold text-blue-800 dark:text-blue-200">Importing Customer Data...</h4>
-                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-              </div>
-              <div class="space-y-2">
-                <div class="flex justify-between text-sm text-blue-700 dark:text-blue-300">
-                  <span>Progress:</span>
-                  <span id="progressText" class="font-semibold">0 / 0</span>
-                </div>
-                <div class="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-3">
-                  <div id="progressBar" class="bg-blue-600 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
-                </div>
-                <div class="text-xs text-blue-600 dark:text-blue-400 mt-2">
-                  <span id="progressStats">Processing...</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Firestore Upload Progress Indicator -->
-            <div id="uploadProgress" class="hidden">
-              <div class="bg-green-50 dark:bg-green-900/20 p-6 rounded-xl border-2 border-green-500 mb-4">
-                <div class="flex items-center justify-between mb-4">
-                  <h4 class="text-lg font-semibold text-green-800 dark:text-green-200">Uploading customers to database</h4>
-                  <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-green-600"></div>
-                </div>
-                <div class="space-y-2">
-                  <div class="flex justify-between text-sm text-green-700 dark:text-green-300">
-                    <span>Progress:</span>
-                    <span id="uploadProgressText" class="font-semibold">0 / 0</span>
-                  </div>
-                  <div class="w-full bg-green-200 dark:bg-green-800 rounded-full h-3">
-                    <div id="uploadProgressBar" class="bg-green-600 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
-                  </div>
-                  <div class="text-xs text-green-600 dark:text-green-400 mt-2">
-                    <span id="uploadProgressStats">Uploading...</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Locations Upload Progress Indicator -->
-            <div id="locationsUploadProgress" class="hidden">
-              <div class="bg-purple-50 dark:bg-purple-900/20 p-6 rounded-xl border-2 border-purple-500">
-                <div class="flex items-center justify-between mb-4">
-                  <h4 class="text-lg font-semibold text-purple-800 dark:text-purple-200">Uploading locations to database</h4>
-                  <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-600"></div>
-                </div>
-                <div class="space-y-2">
-                  <div class="flex justify-between text-sm text-purple-700 dark:text-purple-300">
-                    <span>Progress:</span>
-                    <span id="locationsUploadProgressText" class="font-semibold">0 / 0</span>
-                  </div>
-                  <div class="w-full bg-purple-200 dark:bg-purple-800 rounded-full h-3">
-                    <div id="locationsUploadProgressBar" class="bg-purple-600 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
-                  </div>
-                  <div class="text-xs text-purple-600 dark:text-purple-400 mt-2">
-                    <span id="locationsUploadProgressStats">Uploading...</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              type="button"
-              onclick="hideImportCustomerDataModal()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button 
-              type="button"
-              onclick="importCustomerData()" 
-              class="flex-1 bg-green-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-green-700 transition-colors duration-200"
-            >
-              Import Customer Data
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Payment Details Modal -->
-    <div id="paymentDetailsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Payment Breakdown</h3>
-          <button 
-            onclick="hidePaymentDetailsModal()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="space-y-4">
-          <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
-            <h4 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Customer: <span id="paymentDetailsCustomer"></span></h4>
-          </div>
-
-          <div class="space-y-3">
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
-              <span class="text-slate-600 dark:text-slate-400">Sewage Service</span>
-              <span class="font-medium" id="paymentDetailsService">$150.00</span>
-            </div>
-            <div class="flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600">
-              <span class="text-slate-600 dark:text-slate-400">Late Fee</span>
-              <span class="font-medium" id="paymentDetailsLateFee">$0.00</span>
-            </div>
-            <div class="flex justify-between items-center py-3 bg-slate-50 dark:bg-slate-700 rounded-lg px-4">
-              <span class="font-semibold text-slate-800 dark:text-slate-200">Total Due</span>
-              <span class="font-bold text-lg" id="paymentDetailsTotal">$0.00</span>
-            </div>
-          </div>
-
-          <button 
-            type="button"
-            onclick="hidePaymentDetailsModal()" 
-            class="w-full bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Transfer Ownership Modal -->
-    <div id="transferOwnershipModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-2xl w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Transfer Property Ownership</h3>
-          <button 
-            onclick="hideTransferOwnershipModal()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="space-y-6">
-          <div class="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-xl">
-            <h4 class="font-semibold text-yellow-800 dark:text-yellow-200 mb-2">⚠️ Location Already Occupied</h4>
-            <p class="text-sm text-yellow-700 dark:text-yellow-300">
-              This location is currently being used by <strong id="transferWarningName"></strong> at <strong id="transferLocation"></strong>.
-            </p>
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="bg-slate-50 dark:bg-slate-700 p-4 rounded-xl">
-              <h5 class="font-semibold text-slate-800 dark:text-slate-200 mb-3">Current Resident</h5>
-              <div class="space-y-2">
-                <p><span class="text-slate-600 dark:text-slate-400">Name:</span> <span id="transferCurrentResident"></span></p>
-                <p><span class="text-slate-600 dark:text-slate-400">Status:</span> <span id="transferCurrentStatus"></span></p>
-                <p><span class="text-slate-600 dark:text-slate-400">Balance:</span> <span id="transferBalance"></span></p>
-              </div>
-            </div>
-
-            <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl">
-              <h5 class="font-semibold text-blue-800 dark:text-blue-200 mb-3">New Client</h5>
-              <div class="space-y-2">
-                <p><span class="text-blue-600 dark:text-blue-400">Name:</span> <span id="transferNewClient"></span></p>
-                <p class="text-sm text-blue-600 dark:text-blue-400">Will be assigned to this location</p>
-              </div>
-            </div>
-          </div>
-
-          <div id="transferStatusMessage" class="p-4 rounded-xl">
-            <!-- Status message will be populated by JavaScript -->
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-              New Location for <span id="transferNewLocationLabel"></span>
-            </label>
-            <input 
-              id="transferNewLocation" 
-              type="text" 
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter the new address where they're moving"
-              required
-            />
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              type="button"
-              onclick="hideTransferOwnershipModal()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button 
-              id="transferOwnershipConfirmBtn"
-              type="button"
-              onclick="processTransferOwnership()" 
-              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-            >
-              Transfer Ownership
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Add Code Modal -->
-    <div id="addCodeModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add New Code</h3>
-          <button 
-            onclick="hideAddCodeModal()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <form id="addCodeForm" class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Code Name</label>
-            <input 
-              id="newCodeName" 
-              type="text" 
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter code name"
-              required
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Type</label>
-            <select 
-              id="newCodeType" 
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              onchange="updateCodeAmountInput()"
-              required
-            >
-              <option value="percentage">Percentage</option>
-              <option value="flat">Flat Rate</option>
-            </select>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Amount</label>
-            <input 
-              id="newCodeAmount" 
-              type="number" 
-              step="0.01"
-              min="0"
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter amount"
-              required
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Description</label>
-            <textarea 
-              id="newCodeDescription" 
-              rows="3"
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter description"
-            ></textarea>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Requirements</label>
-            <div id="newCodeRequirementsList" class="mb-2 space-y-2">
-              <!-- Selected requirements will be displayed here -->
-            </div>
-            <button 
-              type="button"
-              onclick="showAddRequirementModal()" 
-              class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm"
-            >
-              Add requirement
-            </button>
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              type="button"
-              onclick="hideAddCodeModal()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button 
-              type="button"
-              onclick="addCode()" 
-              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-            >
-              Add Code
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- Edit Code Field Modal -->
-    <div id="editCodeFieldModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Edit <span id="editCodeFieldType">Field</span></h3>
-          <button 
-            id="editCodeFieldCloseBtn"
-            onclick="cancelEditCodeField()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">New Value</label>
-            <div id="editCodeFieldInputContainer">
-              <!-- Input will be dynamically inserted here -->
-            </div>
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              id="editCodeFieldCancelBtn"
-              type="button"
-              onclick="cancelEditCodeField()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button 
-              id="editCodeFieldSaveBtn"
-              type="button"
-              onclick="saveEditCodeField()" 
-              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-            >
-              Save Changes
-            </button>
-          </div>
-          <div id="editCodeFieldSavingIndicator" class="hidden flex items-center justify-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-            <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" aria-hidden="true"></span>
-            <span>Saving changes...</span>
-          </div>
-        </div>
-
-        <!-- Hidden inputs for tracking -->
-        <input type="hidden" id="editCodeFieldCodeId" />
-        <input type="hidden" id="editCodeFieldFieldType" />
-      </div>
-    </div>
-
-    <!-- Add Requirement Modal -->
-    <div id="addRequirementModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden" onclick="if(event.target === this) hideAddRequirementModal()">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4" onclick="event.stopPropagation()">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Add Requirement</h3>
-          <button 
-            onclick="hideAddRequirementModal()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-4">Select Requirements</label>
-            <div class="space-y-3">
-              <div class="flex items-center">
-                <input 
-                  type="checkbox" 
-                  id="requirementBusiness" 
-                  class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
-                />
-                <label for="requirementBusiness" class="ml-3 text-sm text-slate-700 dark:text-slate-300">
-                  Business
-                </label>
-              </div>
-              <div class="flex items-center">
-                <input 
-                  type="checkbox" 
-                  id="requirementIndividual" 
-                  class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
-                />
-                <label for="requirementIndividual" class="ml-3 text-sm text-slate-700 dark:text-slate-300">
-                  Individual
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div class="border-t border-slate-200 dark:border-slate-600 pt-4">
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Logic Type</label>
-            <div class="space-y-2">
-              <div class="flex items-center">
-                <input 
-                  type="radio" 
-                  id="requirementLogicAND" 
-                  name="requirementLogic"
-                  value="AND"
-                  checked
-                  class="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
-                />
-                <label for="requirementLogicAND" class="ml-3 text-sm text-slate-700 dark:text-slate-300">
-                  AND (both must be selected)
-                </label>
-              </div>
-              <div class="flex items-center">
-                <input 
-                  type="radio" 
-                  id="requirementLogicOR" 
-                  name="requirementLogic"
-                  value="OR"
-                  class="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700"
-                />
-                <label for="requirementLogicOR" class="ml-3 text-sm text-slate-700 dark:text-slate-300">
-                  OR (at least one must be selected)
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div class="flex gap-3">
-            <button 
-              type="button"
-              onclick="hideAddRequirementModal()" 
-              class="flex-1 px-4 py-3 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            >
-              Cancel
-            </button>
-            <button 
-              type="button"
-              onclick="addRequirement()" 
-              class="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-            >
-              Add
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Customer Full Info Modal -->
-    <div id="customerFullInfoModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden" onclick="if(event.target === this) hideCustomerFullInfo()">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto" onclick="event.stopPropagation()">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Customer Information</h3>
-          <button 
-            onclick="hideCustomerFullInfo()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div id="customerFullInfoContent" class="space-y-4">
-          <!-- Content will be populated by JavaScript -->
-        </div>
-
-        <div class="mt-6">
-          <button 
-            type="button"
-            onclick="hideCustomerFullInfo()" 
-            class="w-full bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Customer Data Profile Modal (Excel Preview) -->
-    <div id="customerDataProfileModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden" onclick="if(event.target === this) hideCustomerDataProfile()">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-6xl w-full mx-4 max-h-[90vh] overflow-y-auto" onclick="event.stopPropagation()">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Customer Data Profile (Excel Preview)</h3>
-          <button 
-            onclick="hideCustomerDataProfile()" 
-            class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div id="customerDataProfileContent" class="space-y-4">
-          <!-- Excel-like table will be populated by JavaScript -->
-        </div>
-
-        <div class="mt-6 space-y-3">
-          <button 
-            type="button"
-            onclick="copyFullDataProfile()" 
-            class="w-full bg-purple-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-purple-700 transition-colors duration-200"
-          >
-            Copy Full Data Profile
-          </button>
-          <button 
-            type="button"
-            onclick="hideCustomerDataProfile()" 
-            class="w-full bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors duration-200"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Delete billing data progress modal (customers, locations, codes, sessions, etc.) -->
-    <div id="deleteProgressModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-      <div class="card rounded-3xl bg-white dark:bg-slate-800 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-8 max-w-md w-full mx-4">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Deleting Billing Data</h3>
-        </div>
-
-        <div id="deleteProgress" class="hidden">
-          <div class="bg-red-50 dark:bg-red-900/20 p-6 rounded-xl border-2 border-red-500 mb-4">
-            <div class="flex items-center justify-between mb-4">
-              <h4 id="deleteProgressPhase" class="text-lg font-semibold text-red-800 dark:text-red-200">Preparing…</h4>
-              <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-red-600"></div>
-            </div>
-            <div class="space-y-2">
-              <div class="flex justify-between text-sm text-red-700 dark:text-red-300">
-                <span>Progress:</span>
-                <span id="deleteProgressText" class="font-semibold">0 / 0</span>
-              </div>
-              <div class="w-full bg-red-200 dark:bg-red-800 rounded-full h-3">
-                <div id="deleteProgressBar" class="bg-red-600 h-3 rounded-full transition-all duration-300" style="width: 0%"></div>
-              </div>
-              <div class="text-xs text-red-600 dark:text-red-400 mt-2">
-                <span id="deleteProgressStats">Deleting...</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</body>
-</html>
+  

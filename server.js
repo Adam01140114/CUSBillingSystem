@@ -37,7 +37,7 @@ const admin         = require('firebase-admin');
 const bodyParser    = require('body-parser');
 const fileUpload    = require('express-fileupload');
 const path          = require('path');
-const { PDFDocument, StandardFonts } = require('pdf-lib');
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const cors          = require('cors');
 const fs            = require('fs');
 const nodemailer    = require('nodemailer');
@@ -730,6 +730,179 @@ app.post('/edit_pdf', async (req, res) => {
       'Content-Disposition': `attachment; filename="${outputName}"`,
     })
     .send(Buffer.from(edited));
+});
+
+/**
+ * Word-wrap for pdf-lib Helvetica text.
+ */
+function wrapTextToWidth(text, font, fontSize, maxWidth) {
+  const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!raw) return [''];
+  const paragraphs = raw.split(/\n/);
+  const out = [];
+  for (const para of paragraphs) {
+    const words = para.split(/\s+/).filter(Boolean);
+    let line = '';
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      const w = font.widthOfTextAtSize(test, fontSize);
+      if (w <= maxWidth) {
+        line = test;
+      } else {
+        if (line) out.push(line);
+        line = word;
+      }
+    }
+    if (line) out.push(line);
+    if (words.length === 0) out.push('');
+  }
+  return out.length ? out : [''];
+}
+
+function moneyOrDash(v) {
+  const n = parseFloat(v);
+  if (Number.isFinite(n)) return `$${n.toFixed(2)}`;
+  return '—';
+}
+
+/**
+ * POST /api/generate-deposit-withdrawal-notice
+ * JSON body → single-page or multi-page letter-style PDF (no stored template).
+ */
+app.post('/api/generate-deposit-withdrawal-notice', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const accountName = String(b.accountName || '').trim() || 'Account holder';
+    const accountNumber = String(b.accountNumber || '').trim() || '—';
+    const serviceAddress = String(b.serviceAddress || '').trim();
+    const noticeDateStr = String(b.noticeDateStr || '').trim() || new Date().toLocaleDateString('en-US');
+    const triggerDateStr = String(b.triggerDateStr || '').trim() || '—';
+    const anchorBillDateStr = String(b.anchorBillDateStr || '').trim() || '—';
+    const daysLatePhrase = String(b.daysLatePhrase || '').trim() || '60+';
+    const thresholdDays = parseInt(b.depositThresholdDays, 10);
+    const thresholdStr = Number.isFinite(thresholdDays) ? String(thresholdDays) : '60';
+    const contDays = parseInt(b.continuousDelinquencyDaysAtTrigger, 10);
+    const contStr = Number.isFinite(contDays) ? String(contDays) : '—';
+    const amountApplied = parseFloat(b.amountAppliedFromDeposit);
+    const amtStr = Number.isFinite(amountApplied) ? amountApplied.toFixed(2) : String(b.amountAppliedFromDeposit || '0.00');
+    const depositBefore = parseFloat(b.depositOnFileBefore);
+    const depositAfter = parseFloat(b.depositOnFileAfter);
+    const totalAddressed = parseFloat(b.totalBalanceAddressed);
+    const replenishTarget = parseFloat(b.replenishTargetAmount);
+    const shortfall = Number.isFinite(replenishTarget) && Number.isFinite(depositAfter)
+      ? Math.max(0, Math.round((replenishTarget - depositAfter) * 100) / 100)
+      : parseFloat(b.replenishShortfall);
+
+    const allocationSummary = String(b.allocationSummary || '').trim();
+
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const margin = 50;
+    const maxTextW = 512;
+    const fontSize = 11;
+    const titleSize = 16;
+    const lineStep = 15;
+
+    let page = pdfDoc.addPage([612, 792]);
+    let y = 742;
+
+    const drawLines = (lines, size, useBold, extraGap) => {
+      const f = useBold ? fontBold : font;
+      for (const ln of lines) {
+        if (y < margin + 40) {
+          page = pdfDoc.addPage([612, 792]);
+          y = 742;
+        }
+        page.drawText(ln, {
+          x: margin,
+          y,
+          size,
+          font: f,
+          color: rgb(0, 0, 0)
+        });
+        y -= lineStep * (size / fontSize);
+      }
+      y -= extraGap == null ? 8 : extraGap;
+    };
+
+    const drawHeading = (t) => {
+      drawLines(wrapTextToWidth(t, fontBold, titleSize, maxTextW), titleSize, true, 14);
+    };
+
+    const drawBody = (t) => {
+      drawLines(wrapTextToWidth(t, font, fontSize, maxTextW), fontSize, false, 10);
+    };
+
+    drawHeading('DEPOSIT WITHDRAWAL NOTICE');
+
+    drawBody(
+      `Notice date: ${noticeDateStr}\n\n` +
+      `Account: ${accountName}\n` +
+      `Account number: ${accountNumber}` +
+      (serviceAddress ? `\nService address: ${serviceAddress}` : '')
+    );
+
+    drawBody(
+      `This notice explains a withdrawal from your security deposit that was applied automatically by the system. ` +
+        `Under your account terms, when sewer charges remain unpaid for an extended period, the district may apply ` +
+        `funds you have on deposit toward the balance you owe.`
+    );
+
+    drawBody(
+      `On ${triggerDateStr}, your account was marked as ${daysLatePhrase} days late on the continuous delinquency ` +
+        `timer (you had reached ${contStr} day(s) while an amount remained due). This threshold is tied to ` +
+        `${thresholdStr}+ calendar days on that timer, which is the district’s configured trigger for deposit withdrawal. ` +
+        `The unpaid balance was measured from your billing position as of the last bill print / anchor reference date ` +
+        `of ${anchorBillDateStr} (the date shown reflects when charges were last established on your bill before this action).`
+    );
+
+    drawBody(
+      `Because those conditions were met, an amount of $${amtStr} was taken from your security deposit and applied ` +
+        `to your outstanding balance in the same way a payment would be applied (for example toward past due amounts, ` +
+        `current sewer charges, tax code surcharges, PUC surcharge, and late fees, in the order configured for your account).`
+    );
+
+    if (allocationSummary) {
+      drawBody(`Application detail from the ledger for this event: ${allocationSummary}`);
+    }
+
+    const depBeforeStr = Number.isFinite(depositBefore) ? moneyOrDash(depositBefore) : moneyOrDash(b.depositOnFileBefore);
+    const depAfterStr = Number.isFinite(depositAfter) ? moneyOrDash(depositAfter) : moneyOrDash(b.depositOnFileAfter);
+    const totStr = Number.isFinite(totalAddressed) ? moneyOrDash(totalAddressed) : moneyOrDash(b.totalBalanceAddressed);
+
+    drawBody(
+      `At the time of this withdrawal, the total account balance this action addressed was approximately ${totStr}. ` +
+        `Your security deposit on file immediately before this withdrawal was ${depBeforeStr}, and after the withdrawal ` +
+        `the remaining deposit on file is ${depAfterStr}.`
+    );
+
+    const replStr = Number.isFinite(replenishTarget) ? moneyOrDash(replenishTarget) : moneyOrDash(b.replenishTargetAmount);
+    const shortStr = Number.isFinite(shortfall) ? moneyOrDash(shortfall) : moneyOrDash(b.replenishShortfall);
+
+    drawBody(
+      `You are required to restore your security deposit to the full required on-file amount. ` +
+        `Based on the balance held before this withdrawal, that target is ${replStr}. ` +
+        `To return your deposit to that level, you must pay approximately ${shortStr} (plus any future bill amounts when due). ` +
+        `Until the deposit is replenished, your account may not meet the district’s deposit requirements for continued service.`
+    );
+
+    drawBody(
+      `This notice is for your records. If you believe this withdrawal was applied in error, contact the office with ` +
+        `your account number and the notice date above.`
+    );
+
+    const bytes = await pdfDoc.save();
+    res
+      .set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': 'inline; filename="Deposit_Withdrawal_Notice.pdf"'
+      })
+      .send(Buffer.from(bytes));
+  } catch (err) {
+    console.error('generate-deposit-withdrawal-notice:', err);
+    res.status(500).send('Failed to generate deposit withdrawal notice PDF.');
+  }
 });
 
 // Stripe checkout session endpoint removed
