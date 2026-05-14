@@ -28,7 +28,7 @@ Important fields (not exhaustive):
 - **`lastBillPrintDate`** — ISO date of the **most recent** bill print. The **21-day late fee timer** always counts from this date and **restarts every time a bill is produced**.
 - **`lateFeeAnchorPrintDate`** — Start of the **continuous 30–60–90 style** delinquency streak. It does **not** reset on rebill until the customer is paid to **$0** total due (see `calculateCustomerTotal` clearing the anchor when `total <= 0`).
 - **`lastPrintedStatementTotalDue`** — Total that was due on the **last printed statement**, used with payment timestamps to compute **outstanding last statement** when `pastDue` has not yet caught up.
-- **`lastBillPrintLedgerOrder`** — Resolves same-millisecond ordering between bill and payments.
+- **`lastBillPrintLedgerOrder`** — Persisted ledger order of the **last Produce Bill**; resolves same-millisecond ordering between bill and payments. Also used to find the **anchor** billing row (see §3.3), not merely the last `billingCharge` in `chargeHistory`.
 - **`chargeHistory`** — Includes **`billingCharge`** rows (one per Produce Bill) and **`lateFeeAdded`** rows when a fee is logged. Billing rows store PDF-aligned amounts and often **`pastDueComposition`** snapshots.
 - **`processBillPanelFrozenSnapshot`** — After Produce Bill, **Total / Past Due / Due date / status** can freeze to match the PDF while time moves forward; late fee line can still **accrue** additively (see §7).
 - **`lastBillPdfPastDueLine`**, **`lastBillPdfLateFeeLine`** — PDF line snapshots for alignment between ledger and statement display.
@@ -57,27 +57,47 @@ Then it computes:
 
 ### 3.2 Total due and double-counting guard
 
-Let **`stmtUnpaid`** = **`getOutstandingLastStatementUnpaid`** (last statement total minus payments strictly **after** that bill).
+Let **`stmtUnpaid`** = **`getOutstandingLastStatementUnpaid`** (last statement total minus payments strictly **after** that bill — see §3.3 for how “after that bill” is anchored).
 
 Let **`priorChain`** = `stmtUnpaid` if it is positive, else **`pastDue`** (the rolled field).
 
-**Total** is normally `currentDue + priorChain - credit`, **except** when all are true:
+**Baseline total** is **`combined`** = `currentDue + priorChain - credit`.
 
-- Not in a **new calendar period** after the last bill print (`!isCalendarPeriodAfterLastBillPrint`),
-- `stmtUnpaid` is material,
-- **`currentDue`** already covers that unpaid statement (`currentDue + tolerance >= stmtUnpaid`).
+**Problem:** After a bill and especially after **partial pay**, `stmtUnpaid` and **`currentDue`** (from **`getCurrentCycleDueWithPaymentConsistency`**) can describe the **same remaining dollars** two different ways. Adding **`priorChain`** (≈ `stmtUnpaid`) on top of **`currentDue`** then inflates the headline (e.g. ~\$108 + ~\$108 ≈ \$211) while the **Payments/Charges** running balance stays correct at a single net.
 
-Then **total** = `currentDue - credit` only, so the same principal is not added twice. This matters when the “current” view still embodies the last statement before roll-forward.
+**Rolled collapse (inside `calculateCustomerTotal`):** Define
 
-**After partial payments**, the shortcut often **no longer** applies (`currentDue` drops below `stmtUnpaid`). The naive fallback `total = currentDue + priorChain` with `priorChain = stmtUnpaid` can **double-count**: `stmtUnpaid` is already “remaining on the last printed statement,” while `currentDue` still carries the **current-cycle slice** of that same statement. The implementation therefore compares:
-
-- **`rolled`** = `currentDue + pastDue - credit` (field past due + current cycle remainder),
+- **`rolled`** = `currentDue + pastDue - credit`,
 - **`stmtNet`** = `stmtUnpaid - credit`,
-- **`combined`** = `currentDue + priorChain - credit` (legacy sum).
+- **`combined`** as above.
 
-When `stmtUnpaid` is material, **`combined` is materially larger than `rolled`**, and **`rolled` matches `stmtNet` within tolerance**, **`total` uses `rolled`** so the headline total matches what customers owe (and matches the ledger) instead of an inflated `combined`.
+When **`stmtUnpaid`** is material, **`combined > rolled + 0.02`**, and **`rolled`** is within **`stmtMatchTol`** of **`stmtNet`**, use a **single-count** total instead of **`combined`**:
+
+- **`stmtTolBase`** = `max(0.05, min(10, 0.02 × stmtNet))` (percentage floor on small balances),
+- **`lateTol`** = rounded **`lateFeeAmount`** from the same calc pass (automatic 21-day fee),
+- **`stmtMatchTol`** = `max(stmtTolBase, lateTol + 0.02)`.
+
+So if the only gap between **`rolled`** and **`stmtNet`** is roughly the **current-period late fee** sitting in the statement total but not fully reflected the same way inside **`currentDue`**, the collapse still triggers (e.g. \$5 late: |\$103.49 − \$108.49| ≤ **`stmtMatchTol`**).
+
+**Collapsed total** = **`max(rolled, stmtNet)`** (rounded), not **`rolled`** alone, so we never **under**-state vs the statement when **`stmtNet`** is slightly higher.
+
+This collapse is **not** gated on “same calendar month as last bill print.” Advancing the **simulated date** into the next month **before** the next Produce Bill used to skip the guard and force **`combined`**; that caused the same double-count. The calendar check was removed for this branch only.
+
+**`getTotalOwedForLateTracking`** — First keeps the legacy shortcut when **`!isCalendarPeriodAfterLastBillPrint`** and **`currentDue + tolerance ≥ stmtUnpaid`**. Separately, if the same **`rolled` / `stmtNet` / `combined`** duplicate pattern holds (using the same **`stmtMatchTol`** idea with the explicit late-fee argument), return **`max(rolledLt, stmtNetLt)`** instead of **`combinedLt`**, so delinquency days and late eligibility stay aligned with the headline total.
 
 When **total** hits zero, **`lateFeeAnchorPrintDate`** may be cleared.
+
+### 3.3 Statement credit anchor: latest bill row vs last print
+
+**`getOutstandingLastStatementUnpaid`** and **`getSumPaymentAmountsAfterLastBillPrint`** depend on **`paymentCountsTowardStatementReduction`**, which must compare each payment to the **actual last printed bill**, not necessarily the **last** `source: 'billingCharge'` row in **`chargeHistory`**.
+
+**Why:** Duplicate or out-of-order **“Billed Customer”** rows (same test DB, retries, or bugs) can leave a **spurious** billing row **after** a real payment in the array. **`getLatestBillingChargeHistoryRow`** would then treat the payment as **before** the “latest” bill, **`paidAfter`** drops to **\$0**, **`stmtUnpaid`** goes back to the **full** statement face, **`pastDueOnBill`** on the next bill can reconcile to **\$0**, and PDF/Process Bill math diverges from the ledger.
+
+**`getAnchorBillingChargeHistoryRowForLastPrint(customer)`** picks the **`billingCharge`** row whose **`ledgerOrder`** matches **`customer.lastBillPrintLedgerOrder`** (and prefers **`timestamp`** matching **`lastBillPrintDate`** when present), then falls back to “latest” billing row.
+
+**Uses:** `paymentCountsTowardStatementReduction`, **`getSumPaymentAmountsAfterLastBillPrint`** (logging anchor), **`getStatementPastDueCompositionForModal`**, **`addRolledUnpaidCurrentToPastDueComposition`**, **`buildBillRowPastDueCompositionSnapshot`**.
+
+**`getPdfPreviousChargesReconciledToTotal`** — After nudging **`pdfPreviousCharges`** so `current_due + previous + late` matches **`calc.total`**, the reconciled previous-charges line is **floored** at **`max(ledger past due, outstanding last statement)`** so reconcile cannot wipe a known carried balance when line totals and **`calc.total`** disagree briefly.
 
 ---
 
@@ -102,7 +122,7 @@ After a successful bill PDF:
 
 When a bill is produced:
 
-1. Captures **pre-roll** **`pastDueOnBill`** (max of field past due vs outstanding last statement).
+1. **`pastDueOnBill`** and PDF **previous charges** come from **`getPdfPreviousChargesReconciledToTotal`** (ledger past due vs outstanding last statement, then reconcile to **`calc.total`** with a **floor** — see §3.3 end). **`buildBillRowPastDueCompositionSnapshot`** uses the **anchor** prior bill row (§3.3).
 2. Builds **`pastDueComposition`** for that row via **`buildBillRowPastDueCompositionSnapshot`** (mix of unpaid statement components vs tracked composition).
 3. Calls **`applyBillProductionRollForward`**.
 4. Pushes **`chargeHistory`** row with `source: 'billingCharge'`, line amounts, and optional **`pastDueComposition`**.
@@ -140,7 +160,7 @@ Saved order lives in Firestore **`settings/paymentHierarchy`** and **`window.pay
 
 When unpaid current rolls into **`pastDue`**:
 
-1. Prefer **gross amounts from the latest `billingCharge` row** (sewer, tax, PUC, late on bill) over **`calc`** for the closed cycle, so a new month’s proration does not corrupt the rolled split.
+1. Prefer **gross amounts from the anchor `billingCharge` row** (§3.3 — matches **`lastBillPrintLedgerOrder`**) over **`calc`** for the closed cycle, so a new month’s proration does not corrupt the rolled split.
 2. Compute **remainders** after **`currentMonthPaid*`** on that closed cycle.
 3. **`svcTake`** = min(unpaid current, sewer+tax+PUC remainder sum).
 4. **`uMinusSvc`** = unpaid current minus what went to service.
@@ -190,7 +210,7 @@ Process Bill and the payment module also expose **Late Fee → View Details** fo
 - **`getTotalDueExcludingAutoLateFee`** — Current cycle due (with late passed into consistency helper) + **past due** − **credit**. Drives eligibility so you do not charge late when nothing is owed.
 - **`getLateFeeBaseAmountBeforeFees`** — For percent/combination modes; includes **`getOutstandingLastStatementUnpaid`** when **`pastDue`** has not yet rolled that obligation.
 
-**`getTotalOwedForLateTracking`** mirrors the same **no double-count** idea as **`calculateCustomerTotal`** when last statement is already embedded in **currentDue**.
+**`getTotalOwedForLateTracking`** mirrors the **no double-count** rules in **`calculateCustomerTotal`** (see §3.2): same-calendar shortcut when **`currentDue`** already covers **`stmtUnpaid`**, plus the **`rolled` / `stmtNet` / `combined`** duplicate branch with **`stmtMatchTol`** (including late-fee width) returning **`max(rolledLt, stmtNetLt)`** when it fires.
 
 **Charge history:** **`maybeAppendLateFeeChargeHistory`** logs **`lateFeeAdded`** tied to **`billPrintDate`** so each bill’s first crossing of the threshold is auditable.
 
@@ -246,9 +266,27 @@ On app init, **`loadTogglesSettings()`** runs **before** **`loadCustomersFromFir
 
 ---
 
+### 11.3 Testing Drawer (Settings → System Toggles)
+
+When **Testing Drawer** is enabled (`settings/toggles.testingDrawerEnabled`):
+
+- **`syncSystemTestingDrawerFromToggle`** ensures a synthetic drawer **`Testing Drawer`** (reserved Firestore id) with **\$100** fund, **one \$100** SOD, **`lastCountDate`** stamped for the **effective** “today” (real or test date), and **available** for POS.
+- When disabled, that drawer is removed from memory and Firestore.
+- Runs after loading drawers, saving toggles, billing fresh start, opening the POS drawer modal, etc., so testers do not need supervisor **Start of Day** on a physical drawer.
+
+### 11.4 Admin: Payments → Start New Payment without POS login
+
+**`selectedDrawer`** is normally set when a **POS** user picks a drawer at login. **Admin** users opening **\$ Payments** and **Start New Payment** without a drawer used to get an alert.
+
+**Behavior:** If **`!selectedDrawer`**, the app sets **`pendingStartNewPaymentAfterDrawer`**, opens **`showDrawerSelectionModal`** (same UI as POS: search + pick drawer). **`selectDrawer`** then clears the flag and **`await startNewPayment()`** again (skips the extra “You are now working with…” alert on that resume). **Cancel** appears while pending so the modal can be dismissed; **Close** appears on empty/unavailable-drawer dead ends so the flag is not left stuck.
+
+---
+
 ## 12. Diagnostics
 
-- Filter browser console for **`[PastDueRoll]`** to trace roll-forward, composition splits, and ledger→statement adjustments.
+- **`[PastDueRoll]`** — Past-due roll, composition splits, ledger→statement adjustments. **Default console filter:** traces for customer name **Susan Young** only (substring match); set **`window.__BILL_PANEL_TRACE_ALL = true`** for all customers, **`window.__BILL_PANEL_TRACE = false`** to silence **`[BillPanelTrace]`** and **`[PastDueRoll]`**, or **`window.__BILL_PANEL_TRACE_CUSTOMER_ID`** to a fragment / id / account number.
+- **`[BillPanelTrace]`** — Process Bill panel / **`getSumPaymentAmountsAfterLastBillPrint`** / frozen-vs-live branches (same gating as **`[PastDueRoll]`** by default).
+- Filter browser console for **`[BillDiag]`** — requires **`window.__BILL_DIAG_LOGGING = true`** (opt-in billing totals).
 - **`traceAutomaticLateFeeAmount`** / **`LATE_FEE_TRACE_ALL`** — Optional late-fee tracing.
 
 ---
@@ -271,11 +309,14 @@ On app init, **`loadTogglesSettings()`** runs **before** **`loadCustomersFromFir
 7. **Payment** — Hierarchy order changes allocation; past due payments shrink composition proportionally.
 8. **Deposit trigger with stacked late fees** — If statement Late Fee is e.g. `$10.00` (rolled `$5` + new `$5`), deposit auto-pay row should show Late Fee `$10.00` and Late Fee Details split rows, while Amount Paid matches statement Total Due.
 9. **Keyboard date advance (Ctrl/Cmd+Shift)** — Advances to next month using day-by-day simulation (overlay shown), not an instant jump.
-10. **Partial pay after Produce Bill** — Payment panel **Total** matches ledger **Balance After** chain (no `currentDue + stmtUnpaid` inflation); e.g. \$361.98 − \$100 → \$261.98 headline.
-11. **Ledger late fee on old billing row after pay** — **Late Fee Details** on the **Feb `billingCharge`** row still shows the **\$5** cycle line and **· Process Bill** + timer footer, not “current statement” \$0.
-12. **Ledger late fee on check row** — Same **\$5 / prior cycle** copy as the bill row for the payment that applied to that statement.
-13. **Payment `amountDue` on history row** — Matches **`getProcessBillPanelAmounts`** at pay time (aligned with Process Bill / payment header).
+10. **Partial pay after Produce Bill** — Payment panel **Total** matches ledger **Balance After** (no `currentDue + stmtUnpaid` inflation). Includes **advance to next calendar month** before the next bill: automatic **late fee** can make **`rolled`** and **`stmtNet`** differ by ~the late dollar amount; **`stmtMatchTol`** (§3.2) must still collapse so headline ≠ ~2× true balance (e.g. wrong **\$211** vs correct **\$108**).
+11. **Second Produce Bill after partial pay + late** — Carried unpaid + new cycle charges: **Amount Breakdown** **Total Due**, **billingCharge** row columns, and **Balance After** should agree (e.g. carried **\$103.49** past due on the bill row + new cycle lines = one statement total such as **\$286.98** when that is the intended full statement).
+12. **`billingCharge` row anchor** — Duplicate or trailing **Billed Customer** rows must not make **`getLatestBillingChargeHistoryRow`** “after” a real payment: **`getAnchorBillingChargeHistoryRowForLastPrint`** (§3.3) keeps **`stmtUnpaid`**, **`pastDueOnBill`**, and PDF previous-charges math aligned with the ledger.
+13. **Admin → \$ Payments → Start New Payment** — With no drawer selected, drawer selection modal opens and **`startNewPayment`** resumes after **`selectDrawer`** (see §11.4).
+14. **Ledger late fee on old billing row after pay** — **Late Fee Details** on the **Feb `billingCharge`** row still shows the **\$5** cycle line and **· Process Bill** + timer footer, not “current statement” \$0.
+15. **Ledger late fee on check row** — Same **\$5 / prior cycle** copy as the bill row for the payment that applied to that statement.
+16. **Payment `amountDue` on history row** — Matches **`getProcessBillPanelAmounts`** at pay time (aligned with Process Bill / payment header).
 
 ---
 
-*Last aligned with application logic in `public/index.html` (April 2026).*
+*Last aligned with application logic in `public/index.html` (May 2026).*
