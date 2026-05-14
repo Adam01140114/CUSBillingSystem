@@ -1281,4 +1281,16 @@ function formatFileSize(bytes) {
 // Start server
 // ────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+  if (process.env.DEV_BILLING_SCENARIO === '1') {
+    const base = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+    console.log('\n[DEV_BILLING_SCENARIO] Browser automation (login first, then open):\n');
+    console.log(`  ${base}/index.html?devScenario=1`);
+    console.log('Optional: copy public/dev-scenario.sample.json → public/dev-scenario.json to override defaults.\n');
+    console.log(
+      'Expanded scenario (check + May bill): Settings → Toggles → Testing Drawer ON, Skip POS initial register count ON.\n'
+    );
+    console.log('CLI helper: npm run dev:scenario-help\n');
+  }
+});

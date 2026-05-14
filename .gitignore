@@ -3,3 +3,6 @@ node_modules
 firebaseAdminKey.json
 /public/example.html
 /public/example2.html 
+/public/dev-scenario.json
+# Local Firebase login for tools/run-billing-scenario-local.mjs (never commit)
+tools/billing-test.local.json

@@ -784,6 +784,25 @@
       }
     }
 
+    /** Firestore rejects `undefined` anywhere in the payload — strip before setDoc (common on hydrated docs). */
+    function omitUndefinedDeepForFirestore(value) {
+      if (value === undefined) return undefined;
+      if (value === null || typeof value !== 'object') return value;
+      if (value instanceof Date) return new Date(value.getTime());
+      if (Array.isArray(value)) {
+        return value
+          .map((item) => omitUndefinedDeepForFirestore(item))
+          .filter((item) => item !== undefined);
+      }
+      const out = {};
+      for (const key of Object.keys(value)) {
+        if (value[key] === undefined) continue;
+        const v = omitUndefinedDeepForFirestore(value[key]);
+        if (v !== undefined) out[key] = v;
+      }
+      return out;
+    }
+
     // Save a single customer to Firestore (avoid updating all customers)
     async function saveSingleCustomerToFirestore(customer) {
       if (!customer || !customer.id) {
@@ -794,7 +813,7 @@
       }
       const customersRef = collection(db, 'customers');
       const customerRef = doc(customersRef, customer.id);
-      await setDoc(customerRef, customer);
+      await setDoc(customerRef, omitUndefinedDeepForFirestore(customer));
     }
 
     async function saveSingleLocationToFirestore(location) {
@@ -3904,8 +3923,8 @@
     }
 
     /**
-     * getProcessBillPanelAmounts → calculateCustomerTotal → getDaysSinceLastBillPrint.
-     * Inner (nested) calls return raw calendar days only; the outer call applies the $0 panel pause.
+     * getDaysSinceLastBillPrint uses calculateCustomerTotal (via late-fee helpers). Live panel totals match
+     * calculateCustomerTotalReadOnly().total (panel cap/floor applied inside calculateCustomerTotal).
      */
     let _getDaysSinceLastBillPrintDepth = 0;
 
@@ -4013,6 +4032,8 @@
      *   window.__BILL_DIAG_CUSTOMER_ID = 'CUS-3001000'
      * Optional: log Process Bill panel / getProcessBillPanelAmounts on every refresh (can be noisy):
      *   window.__BILL_DIAG_VERBOSE_PANEL = true
+     * When true, panel reconcile and Amount Breakdown footer also emit console.warn for the traced customer.
+     * Balance thresholds for debugging: OWED.ZERO, OWED.EPS, OWED.PANEL_MIRROR (search in index.html).
      * When the 21-day timer is paused because Process Bill total is $0 but raw calendar days since print > 0:
      *   getDaysSinceLastBillPrint:pause_panel_zero { rawCalendarDaysSincePrint, panelTotal, owedExclLateSimple }
      * When calc vs panel pastDue disagree before payment hierarchy (POS / deposit align):
@@ -4171,10 +4192,24 @@
       if (lastBillRow && typeof ledgerChronoStrictlyAfter === 'function') {
         const billSortMs = getLedgerEntrySortMs(lastBillRow);
         const billLo = getLedgerEntryOrder(lastBillRow);
-        const after = ledgerChronoStrictlyAfter(p, lastBillRow);
+        let after = ledgerChronoStrictlyAfter(p, lastBillRow);
+        let tieBreak = after ? 'after_latest_billing_charge_row' : 'not_after_latest_billing_charge_row';
+        // Same wall-clock instant as the anchor bill but payment ledgerOrder ≤ bill (or unknown): POS still
+        // applies to the balance after that bill — do not drop from paidAfter or stmtUnpaid stays gross-high.
+        if (
+          !after &&
+          paySortMs != null &&
+          billSortMs != null &&
+          !isNaN(paySortMs) &&
+          !isNaN(billSortMs) &&
+          paySortMs === billSortMs
+        ) {
+          after = true;
+          tieBreak = 'same_ms_payment_counts_after_bill';
+        }
         return {
           counts: !!after,
-          tieBreak: after ? 'after_latest_billing_charge_row' : 'not_after_latest_billing_charge_row',
+          tieBreak,
           mode: 'billingChargeRow',
           paymentSortMs: paySortMs,
           billAnchorMs: billSortMs,
@@ -4239,7 +4274,8 @@
           countsTowardStatement = true;
           tieBreak = 'same_ms_payLo_after_bill';
         } else {
-          tieBreak = 'same_ms_payLo_not_after_bill';
+          countsTowardStatement = true;
+          tieBreak = 'same_ms_payment_tie_counts_after_bill';
         }
       } else {
         tieBreak = 'sort_ms_before_bill_print';
@@ -4323,7 +4359,8 @@
 
     /**
      * Unpaid balance from the last printed bill (lastPrintedStatementTotalDue minus payments after that bill).
-     * Used when pastDue has not yet been rolled forward but the prior statement is still owed (e.g. before 2nd bill).
+     * calculateCustomerTotal uses ledger pastDue when positive; this remainder is the prior bridge only while
+     * rolled principal has not yet populated customer.pastDue (first bill / pre-roll views).
      */
     function getOutstandingLastStatementUnpaid(customer) {
       if (!customer || !customer.lastBillPrintDate) {
@@ -4434,6 +4471,126 @@
       return out;
     }
 
+    /** One place for money thresholds used in balance / panel math (cents-safe comparisons). */
+    const OWED = {
+      /** Treat as zero balance */
+      ZERO: 0.005,
+      /** General float tolerance ($0.02) */
+      EPS: 0.02,
+      /** Panel “past line ≈ cycle subtotal” mirror (first unpaid bill on PDF) */
+      PANEL_MIRROR: 0.08
+    };
+
+    /**
+     * Customer balance used by calculateCustomerTotal and getTotalOwedForLateTracking.
+     *
+     * 1) Prior dollars = passed-in past (caller should use panel past line via getPanelPastDueLineDollars when
+     *    ledger past would double-count the printed Past Due column), else stmt bridge, else 0.
+     * 2) If passed-in past is a negative credit sentinel (past < -OWED.ZERO) and stmt unpaid matches current
+     *    cycle (same first bill), do not add prior + current — use max(rolled, stmtNet) instead.
+     * 3) Else total = prior + current − credit.
+     * 4) No rolled ledger past, but stmt remainder (lastStmt − paidAfter) is stale vs net current cycle after
+     *    currentMonthPaid → do not add su + cur (use rolled). Or su ≈ cur after paidAfter fixes → one pool (rolled).
+     *
+     * @param {object} [opts]
+     * @param {object} [opts.customer] - required if applySameMonthStmtShortcut
+     * @param {boolean} [opts.applySameMonthStmtShortcut] - late-tracking: same calendar month as last print
+     *   and current cycle already covers stmt → return current − credit only (legacy behavior).
+     */
+    function computeCustomerOwedBalanceTotal(
+      pastDuePositive,
+      credit,
+      stmtUnpaid,
+      currentDue,
+      lateFeeForTol,
+      opts
+    ) {
+      opts = opts || {};
+      const past = Math.max(0, parseFloat(pastDuePositive) || 0);
+      const cred = Math.max(0, parseFloat(credit) || 0);
+      const su = Math.max(0, parseFloat(stmtUnpaid) || 0);
+      const cur = Math.max(0, parseFloat(currentDue) || 0);
+
+      if (
+        opts.applySameMonthStmtShortcut === true &&
+        opts.customer &&
+        typeof isCalendarPeriodAfterLastBillPrint === 'function' &&
+        !isCalendarPeriodAfterLastBillPrint(opts.customer) &&
+        su > OWED.ZERO &&
+        cur + OWED.EPS >= su
+      ) {
+        const priorForTotal = past > OWED.ZERO ? past : su > OWED.ZERO ? su : 0;
+        const t = Math.max(0, Math.round((cur - cred) * 100) / 100);
+        return {
+          total: t,
+          mirrorFirstUnpaid: false,
+          dedupSameMonthStmtVsNetCur: false,
+          priorForTotal,
+          rolled: Math.round((cur + past - cred) * 100) / 100,
+          stmtNet: Math.round((su - cred) * 100) / 100,
+          combined: Math.round((priorForTotal + cur - cred) * 100) / 100,
+          stmtMatchTol: 0,
+          shortcutSameMonthStmt: true
+        };
+      }
+
+      const priorForTotal = past > OWED.ZERO ? past : su > OWED.ZERO ? su : 0;
+      const rolled = Math.round((cur + past - cred) * 100) / 100;
+      const stmtNet = Math.round((su - cred) * 100) / 100;
+      const combined = Math.round((priorForTotal + cur - cred) * 100) / 100;
+      const stmtTolBase = su > OWED.ZERO ? Math.max(0.05, Math.min(10, 0.02 * stmtNet)) : 0;
+      const lateTol = Math.max(0, Math.round((parseFloat(lateFeeForTol) || 0) * 100) / 100);
+      const stmtMatchTol = su > OWED.ZERO ? Math.max(stmtTolBase, lateTol + OWED.EPS) : 0;
+      const mirrorFirstUnpaid =
+        past < -OWED.ZERO &&
+        su > OWED.ZERO &&
+        stmtMatchTol > 0 &&
+        combined > rolled + OWED.EPS &&
+        Math.abs(rolled - stmtNet) <= stmtMatchTol &&
+        Math.abs(su - cur) <= stmtMatchTol;
+      let total = mirrorFirstUnpaid
+        ? Math.round(Math.max(rolled, stmtNet) * 100) / 100
+        : Math.round(combined * 100) / 100;
+
+      // (A) stmt remainder (lastStmt − paidAfter) stale-high vs net current cycle after currentMonthPaid →
+      //     priorForTotal + cur double-counts. Runs in any calendar month (sim date may be after bill month).
+      // (B) After paidAfter fixes, su ≈ cur but prior was still su → combined ≈ 2×rolled; collapse to rolled.
+      let dedupSameMonthStmtVsNetCur = false;
+      const noMeaningfulLedgerPast = past < 0.02;
+      const stmtNetMatchesRolled =
+        noMeaningfulLedgerPast &&
+        su > OWED.ZERO &&
+        cur > OWED.ZERO &&
+        Math.abs(su - cur) <= Math.max(0.12, 0.02 * Math.max(su, cur));
+      if (!mirrorFirstUnpaid && stmtNetMatchesRolled && total > rolled + OWED.EPS) {
+        total = Math.round(Math.max(0, rolled) * 100) / 100;
+        dedupSameMonthStmtVsNetCur = true;
+      } else if (
+        !mirrorFirstUnpaid &&
+        opts.customer &&
+        noMeaningfulLedgerPast &&
+        su > OWED.ZERO &&
+        cur > OWED.ZERO &&
+        cur + OWED.EPS < su &&
+        total > rolled + OWED.EPS
+      ) {
+        total = Math.round(Math.max(0, rolled) * 100) / 100;
+        dedupSameMonthStmtVsNetCur = true;
+      }
+
+      return {
+        total,
+        mirrorFirstUnpaid,
+        dedupSameMonthStmtVsNetCur,
+        priorForTotal,
+        rolled,
+        stmtNet,
+        combined,
+        stmtMatchTol,
+        shortcutSameMonthStmt: false
+      };
+    }
+
     /**
      * PDF "previous charges" / Past Due column: floor from ledger vs last-statement remainder, then align to
      * calculateCustomerTotal().total (auth). reconcileCur must come from getPdfCurrentCycleDueExcludingLateFromCalc(calc).
@@ -4459,8 +4616,11 @@
         floorPrev = Math.round(stmtUn * 100) / 100;
         floorPrevBranch = 'stmt_only_ledger_zero';
       } else if (ledgerPd > 0.005 && stmtUn > ledgerPd + 0.02) {
-        floorPrev = Math.round(ledgerPd * 100) / 100;
-        floorPrevBranch = 'ledger_when_stmt_overstates';
+        // Unpaid last statement (stmtUn) can exceed customer.pastDue when rolled composition lags the
+        // full statement total (stacked bills without payment). Using ledger alone repeats the same PDF
+        // past-due column and Balance After on successive bills — floor must not drop below stmtUn.
+        floorPrev = Math.round(Math.max(ledgerPd, stmtUn) * 100) / 100;
+        floorPrevBranch = 'max_ledger_stmt_when_stmt_higher';
       } else if (stmtUn > 0.005 && ledgerPd > stmtUn + 0.02) {
         floorPrev = Math.round(stmtUn * 100) / 100;
         floorPrevBranch = 'stmt_when_ledger_overstates';
@@ -4476,7 +4636,8 @@
       let chosenPrev = floorPrev;
       if (auth > 0.005 && Math.abs(sum - auth) > 0.02) {
         recoFromAuth = Math.max(0, Math.round((auth - cur - late) * 100) / 100);
-        if (recoFromAuth > 0.005 && recoFromAuth + 0.02 < floorPrev) {
+        const floorAboveUnpaidStatement = stmtUn > 0.005 && floorPrev > stmtUn + 0.02;
+        if (recoFromAuth > 0.005 && recoFromAuth + 0.02 < floorPrev && floorAboveUnpaidStatement) {
           chosenPrev = recoFromAuth;
         } else {
           chosenPrev = Math.max(recoFromAuth, floorPrev);
@@ -4833,6 +4994,7 @@
 
     /**
      * Total still owed including automatic late fee. Pass lateFeeAmt explicitly to avoid recursion with getAutomaticLateFeeAmount.
+     * Delegates to computeCustomerOwedBalanceTotal (same rules as calculateCustomerTotal).
      */
     function getTotalOwedForLateTracking(customer, lateFeeAmtExplicit) {
       const parts = getSubtotalBeforePucAndPucSurcharge(customer);
@@ -4845,35 +5007,12 @@
       const credit = Math.abs(Math.min(0, pastDueRaw));
       const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, lateFeeAmt, parts);
       const stmtUnpaid = getOutstandingLastStatementUnpaid(customer);
-      const priorChain = stmtUnpaid > 0.005 ? stmtUnpaid : pastDue;
-      const rolledLt = Math.round((currentDue + pastDue - credit) * 100) / 100;
-      const stmtNetLt = Math.round((stmtUnpaid - credit) * 100) / 100;
-      const combinedLt = Math.round((currentDue + priorChain - credit) * 100) / 100;
-      const stmtTolLt =
-        stmtUnpaid > 0.005 ? Math.max(0.05, Math.min(10, 0.02 * stmtNetLt)) : null;
-      const lateTolLt = Math.max(0, Math.round((parseFloat(lateFeeAmt) || 0) * 100) / 100);
-      const stmtMatchTolLt =
-        stmtTolLt != null ? Math.max(stmtTolLt, lateTolLt + 0.02) : null;
-      const duplicateStmtVersusCurrentDue =
-        stmtUnpaid > 0.005 &&
-        stmtMatchTolLt != null &&
-        combinedLt > rolledLt + 0.02 &&
-        Math.abs(rolledLt - stmtNetLt) <= stmtMatchTolLt;
-      // If currentDue already includes at least the unpaid prior statement (same statement with fee changes),
-      // do not add stmtUnpaid again or totals will double-count principal. Skip that shortcut in a *new*
-      // calendar billing period when current cycle truly stacks on the last statement — unless duplicateStmtVersusCurrentDue
-      // (sim month advanced but no new bill yet; currentDue and stmtUnpaid are the same remainder).
-      if (
-        !isCalendarPeriodAfterLastBillPrint(customer) &&
-        stmtUnpaid > 0.005 &&
-        currentDue + 0.02 >= stmtUnpaid
-      ) {
-        return Math.max(0, Math.round((currentDue - credit) * 100) / 100);
-      }
-      if (duplicateStmtVersusCurrentDue) {
-        return Math.max(0, Math.round(Math.max(rolledLt, stmtNetLt) * 100) / 100);
-      }
-      return Math.max(0, Math.round((currentDue + priorChain - credit) * 100) / 100);
+      const pastDueForOwed = getPanelPastDueLineDollars(customer, pastDue);
+      const b = computeCustomerOwedBalanceTotal(pastDueForOwed, credit, stmtUnpaid, currentDue, lateFeeAmt, {
+        customer,
+        applySameMonthStmtShortcut: true
+      });
+      return Math.max(0, b.total);
     }
 
     // Days late for UI + search: continuous 30-60-90 delinquency timer (anchor while amount owed > 0).
@@ -6280,16 +6419,20 @@
     // Returns an object with all calculated values
     // billUiSnapshot: when true (Process Bill UI + simulated date pass), skip appending late-fee ledger rows only.
     // skipDepositAutoApply: when true, skip security-deposit auto-pay (avoids recursion when deposit logic needs the balance).
+    // skipPanelBalanceReconciliation: when true, return rolled ledger total only (no Process Bill panel cap/floor).
+    //   Used for Fresh start full-pay sizing so a stale opening-balance cap cannot report $0 while the account still owes.
     function calculateCustomerTotal(customer, opts) {
       opts = opts || {};
       const billUiSnapshot = opts.billUiSnapshot === true;
       const skipDepositAutoApply = opts.skipDepositAutoApply === true;
+      const skipPanelBalanceReconciliation = opts.skipPanelBalanceReconciliation === true;
       const silentDiag = opts.silentDiag === true;
 
       if (!silentDiag && billDiagCustomerMatch(customer)) {
         billDiag('calculateCustomerTotal:enter', customer, {
           billUiSnapshot,
           skipDepositAutoApply,
+          skipPanelBalanceReconciliation,
           pastDueField: customer.pastDue,
           lastBillPrintDate: customer.lastBillPrintDate,
           lastBillPrintLedgerOrder: customer.lastBillPrintLedgerOrder,
@@ -6366,70 +6509,81 @@
       const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, lateFeeAmount, subtotalParts);
 
       const stmtUnpaid = getOutstandingLastStatementUnpaid(customer);
-      const priorChain = stmtUnpaid > 0.005 ? stmtUnpaid : pastDue;
-      const rolled = Math.round((currentDue + pastDue - credit) * 100) / 100;
-      const stmtNet = Math.round((stmtUnpaid - credit) * 100) / 100;
-      const combined = Math.round((currentDue + priorChain - credit) * 100) / 100;
-      let total;
-      // When lastPrintedStatementTotalDue drives stmtUnpaid, adding priorChain can double-count the
-      // same dollars as currentDue (same-month view right after a bill while pastDue is still 0 because
-      // the first bill did not roll). Collapse when `rolled` reconciles to stmtNet within tolerance (below).
-      // Do not use `pastDue >= stmt` here: after the first bill, pastDue is often still 0 while stmt is
-      // already set — requiring that guard forced `combined` (e.g. $178 + $178) and broke the UI.
-      //
-      // Second-bill + late fee: `rolled` gains late in currentDue while stmtNet is principal-only; then
-      // |rolled − stmtNet| exceeds the tolerance so we keep `combined` (prior statement + current + late).
-      //
-      // After advancing the simulated calendar into a new month (isCalendarPeriodAfterLastBillPrint true)
-      // but before a new Produce Bill, currentDue can still equal the unpaid last statement while stmtUnpaid
-      // is the same remainder — combined would double-count (e.g. $108 + $108). Use the same collapse rule
-      // whenever rolled matches stmtNet within tolerance, not only in the same calendar month as last print.
-      //
-      // When an automatic late fee is in `lateFeeAmount` but `getCurrentCycleDueWithPaymentConsistency` leaves
-      // it out of `currentDue` while `stmtNet` still includes that fee in `lastPrintedStatementTotalDue − paid`,
-      // |rolled − stmtNet| can equal the late dollar amount — widen tolerance by that fee so we still collapse
-      // instead of showing combined ≈ 2× the true balance. Use max(rolled, stmtNet) so we never undercut stmtNet.
-      const stmtTolBase = stmtUnpaid > 0.005 ? Math.max(0.05, Math.min(10, 0.02 * stmtNet)) : 0;
-      const lateTol = Math.max(0, Math.round((parseFloat(lateFeeAmount) || 0) * 100) / 100);
-      const stmtMatchTol = stmtUnpaid > 0.005 ? Math.max(stmtTolBase, lateTol + 0.02) : 0;
-      if (
-        stmtUnpaid > 0.005 &&
-        stmtMatchTol > 0 &&
-        combined > rolled + 0.02 &&
-        Math.abs(rolled - stmtNet) <= stmtMatchTol
-      ) {
-        total = Math.round(Math.max(rolled, stmtNet) * 100) / 100;
-      } else {
-        total = combined;
+      // Align with Amount Breakdown / Process Bill past line (getPanelPastDueLineDollars): ledger pastDue can
+      // still hold rolled dollars while the printed "Past Due" column / anchor row is $0 — do not add both.
+      const pastDueForOwed = getPanelPastDueLineDollars(customer, pastDue);
+      const bal = computeCustomerOwedBalanceTotal(pastDueForOwed, credit, stmtUnpaid, currentDue, lateFeeAmount, {
+        customer,
+        applySameMonthStmtShortcut: false
+      });
+      if (Math.abs(pastDue - pastDueForOwed) > OWED.EPS && tracePanelVerboseCustomerMatch(customer)) {
+        logBillPanelTrace('calculateCustomerTotal:pastDueLedger_vs_panelLine', customer, {
+          pastDueLedger: pastDue,
+          pastDueForOwed,
+          stmtUnpaid,
+          currentDue,
+          combined: bal.combined,
+          rolled: bal.rolled,
+          total: bal.total,
+          dedupStmtVsNet: !!bal.dedupSameMonthStmtVsNetCur
+        });
       }
+      let total = bal.total;
 
-      if (customer.lateFeeAnchorPrintDate && total <= 0.005) {
+      if (customer.lateFeeAnchorPrintDate && total <= OWED.ZERO) {
         delete customer.lateFeeAnchorPrintDate;
       }
 
+      if (!skipPanelBalanceReconciliation) {
+        // Same cap + panel floor as Process Bill live row — keeps calc.total identical to getProcessBillPanelAmounts (non-frozen).
+        const pastDueLineForPanel = getPanelPastDueLineDollars(customer, pastDue);
+        const lateFeePanel = Math.max(0, lateFeeAmount || 0);
+        const panelDraft = {
+          total: Math.max(0, total),
+          pastDue: pastDueLineForPanel,
+          lateFee: lateFeePanel,
+          dueDateStr: '',
+          fromFrozen: false
+        };
+        if (panelDraft.total < OWED.EPS && (panelDraft.pastDue > OWED.ZERO || panelDraft.lateFee > OWED.ZERO)) {
+          panelDraft.pastDue = 0;
+          panelDraft.lateFee = 0;
+        }
+        applyOpenBalanceSnapshotCapToPanelAmounts(customer, panelDraft);
+        reconcileProcessBillPanelTotalInvariants(customer, panelDraft);
+        total = panelDraft.total;
+      }
+
       if (!silentDiag && billDiagCustomerMatch(customer)) {
-        const rolledBranch =
-          stmtUnpaid > 0.005 &&
-          stmtMatchTol > 0 &&
-          combined > rolled + 0.02 &&
-          Math.abs(rolled - stmtNet) <= stmtMatchTol;
         billDiag('calculateCustomerTotal:exit', customer, {
           lateFeeAmount,
           stmtUnpaid,
-          priorChainLabel: stmtUnpaid > 0.005 ? 'stmtUnpaid' : 'pastDueField',
-          priorChain,
-          pastDuePositive: pastDue,
+          pastDueLedger: pastDue,
+          pastDueForOwed,
+          priorChainLabel:
+            pastDueForOwed > OWED.ZERO
+              ? 'panelPastDueLine'
+              : stmtUnpaid > OWED.ZERO
+                ? 'stmtUnpaidBridge'
+                : 'none',
+          priorChain: bal.priorForTotal,
+          pastDuePositive: pastDueForOwed,
           credit,
           currentDue,
-          rolled,
-          stmtNet,
-          combined,
-          totalBranch: rolledBranch ? 'rolled_collapse' : 'combined',
+          rolled: bal.rolled,
+          stmtNet: bal.stmtNet,
+          combined: bal.combined,
+          totalBranch: bal.mirrorFirstUnpaid
+            ? 'first_unpaid_stmt_mirror'
+            : bal.dedupSameMonthStmtVsNetCur
+              ? 'stmt_vs_net_cur_dedup'
+              : 'prior_plus_current',
+          dedupSameMonthStmtVsNetCur: !!bal.dedupSameMonthStmtVsNetCur,
+          shortcutSameMonthStmt: bal.shortcutSameMonthStmt === true,
           calendarAfterLastPrint: isCalendarPeriodAfterLastBillPrint(customer),
-          stmtTolBase,
-          lateTol,
-          stmtMatchTol,
-          total
+          stmtMatchTol: bal.stmtMatchTol,
+          rawBalanceTotal: bal.total,
+          panelFinalTotal: total
         });
       }
 
@@ -6600,9 +6754,10 @@
      * @param {object} customer - mutated in place
      * @param {object} calc - result of calculateCustomerTotal(customer) for the bill that was just printed
      * @param {boolean} rollUnpaidCurrentIntoPastDue - false on the first bill after no prior print date
-     * @param {{ closedStatementTotalFromBill?: number }} [options] - when set, raises statement + rolled past due
-     *   to match the billed charge row (`currentDueOnBill`) when `calc.total` uses rolled/stmt collapse and
-     *   undercounts vs the PDF column sum (multi-bill chain).
+     * @param {{ closedStatementTotalFromBill?: number }} [options] - when set, raises `lastPrintedStatementTotalDue`
+     *   (and internal `statementTotal`) to match the billed charge row column sum when `calc.total` understates.
+     *   Must not be applied to `customer.pastDue`: that field is only prior rolled balance (`prevPastDueRaw +
+     *   unpaidCurrent`); the bill row total also includes the new cycle's sewer/tax and would double-count.
      */
     function applyBillProductionRollForward(customer, calc, rollUnpaidCurrentIntoPastDue, options) {
       options = options || {};
@@ -6658,10 +6813,7 @@
           rollUnpaidCurrentIntoPastDue
         });
         addRolledUnpaidCurrentToPastDueComposition(customer, calc, unpaidCurrent);
-        let newPastDue = Math.round((prevPastDueRaw + unpaidCurrent) * 100) / 100;
-        if (closedFromBill != null && closedFromBill > newPastDue + 0.02) {
-          newPastDue = closedFromBill;
-        }
+        const newPastDue = Math.round((prevPastDueRaw + unpaidCurrent) * 100) / 100;
         customer.pastDue = Math.round(newPastDue * 100) / 100;
         syncPastDueCompositionToPastDueField(customer);
         logPastDueRollDiag('applyBillProductionRollForward:afterRoll', {
@@ -6723,19 +6875,14 @@
       const pucSurchargeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.pucSurchargeAmount) || 0) * 100) / 100;
       const surchargesOnBill = Math.round((taxCodesOnBill + pucSurchargeOnBill) * 100) / 100;
       const lateFeeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.lateFeeAmount) || 0) * 100) / 100;
-      // For charge history, "Current Due" is normally the sum of displayed columns. When rolled_collapse makes
-      // calc.total < column sum (prior statement opening shown in pastDueOnBill), match the row to calc.total.
       const columnSumBill = Math.round(
         Math.max(0, sewerChargeOnBill + pastDueOnBill + surchargesOnBill + lateFeeOnBill) * 100
       ) / 100;
       const authRoll = Math.round(Math.max(0, parseFloat(calcBeforeRoll.total) || 0) * 100) / 100;
-      // Prefer column sum. Use calc.total only when it is positive and strictly below column sum (rolled
-      // double-count trim). If calc.total is $0 but columns show real charges, never zero the row — that
-      // produced Balance After $0.00 while Amount Breakdown still showed the correct total.
-      const currentDuePickBranch =
-        authRoll > 0.005 && columnSumBill > authRoll + 0.03 ? 'use_auth_trim_double_count' : 'use_column_sum';
-      const currentDueOnBill =
-        currentDuePickBranch === 'use_auth_trim_double_count' ? authRoll : columnSumBill;
+      // Statement total on the saved row = sum of bill line columns (same as PDF / table). applyBillProductionRollForward
+      // uses closedStatementTotalFromBill to raise lastPrintedStatementTotalDue when calc.total understates.
+      const currentDuePickBranch = 'use_bill_line_column_sum';
+      const currentDueOnBill = columnSumBill;
       if (authRoll < 0.02 && columnSumBill > 0.5) {
         try {
           console.warn('[BillRowCurrentDue]', {
@@ -6743,11 +6890,25 @@
             customerName: customer.name,
             accountNumber: customer.accountNumber,
             message:
-              'calc.total was ~0 while billing columns sum to a positive amount; row currentDue uses column sum (not authRoll)',
+              'calc.total was ~0 while billing columns sum to a positive amount; row currentDue is column sum',
             columnSumBill,
             authRoll,
             currentDueOnBill,
             currentDuePickBranch
+          });
+        } catch (e) {
+          /* ignore */
+        }
+      } else if (Math.abs(columnSumBill - authRoll) > 0.03) {
+        try {
+          console.info('[BillRowCurrentDue]', {
+            customerId: customer.id,
+            customerName: customer.name,
+            accountNumber: customer.accountNumber,
+            message: 'row total uses bill line column sum (may differ from calc.total during stmt collapse)',
+            columnSumBill,
+            authRoll,
+            currentDueOnBill
           });
         } catch (e) {
           /* ignore */
@@ -7561,7 +7722,16 @@
       const snap = getAuthoritativeOpenBalanceAfterLastPaymentIfStillApplicable(customer);
       if (snap == null) return out;
       const curTotal = Math.max(0, parseFloat(out.total) || 0);
-      if (!(snap + 0.02 < curTotal)) return out;
+      if (!(snap + OWED.EPS < curTotal)) return out;
+      // Last payment row shows $0 "balance after" while no billingCharge exists after that pay yet — new
+      // cycle charges still accrue. Capping curTotal to snap=0 wipes Amount Breakdown + PDF total_amount.
+      if (snap <= OWED.EPS && curTotal > OWED.EPS) {
+        logBillPanelTrace('applyOpenBalanceSnapshotCapToPanelAmounts:skip_stale_zero_snap', customer, {
+          snap,
+          curTotal
+        });
+        return out;
+      }
       const paidLate = parseFloat(customer.currentMonthPaidLateFee || 0) || 0;
       const lateRem = Math.max(0, Math.max(0, parseFloat(out.lateFee) || 0) - paidLate);
       const gap = Math.round((curTotal - snap) * 100) / 100;
@@ -7569,7 +7739,7 @@
       // by ~the unpaid late dollars. Capping to `snap` would drop that late from Total Due while the late
       // line still shows — Amount Breakdown then shows Current Due = total − late (double-subtract).
       const skipCapStaleSnapVersusAccruedLate =
-        lateRem > 0.005 && Math.abs(gap - lateRem) <= 0.06;
+        lateRem > OWED.ZERO && Math.abs(gap - lateRem) <= 0.06;
       logBillPanelTrace('applyOpenBalanceSnapshotCapToPanelAmounts:eval', customer, {
         snap,
         curTotal,
@@ -7583,7 +7753,7 @@
         return out;
       }
       out.total = snap;
-      if (snap < 0.02) {
+      if (snap < OWED.ZERO) {
         out.pastDue = 0;
         out.lateFee = 0;
       }
@@ -7591,10 +7761,10 @@
     }
 
     /**
-     * Single invariant for Process Bill, Payment Processing, Search, and Amount Breakdown:
-     * panel.total must be at least pastDue + (sewer+tax+PUC remainder excluding auto-late) + unpaid late line,
-     * except when pastDue line and cycle remainder are the same rolled dollars (collapse) — then use past+late only.
-     * Fixes statement collapse / snapshot caps that drop late from total while panel.lateFee still shows it.
+     * Floor for Process Bill / Amount Breakdown: total should not fall below PDF past line + current cycle
+     * (excluding auto-late in the cycle slice) + unpaid late. When ledger past is still ~$0 and the PDF
+     * past line matches the cycle subtotal, that is the first-bill mirror — do not add cycle twice (same
+     * rule as computeCustomerOwedBalanceTotal mirror, using OWED.PANEL_MIRROR).
      */
     function reconcileProcessBillPanelTotalInvariants(customer, out) {
       if (!out || !customer) return out;
@@ -7604,60 +7774,72 @@
         Math.round(getCurrentCycleDueWithPaymentConsistency(customer, 0, parts) * 100) / 100
       );
       const paidLf = parseFloat(customer.currentMonthPaidLateFee || 0) || 0;
-      const lateCap = Math.max(out.lateFee || 0, paidLf);
+      const lastStmt =
+        typeof getLatestBillingChargeHistoryRow === 'function'
+          ? getLatestBillingChargeHistoryRow(customer)
+          : null;
+      const lastStmtLate = lastStmt
+        ? Math.max(0, Math.round((parseFloat(lastStmt.lateFeeAmount) || 0) * 100) / 100)
+        : 0;
+      // Frozen panel snapshot can omit lateFee while the saved billing row still has a Late Fee column
+      // (ledger Balance After = row sum). Include that so Total Due matches the charge table.
+      const lateCap = Math.max(out.lateFee || 0, paidLf, lastStmtLate);
       const lateRem = Math.max(0, lateCap - paidLf);
-      // Rolled-statement collapse: panel past line (PDF) and "current cycle" subtotal can be the same dollars;
-      // do not add them twice for the panel total floor (e.g. 178.49 + 178.49 + 5 → 361.98 vs auth 183.49).
-      let cyclePortion = cycleExclAutoLate;
-      if (
-        out.pastDue > 0.005 &&
-        cycleExclAutoLate > 0.005 &&
-        Math.abs(out.pastDue - cycleExclAutoLate) <= 0.08
-      ) {
-        cyclePortion = 0;
-      }
+      const ledgerPd = Math.max(0, parseFloat(customer.pastDue) || 0);
+      const mirrorFirstUnpaidOnPanel =
+        ledgerPd < OWED.ZERO &&
+        out.pastDue > OWED.ZERO &&
+        cycleExclAutoLate > OWED.ZERO &&
+        Math.abs(out.pastDue - cycleExclAutoLate) <= OWED.PANEL_MIRROR;
+      const cyclePortion = mirrorFirstUnpaidOnPanel ? 0 : cycleExclAutoLate;
       const floorTotal = Math.round((out.pastDue + cyclePortion + lateRem) * 100) / 100;
       const prev = Math.max(0, parseFloat(out.total) || 0);
       const next = Math.round(Math.max(prev, floorTotal) * 100) / 100;
-      if (Math.abs(next - prev) > 0.02) {
+      if (Math.abs(next - prev) > OWED.EPS && billDiagCustomerMatch(customer)) {
         logBillPanelTrace('reconcileProcessBillPanelTotalInvariants', customer, {
           totalBefore: prev,
           totalAfter: next,
           floorTotal,
           panelPastDue: out.pastDue,
           panelLateFee: out.lateFee,
+          lastStmtLate,
           cycleExclAutoLate,
           cyclePortion,
           lateRem,
           currentMonthPaidLateFee: paidLf
         });
-        try {
-          console.warn(
-            '[ProcessBillPanelReconcile]',
-            Object.assign(
-              {
-                customerId: customer.id,
-                customerName: customer.name,
-                accountNumber: customer.accountNumber,
-                message: 'Raised panel.total so Process Bill / Payment Processing match Amount Breakdown floor'
-              },
-              {
-                totalBefore: prev,
-                totalAfter: next,
-                floorTotal,
-                panelPastDue: out.pastDue,
-                panelLateFee: out.lateFee,
-                cycleExclAutoLate,
-                cyclePortion,
-                lateRem
-              }
-            )
-          );
-        } catch (e) {
-          /* ignore */
+        if (typeof window !== 'undefined' && window.__BILL_DIAG_VERBOSE_PANEL === true) {
+          try {
+            console.warn(
+              '[ProcessBillPanelReconcile]',
+              Object.assign(
+                {
+                  customerId: customer.id,
+                  customerName: customer.name,
+                  accountNumber: customer.accountNumber,
+                  message: 'Raised panel.total to floor (past + cycle excl auto-late + late remaining)'
+                },
+                {
+                  totalBefore: prev,
+                  totalAfter: next,
+                  floorTotal,
+                  panelPastDue: out.pastDue,
+                  panelLateFee: out.lateFee,
+                  cycleExclAutoLate,
+                  cyclePortion,
+                  lateRem
+                }
+              )
+            );
+          } catch (e) {
+            /* ignore */
+          }
         }
       }
       out.total = next;
+      if (lateCap > (parseFloat(out.lateFee) || 0) + OWED.EPS) {
+        out.lateFee = Math.round(lateCap * 100) / 100;
+      }
       return out;
     }
 
@@ -7691,9 +7873,10 @@
     }
 
     /**
-     * Single source of truth for Process Bill, Payment Processing, and Amount Breakdown.
-     * Applies open-balance snapshot cap when applicable, then reconcileProcessBillPanelTotalInvariants
-     * so panel.total is never below pastDue + cycle (excl. auto-late) + unpaid late line.
+     * Authoritative dollars for Process Bill, Payment Processing, Amount Breakdown, and PDF total_amount (live path).
+     * Live branch: totals come from calculateCustomerTotalReadOnly(), which already applies the same panel
+     * cap + floor as the old duplicate path — do not cap/reconcile again here (avoids drift vs PDF/calc).
+     * Frozen branch: statement snapshot until next Produce Bill (different rules by design).
      */
     function getProcessBillPanelAmounts(customer) {
       if (!customer) {
@@ -7735,8 +7918,8 @@
             dueDateStr: getBillDueDateStr(customer),
             fromFrozen: false
           };
-          if (outPaid.total < 0.02) {
-            if (pastDue > 0.005 || latePaid > 0.005) {
+          if (outPaid.total < OWED.EPS) {
+            if (pastDue > OWED.ZERO || latePaid > OWED.ZERO) {
               logBillPanelTrace('getProcessBillPanelAmounts:zero_lines_when_total_paid', customer, {
                 branch: 'bypass_after_bill_payments',
                 priorPastDueLine: pastDue,
@@ -7753,10 +7936,7 @@
             });
           }
           logBillPanelTrace('getProcessBillPanelAmounts:result_bypass_payments_after_bill', customer, outPaid);
-          return reconcileProcessBillPanelTotalInvariants(
-            customer,
-            applyOpenBalanceSnapshotCapToPanelAmounts(customer, outPaid)
-          );
+          return outPaid;
         }
         // Last Produce Bill: keep total / past due / due date frozen. Late fee line = PDF late (frozen)
         // plus any new 21-day accrual since last print (additive — max() would hide the second cycle fee).
@@ -7794,7 +7974,7 @@
         if (
           typeof isCalendarPeriodAfterLastBillPrint === 'function' &&
           !isCalendarPeriodAfterLastBillPrint(customer) &&
-          liveCalc.total + 0.02 < outFrozen.total
+          liveCalc.total + OWED.EPS < outFrozen.total
         ) {
           const pastDueLive = getPanelPastDueLineDollars(customer, liveCalc.pastDue || 0);
           const lateRecon = Math.max(0, liveCalc.lateFeeAmount || 0);
@@ -7805,8 +7985,8 @@
             dueDateStr: getBillDueDateStr(customer),
             fromFrozen: false
           };
-          if (outReconcile.total < 0.02) {
-            if (pastDueLive > 0.005 || lateRecon > 0.005) {
+          if (outReconcile.total < OWED.EPS) {
+            if (pastDueLive > OWED.ZERO || lateRecon > OWED.ZERO) {
               logBillPanelTrace('getProcessBillPanelAmounts:zero_lines_when_total_paid', customer, {
                 branch: 'frozen_reconcile_to_live',
                 priorPastDueLine: pastDueLive,
@@ -7822,11 +8002,10 @@
               liveTotal: outReconcile.total
             });
           }
+          applyOpenBalanceSnapshotCapToPanelAmounts(customer, outReconcile);
+          reconcileProcessBillPanelTotalInvariants(customer, outReconcile);
           logBillPanelTrace('getProcessBillPanelAmounts:result_frozen_reconcile_to_live', customer, outReconcile);
-          return reconcileProcessBillPanelTotalInvariants(
-            customer,
-            applyOpenBalanceSnapshotCapToPanelAmounts(customer, outReconcile)
-          );
+          return outReconcile;
         }
         logBillPanelTrace('getProcessBillPanelAmounts:result_frozen_panel', customer, outFrozen);
         return reconcileProcessBillPanelTotalInvariants(customer, outFrozen);
@@ -7841,8 +8020,8 @@
         dueDateStr: getBillDueDateStr(customer),
         fromFrozen: false
       };
-      if (outLive.total < 0.02) {
-        if (pastDue > 0.005 || lateRaw > 0.005) {
+      if (outLive.total < OWED.EPS) {
+        if (pastDue > OWED.ZERO || lateRaw > OWED.ZERO) {
           logBillPanelTrace('getProcessBillPanelAmounts:zero_lines_when_total_paid', customer, {
             priorPastDueLine: pastDue,
             priorLateFee: lateRaw
@@ -7860,9 +8039,8 @@
           dueDateStr: outLive.dueDateStr
         });
       }
-      applyOpenBalanceSnapshotCapToPanelAmounts(customer, outLive);
       logBillPanelTrace('getProcessBillPanelAmounts:result_live', customer, outLive);
-      return reconcileProcessBillPanelTotalInvariants(customer, outLive);
+      return outLive;
     }
 
     function showCustomerBillInfo(customerId) {
@@ -8352,7 +8530,35 @@
           pdfLateFee
         );
         const pdfPreviousCharges = pdfLineTotals.pdfPreviousCharges;
-        const pdfTotalAmount = pdfLineTotals.pdfTotalAmount;
+        let pdfTotalAmount = pdfLineTotals.pdfTotalAmount;
+        if (Math.abs(pdfTotalAmount - calc.total) > OWED.EPS) {
+          if (calc.total < OWED.EPS && pdfTotalAmount > OWED.EPS) {
+            try {
+              console.warn('[produceBill] keeping pdf line total; calc.total is zero (check payment snapshot cap)', {
+                customerId: customer.id,
+                customerName: customer.name,
+                accountNumber: customer.accountNumber,
+                pdfTotalAmount,
+                calcTotal: calc.total
+              });
+            } catch (e) {
+              /* ignore */
+            }
+          } else {
+            try {
+              console.warn('[produceBill] total_amount aligned to calc.total (single source)', {
+                customerId: customer.id,
+                customerName: customer.name,
+                accountNumber: customer.accountNumber,
+                pdfTotalBefore: pdfTotalAmount,
+                calcTotal: calc.total
+              });
+            } catch (e) {
+              /* ignore */
+            }
+            pdfTotalAmount = Math.max(0, Math.round(calc.total * 100) / 100);
+          }
+        }
 
         const naiveFirstFourPlusPucAgain = Math.max(
           0,
@@ -8389,28 +8595,58 @@
         formData.append('previous_charges', `$${pdfPreviousCharges.toFixed(2)}`);
         formData.append('late_fee', `$${pdfLateFee.toFixed(2)}`);
 
-        const pdfLineSumCheck = Math.round((pdfCurrentDueDisplay + pdfPreviousCharges + pdfLateFee) * 100) / 100;
-        if (Math.abs(pdfLineSumCheck - pdfTotalAmount) > 0.03) {
+        const pdfSummaryLineSum = Math.round(
+          (pdfCurrentDueDisplay + pdfPreviousCharges + pdfLateFee) * 100
+        ) / 100;
+        const calcRounded = Math.max(0, Math.round((parseFloat(calc.total) || 0) * 100) / 100);
+        const pdfReconcileRounded = Math.max(0, Math.round(pdfTotalAmount * 100) / 100);
+        let unifiedTotalDueForBill = calcRounded;
+        if (calcRounded < OWED.EPS && pdfReconcileRounded > OWED.EPS) {
+          unifiedTotalDueForBill = Math.max(pdfReconcileRounded, pdfSummaryLineSum);
+        } else {
+          unifiedTotalDueForBill = calcRounded;
+        }
+        if (pdfSummaryLineSum > unifiedTotalDueForBill + OWED.EPS) {
+          logBillPanelTrace('produceBill:total_amount_lifted_to_pdf_summary_lines', customer, {
+            unifiedBeforeLift: unifiedTotalDueForBill,
+            pdfSummaryLineSum,
+            calcRounded,
+            pdfReconcileRounded,
+            pdfCurrentDueDisplay,
+            pdfPreviousCharges,
+            pdfLateFee
+          });
+          unifiedTotalDueForBill = pdfSummaryLineSum;
+        }
+
+        const pdfLineSumCheck = pdfSummaryLineSum;
+        if (Math.abs(pdfLineSumCheck - unifiedTotalDueForBill) > 0.03) {
           try {
             console.warn('[BillPdfLineSum]', {
               customerId: customer.id,
               customerName: customer.name,
               message:
-                'current_due + previous_charges + late_fee ≠ total_amount (rolled total from calculateCustomerTotal); PDF summary lines are informational',
+                'current_due + previous_charges + late_fee ≠ total_amount after unified pick; check reconcile vs summary lines',
               currentDueField: pdfCurrentDueDisplay,
               previousCharges: pdfPreviousCharges,
               lateFee: pdfLateFee,
               lineSum: pdfLineSumCheck,
-              totalAmount: pdfTotalAmount
+              totalAmount: unifiedTotalDueForBill
             });
           } catch (e) {
             /* ignore */
           }
         }
 
-        const totalAmountRecalc = Math.max(0, calc.total);
+        logBillPanelTrace('produceBill:unifiedTotalDueForPdf', customer, {
+          unifiedTotalDueForBill,
+          pdfSummaryLineSum,
+          calcRounded,
+          pdfReconcileRounded,
+          calcRawTotal: calc.total
+        });
 
-        formData.append('total_amount', `$${pdfTotalAmount.toFixed(2)}`);
+        formData.append('total_amount', `$${unifiedTotalDueForBill.toFixed(2)}`);
         formData.append('due_date', dueDateStr);
 
         // Bill status text for PDF — align with late-fee toggle (fees $0 when autoApplyLateFees is off)
@@ -8542,10 +8778,10 @@
 
           // Frozen Past Due = PDF "previous charges" line (matches printed bill). Ledger customer.pastDue may
           // include rolled late still shown separately on the Late Fee line until the next bill.
-          syncProcessBillPanelFrozenSnapshot(customer, pdfTotalAmount, pdfPreviousCharges, pdfLateFee);
+          syncProcessBillPanelFrozenSnapshot(customer, unifiedTotalDueForBill, pdfPreviousCharges, pdfLateFee);
 
           billDiag('produceBill:postPdfLedgerSynced', customer, {
-            pdfTotalAmount,
+            pdfTotalAmount: unifiedTotalDueForBill,
             pdfPreviousCharges,
             pdfLateFee,
             lastBillPrintDate: customer.lastBillPrintDate,
@@ -8704,7 +8940,63 @@
               lateFeeAmount
             );
             const pdfOutstanding = pdfLineTotalsBatch.pdfPreviousCharges;
-            const pdfTotalNum = pdfLineTotalsBatch.pdfTotalAmount;
+            let pdfTotalNum = pdfLineTotalsBatch.pdfTotalAmount;
+            if (Math.abs(pdfTotalNum - totalAmount) > OWED.EPS) {
+              if (totalAmount < OWED.EPS && pdfTotalNum > OWED.EPS) {
+                try {
+                  console.warn(
+                    '[produceBillingCycle] keeping pdf line total; calc.total is zero (check payment snapshot cap)',
+                    {
+                      customerId: customer.id,
+                      customerName: customer.name,
+                      accountNumber: customer.accountNumber,
+                      pdfTotalNum,
+                      calcTotal: totalAmount
+                    }
+                  );
+                } catch (e) {
+                  /* ignore */
+                }
+              } else {
+                try {
+                  console.warn('[produceBillingCycle] total_amount aligned to calc.total (single source)', {
+                    customerId: customer.id,
+                    customerName: customer.name,
+                    accountNumber: customer.accountNumber,
+                    pdfTotalBefore: pdfTotalNum,
+                    calcTotal: totalAmount
+                  });
+                } catch (e) {
+                  /* ignore */
+                }
+                pdfTotalNum = Math.max(0, Math.round(totalAmount * 100) / 100);
+              }
+            }
+
+            const poNum = Math.max(0, Math.round((parseFloat(pdfOutstanding) || 0) * 100) / 100);
+            const lfNum = Math.max(0, Math.round((parseFloat(lateFeeAmount) || 0) * 100) / 100);
+            const pdfSummaryLineSum = Math.round((pdfCurrentDueDisplay + poNum + lfNum) * 100) / 100;
+            const calcRoundedBatch = Math.max(0, Math.round(totalAmount * 100) / 100);
+            const pdfReconcileBatch = Math.max(0, Math.round(pdfTotalNum * 100) / 100);
+            let unifiedTotalDueForBill = calcRoundedBatch;
+            if (calcRoundedBatch < OWED.EPS && pdfReconcileBatch > OWED.EPS) {
+              unifiedTotalDueForBill = Math.max(pdfReconcileBatch, pdfSummaryLineSum);
+            } else {
+              unifiedTotalDueForBill = calcRoundedBatch;
+            }
+            if (pdfSummaryLineSum > unifiedTotalDueForBill + OWED.EPS) {
+              logBillPanelTrace('produceBillingCycle:total_amount_lifted_to_pdf_summary_lines', customer, {
+                cycleNumber,
+                unifiedBeforeLift: unifiedTotalDueForBill,
+                pdfSummaryLineSum,
+                calcRoundedBatch,
+                pdfReconcileBatch,
+                pdfCurrentDueDisplay,
+                pdfOutstanding: poNum,
+                lateFeeAmount: lfNum
+              });
+              unifiedTotalDueForBill = pdfSummaryLineSum;
+            }
 
             billDiag('produceBillingCycle:pdfPayload', customer, {
               cycleNumber,
@@ -8713,7 +9005,7 @@
               pdfCurrentDueForReconcile,
               pdfOutstanding,
               lateFeeAmount,
-              pdfTotalNum
+              pdfTotalNum: unifiedTotalDueForBill
             });
 
             const depositExplainForSnapshot =
@@ -8750,7 +9042,7 @@
                 current_due: `$${pdfCurrentDueDisplay.toFixed(2)}`,
                 previous_charges: `$${Math.max(0, pdfOutstanding).toFixed(2)}`,
                 late_fee: `$${Math.max(0, lateFeeAmount).toFixed(2)}`,
-                total_amount: `$${pdfTotalNum.toFixed(2)}`,
+                total_amount: `$${unifiedTotalDueForBill.toFixed(2)}`,
                 due_date: dueDateStr,
                 deposit_explaination: depositExplainForSnapshot,
                 deposit_explanation: depositExplainForSnapshot
@@ -8846,7 +9138,12 @@
               paymentMethod: `Billing cycle closed (batch cycle ${cycleNumber})`
             });
 
-            syncProcessBillPanelFrozenSnapshot(customer, pdfTotalNum, pdfOutstanding, lateFeeAmount);
+            syncProcessBillPanelFrozenSnapshot(
+              customer,
+              unifiedTotalDueForBill,
+              pdfOutstanding,
+              lateFeeAmount
+            );
             if (typeof saveSingleCustomerToFirestore === 'function') {
               await saveSingleCustomerToFirestore(customer);
             }
@@ -9378,20 +9675,12 @@
         const lateFeeBeforePayment = Math.max(0, calcBeforePayment.lateFeeAmount || 0);
         const currentDueBeforePayment = calcBeforePayment.currentDue;
         const pastDueBeforePayment = calcBeforePayment.pastDue;
-        // Match Payment Processing / Process Bill header (getProcessBillPanelAmounts). Raw calc.total can
-        // diverge (stmtUnpaid + pastDue double-count) while the panel shows the correct bill total.
         const panelBeforePayment =
           typeof getProcessBillPanelAmounts === 'function'
             ? getProcessBillPanelAmounts(customer)
             : null;
-        const totalOwedBeforePayment = Math.round(
-          Math.max(
-            0,
-            panelBeforePayment && typeof panelBeforePayment.total === 'number'
-              ? parseFloat(panelBeforePayment.total) || 0
-              : calcBeforePayment.total
-          ) * 100
-        ) / 100;
+        // Amount due = calc.total (panel finalizers are applied inside calculateCustomerTotal; panel.total matches).
+        const totalOwedBeforePayment = Math.round(Math.max(0, calcBeforePayment.total) * 100) / 100;
         const calcForHierarchy = alignCalcPastDueWithProcessBillPanel(
           calcBeforePayment,
           customer,
@@ -21141,6 +21430,32 @@
     // Reset all payment history (clear paymentHistory and set lastPayment to 'Never')
 
     /**
+     * Gross dollars still owed for current cycle + statement bridge + ledger past (after Fresh start clears anchors).
+     * Independent of Process Bill panel caps — those can read $0 while sewer + surcharges are still owed.
+     */
+    function getFreshStartOwedFloorBeforeSyntheticPay(customer) {
+      if (!customer) return 0;
+      const parts = getSubtotalBeforePucAndPucSurcharge(customer);
+      const lateFeeAmt = getAutomaticLateFeeAmount(customer);
+      const beforeCycle = parts.subtotalBeforePuc + parts.pucSurchargeAmount + lateFeeAmt;
+      const aggPaid = parseFloat(customer.currentMonthPaid || 0) || 0;
+      const grossCycleOwed = Math.max(0, Math.round((beforeCycle - aggPaid) * 100) / 100);
+      const pastDuePos = Math.max(0, parseFloat(customer.pastDue || 0));
+      const stmtUn = getOutstandingLastStatementUnpaid(customer);
+      return Math.round((grossCycleOwed + pastDuePos + stmtUn) * 100) / 100;
+    }
+
+    function resolveFreshStartTargets(scopeAll) {
+      if (!Array.isArray(customers) || customers.length === 0) return [];
+      if (scopeAll) return customers.slice();
+      const raw = String(freshStartSingleCustomerId || '').trim();
+      if (!raw) return [];
+      const byId = customers.filter((c) => String(c.id) === raw);
+      if (byId.length) return byId;
+      return customers.filter((c) => String(c.accountNumber || '').trim() === raw);
+    }
+
+    /**
      * After other fresh-start resets: record a full payment of current-cycle charges on the test date,
      * set payment buckets so Total Due is $0, and add a paymentHistory row for audit / Amount Breakdown.
      */
@@ -21151,26 +21466,44 @@
         today.getDate().toString().padStart(2, '0') + '/' + today.getFullYear();
       const timestamp = today.toISOString();
 
-      const calc = calculateCustomerTotal(customer);
-      const totalDue = Math.round(Math.max(0, calc.total) * 100) / 100;
+      const calc = calculateCustomerTotal(customer, {
+        billUiSnapshot: true,
+        skipDepositAutoApply: true,
+        skipPanelBalanceReconciliation: true
+      });
+      const floorOwed = getFreshStartOwedFloorBeforeSyntheticPay(customer);
+      const calcTotal = Math.round(Math.max(0, parseFloat(calc.total) || 0) * 100) / 100;
+      const totalDue = Math.round(Math.max(floorOwed, calcTotal) * 100) / 100;
 
       if (totalDue <= 0.005) {
         customer.lastPayment = 'Never';
         return;
       }
 
-      const sewer = Math.round((calc.adjustedServiceCost || 0) * 100) / 100;
-      const taxOnly = Math.round((calc.totalSurcharge || 0) * 100) / 100;
-      const pucOnly = Math.round((calc.pucSurchargeAmount || 0) * 100) / 100;
-      const late = Math.round((calc.lateFeeAmount || 0) * 100) / 100;
+      const parts = getSubtotalBeforePucAndPucSurcharge(customer);
+      const lateFeeAmt = getAutomaticLateFeeAmount(customer);
+      let paySewer = Math.round((parts.adjustedServiceCost || 0) * 100) / 100;
+      let payTax = Math.round((parts.totalSurcharge || 0) * 100) / 100;
+      let payPuc = Math.round((parts.pucSurchargeAmount || 0) * 100) / 100;
+      let payLate = Math.round((lateFeeAmt || 0) * 100) / 100;
+      let sumB = Math.round((paySewer + payTax + payPuc + payLate) * 100) / 100;
+      if (sumB + 0.02 < totalDue) {
+        paySewer = Math.round((paySewer + (totalDue - sumB)) * 100) / 100;
+      } else if (sumB > totalDue + 0.02) {
+        const f = totalDue / sumB;
+        paySewer = Math.round(paySewer * f * 100) / 100;
+        payTax = Math.round(payTax * f * 100) / 100;
+        payPuc = Math.round(payPuc * f * 100) / 100;
+        payLate = Math.round(Math.max(0, totalDue - paySewer - payTax - payPuc) * 100) / 100;
+      }
 
-      customer.currentMonthPaidSewer = sewer;
-      customer.currentMonthPaidTaxCodes = taxOnly;
-      customer.currentMonthPaidPuc = pucOnly;
-      customer.currentMonthPaidLateFee = late;
-      customer.currentMonthPaid = Math.round((sewer + taxOnly + pucOnly + late) * 100) / 100;
+      customer.currentMonthPaidSewer = paySewer;
+      customer.currentMonthPaidTaxCodes = payTax;
+      customer.currentMonthPaidPuc = payPuc;
+      customer.currentMonthPaidLateFee = payLate;
+      customer.currentMonthPaid = Math.round((paySewer + payTax + payPuc + payLate) * 100) / 100;
 
-      const surchargesCombined = Math.round((taxOnly + pucOnly) * 100) / 100;
+      const surchargesCombined = Math.round((payTax + payPuc) * 100) / 100;
       customer.paymentHistory = [{
         date: payDateStr,
         timestamp: timestamp,
@@ -21178,15 +21511,15 @@
         amountDue: totalDue,
         amountPaid: totalDue,
         creditGiven: null,
-        lateFeeAmount: Math.round((calc.lateFeeAmount || 0) * 100) / 100,
+        lateFeeAmount: payLate,
         newAmountDue: 0,
         paymentMethod: 'Fresh start (full pay)',
         source: 'testFreshStart',
-        sewerChargeOnBill: sewer,
+        sewerChargeOnBill: paySewer,
         pastDueOnBill: Math.round(Math.max(0, parseFloat(calc.pastDue || 0)) * 100) / 100,
         surchargesOnBill: surchargesCombined,
-        taxCodesOnBill: taxOnly,
-        pucSurchargeOnBill: pucOnly
+        taxCodesOnBill: payTax,
+        pucSurchargeOnBill: payPuc
       }];
       customer.lastPayment = payDateStr;
       customer.lastPrintedStatementTotalDue = totalDue;
@@ -21209,13 +21542,14 @@
           );
           return;
         }
-        targetCustomer = customers.find(c => c.id === freshStartSingleCustomerId);
-        if (!targetCustomer) {
+        const preTargets = resolveFreshStartTargets(false);
+        if (!preTargets.length) {
           alert(
-            'That customer is not on the customer list. Pick another customer in Settings, or uncheck "Apply to only a specific customer".'
+            'That customer is not on the customer list (no match by id or account number). Pick another customer in Settings, or uncheck "Apply to only a specific customer".'
           );
           return;
         }
+        targetCustomer = preTargets[0];
       }
 
       const setDateHint =
@@ -21320,9 +21654,7 @@
           }
         }
 
-        const targets = scopeAll
-          ? customers
-          : customers.filter(c => c.id === freshStartSingleCustomerId);
+        const targets = resolveFreshStartTargets(scopeAll);
         updated = 0;
         targets.forEach(customer => {
           try {
@@ -21339,6 +21671,7 @@
             customer.currentMonthPaidLateFee = 0;
             customer.currentMonthPaymentHistory = [];
             delete customer.lastBillPrintDate;
+            delete customer.lastBillPrintLedgerOrder;
             delete customer.lateFeeAnchorPrintDate;
             delete customer.lastPrintedStatementTotalDue;
             clearProcessBillPanelDisplayData(customer);
@@ -21369,8 +21702,49 @@
         if (scopeAll) {
           await saveCustomersToFirestore();
         } else {
+          // Single-customer path: setTestDate(..., skipRunSimulatedDayForAllCustomers: true) skips the usual
+          // billing pass; run once here so Firebase gets the same balances as after a full page load at the test date.
+          if (typeof runSimulatedDayForAllCustomers === 'function') {
+            runSimulatedDayForAllCustomers();
+          }
+          targets.forEach((c) => {
+            try {
+              const calcR = calculateCustomerTotal(c, {
+                billUiSnapshot: true,
+                skipDepositAutoApply: true,
+                skipPanelBalanceReconciliation: true,
+                silentDiag: true
+              });
+              const stillOwed = Math.round(
+                Math.max(
+                  getFreshStartOwedFloorBeforeSyntheticPay(c),
+                  Math.max(0, parseFloat(calcR.total) || 0)
+                ) * 100
+              ) / 100;
+              if (stillOwed > 0.02) {
+                applyTestFreshStartFullPayForCustomer(c);
+                updateCustomerPaymentStatus(c);
+                if (!isCustomerManualLifecycleStatus(c)) {
+                  c.paymentStatus = 'current';
+                }
+              }
+            } catch (e) {
+              /* ignore */
+            }
+          });
+          filteredCustomers = [...customers];
+          updateCustomerTable();
+          updateSettingsCustomerTable();
+          updateDashboard();
           for (let ti = 0; ti < targets.length; ti++) {
-            await saveSingleCustomerToFirestore(targets[ti]);
+            try {
+              await saveSingleCustomerToFirestore(targets[ti]);
+            } catch (saveErr) {
+              console.error('Fresh start save failed', targets[ti] && targets[ti].id, saveErr);
+              alert(
+                `Could not save customer ${(targets[ti] && (targets[ti].accountNumber || targets[ti].id)) || ''} to Firebase. Check the console. Other customers were not affected.`
+              );
+            }
           }
         }
 
@@ -21409,8 +21783,8 @@
         setTimeout(() => {
           (async () => {
             showFreshStartLoadingOverlay(
-              'Syncing all accounts to the test date',
-              'Recalculating balances for every account at the new test date. Almost done…'
+              'Syncing other accounts to the test date',
+              'Refreshing balances in this browser for accounts that were not part of Fresh start. Almost done…'
             );
             await new Promise(resolve => {
               requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -22379,9 +22753,25 @@
 
       opts = opts || {};
       let pastDueSummaryDuplicateFooter = false;
-      // Same dollars as Process Bill + Payment Processing (getProcessBillPanelAmounts reconciles total invariants).
+      // Total Due / past / late: getProcessBillPanelAmounts (live) === calculateCustomerTotalReadOnly().total.
       const panel = getProcessBillPanelAmounts(customer);
       const calc = calculateCustomerTotalReadOnly(customer);
+      if (
+        typeof window !== 'undefined' &&
+        window.__BILL_DIAG_VERBOSE_PANEL === true &&
+        billDiagCustomerMatch(customer) &&
+        Math.abs(panel.total - calc.total) > OWED.EPS
+      ) {
+        try {
+          console.warn('[AmountBreakdown] panel.total !== calc.total (regression)', {
+            panelTotal: panel.total,
+            calcTotal: calc.total,
+            customerId: customer.id
+          });
+        } catch (e) {
+          /* ignore */
+        }
+      }
       const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
 
       const partsBreakdown = getSubtotalBeforePucAndPucSurcharge(customer);
@@ -22393,14 +22783,15 @@
       const lateFeeCapFooter = Math.max(panel.lateFee || 0, paidLfFooter);
       const lateFeeRemainingFooter = Math.max(0, lateFeeCapFooter - paidLfFooter);
 
-      // Footer "Current Due" vs Past: when statement past line and full-cycle remainder match (~rolled
-      // collapse), showing both full amounts double-counts for users; use residual so Past+Current+Late ≈ Total.
+      // Footer "Current Due": when ledger past is still ~$0 and PDF past line matches cycle subtotal (same
+      // first-bill mirror as OWED / computeCustomerOwedBalanceTotal), show residual so Past+Current+Late ≈ Total.
       const pastLineFooter = Math.max(0, panel.pastDue || 0);
-      const dupPastCycleTol = 0.08;
+      const ledgerPastForFooter = Math.max(0, parseFloat(customer.pastDue) || 0);
       const rolledPastEqualsCycleFooter =
-        pastLineFooter > 0.005 &&
-        cycleExclAutoLateBreakdown > 0.005 &&
-        Math.abs(pastLineFooter - cycleExclAutoLateBreakdown) <= dupPastCycleTol;
+        ledgerPastForFooter < OWED.ZERO &&
+        pastLineFooter > OWED.ZERO &&
+        cycleExclAutoLateBreakdown > OWED.ZERO &&
+        Math.abs(pastLineFooter - cycleExclAutoLateBreakdown) <= OWED.PANEL_MIRROR;
       let footerCycleDueDisplay = cycleExclAutoLateBreakdown;
       if (rolledPastEqualsCycleFooter) {
         footerCycleDueDisplay = Math.max(
@@ -22411,21 +22802,23 @@
         );
       }
       if (rolledPastEqualsCycleFooter) {
-        try {
-          console.warn('[AmountBreakdownFooter]', {
-            customerId: customer.id,
-            customerName: customer.name,
-            accountNumber: customer.accountNumber,
-            message:
-              'Past line and cycle subtotal match (rolled collapse); footer Current Due shows residual so lines sum to Total Due',
-            panelTotal: panel.total,
-            pastLineFooter,
-            rawCycleExclLate: cycleExclAutoLateBreakdown,
-            lateRemaining: lateFeeRemainingFooter,
-            footerCycleDueDisplay
-          });
-        } catch (e) {
-          /* ignore */
+        if (typeof window !== 'undefined' && window.__BILL_DIAG_VERBOSE_PANEL === true && billDiagCustomerMatch(customer)) {
+          try {
+            console.warn('[AmountBreakdownFooter]', {
+              customerId: customer.id,
+              customerName: customer.name,
+              accountNumber: customer.accountNumber,
+              message:
+                'First-bill mirror: PDF past line matches cycle subtotal; footer Current Due is residual so lines sum to Total Due',
+              panelTotal: panel.total,
+              pastLineFooter,
+              rawCycleExclLate: cycleExclAutoLateBreakdown,
+              lateRemaining: lateFeeRemainingFooter,
+              footerCycleDueDisplay
+            });
+          } catch (e) {
+            /* ignore */
+          }
         }
       }
 
@@ -22433,7 +22826,7 @@
       // Show "paid" message if Total Due = $0.00 AND they have made payments
       const currentMonthPaid = parseFloat(customer.currentMonthPaid || 0);
       const totalDue = Math.max(0, panel.total); // Clamp to 0 to avoid negative
-      const forceZeroPrimaryLines = totalDue < 0.02;
+      const forceZeroPrimaryLines = totalDue < OWED.EPS;
       const hasPaymentHistory = customer.paymentHistory && Array.isArray(customer.paymentHistory) && customer.paymentHistory.length > 0;
       const isCurrentBillPaid = totalDue === 0 && (currentMonthPaid > 0 || hasPaymentHistory);
 
@@ -24971,7 +25364,8 @@
         resolvedNewDue[i] = Math.round(Math.max(0, ad - ap) * 100) / 100;
       }
       // Keep transaction history immutable: never overwrite per-payment post-balance
-      // with today's recalculated customer total.
+      // with today's recalculated customer total. Billing-charge Balance After = sum of that row's line
+      // columns (same total as the printed bill), not a separately trimmed currentDue when legacy data drifted.
 
       function ledgerTaxCodesAndPucFromEntry(entry) {
         if (!entry) return { taxCodes: 0, puc: 0 };
@@ -25138,6 +25532,14 @@
       const chargeHistory = billingChargeHist;
       const chargeRows = chargeHistory.map((c) => {
         const sp = ledgerTaxCodesAndPucFromEntry(c);
+        const sewer = Math.round(Math.max(0, parseFloat(c.sewerChargeOnBill || 0)) * 100) / 100;
+        const pastDue = Math.round(Math.max(0, parseFloat(c.pastDueOnBill || 0)) * 100) / 100;
+        const taxCodes = sp.taxCodes;
+        const pucSurcharge = sp.puc;
+        const lateFee = Math.round(Math.max(0, parseFloat(c.lateFeeAmount || 0)) * 100) / 100;
+        const balanceAfter = Math.round(
+          Math.max(0, sewer + pastDue + taxCodes + pucSurcharge + lateFee) * 100
+        ) / 100;
         return {
           sourceKind: 'charge',
           sortMs: getLedgerEntrySortMs(c),
@@ -25150,13 +25552,13 @@
               : null) ||
             c.chargeType ||
             (c.source === 'lateFeeAdded' ? 'Late fee added' : 'Billed Customer'),
-          sewer: Math.round(Math.max(0, parseFloat(c.sewerChargeOnBill || 0)) * 100) / 100,
-          pastDue: Math.round(Math.max(0, parseFloat(c.pastDueOnBill || 0)) * 100) / 100,
-          taxCodes: sp.taxCodes,
-          pucSurcharge: sp.puc,
-          lateFee: Math.round(Math.max(0, parseFloat(c.lateFeeAmount || 0)) * 100) / 100,
+          sewer,
+          pastDue,
+          taxCodes,
+          pucSurcharge,
+          lateFee,
           amountPaid: 0,
-          balanceAfter: Math.round(Math.max(0, parseFloat(c.currentDue || 0)) * 100) / 100,
+          balanceAfter,
           ledgerCharge: c
         };
       });
@@ -25192,14 +25594,20 @@
       function snapshotBillForPastDueModal(charge) {
         if (!charge) return null;
         const sp = ledgerTaxCodesAndPucFromEntry(charge);
+        const sewer = Math.round(Math.max(0, parseFloat(charge.sewerChargeOnBill || 0)) * 100) / 100;
+        const pastDue = Math.round(Math.max(0, parseFloat(charge.pastDueOnBill || 0)) * 100) / 100;
+        const taxCodes = sp.taxCodes;
+        const puc = sp.puc;
+        const lateFee = Math.round(Math.max(0, parseFloat(charge.lateFeeAmount || 0)) * 100) / 100;
+        const currentDue = Math.round(Math.max(0, sewer + pastDue + taxCodes + puc + lateFee) * 100) / 100;
         return {
           dateTime: formatLedgerDateTime(charge),
-          sewer: Math.round(Math.max(0, parseFloat(charge.sewerChargeOnBill || 0)) * 100) / 100,
-          pastDue: Math.round(Math.max(0, parseFloat(charge.pastDueOnBill || 0)) * 100) / 100,
-          taxCodes: sp.taxCodes,
-          puc: sp.puc,
-          lateFee: Math.round(Math.max(0, parseFloat(charge.lateFeeAmount || 0)) * 100) / 100,
-          currentDue: Math.round(Math.max(0, parseFloat(charge.currentDue || 0)) * 100) / 100
+          sewer,
+          pastDue,
+          taxCodes,
+          puc,
+          lateFee,
+          currentDue
         };
       }
 
@@ -25660,7 +26068,9 @@
           const pastDue = Math.round(Math.max(0, parseFloat(entry.pastDueOnBill || 0)) * 100) / 100;
           const surcharges = Math.round(Math.max(0, parseFloat(entry.surchargesOnBill || 0)) * 100) / 100;
           const lateFee = Math.round(Math.max(0, parseFloat(entry.lateFeeAmount || 0)) * 100) / 100;
-          const currentDue = Math.round(Math.max(0, parseFloat(entry.currentDue || 0)) * 100) / 100;
+          const currentDue = Math.round(
+            Math.max(0, sewerCharge + pastDue + surcharges + lateFee) * 100
+          ) / 100;
           const chargeType = entry.chargeSubtype ||
             (entry.source === 'lateFeeAdded' && entry.calendarDaysLate != null && !isNaN(parseInt(entry.calendarDaysLate, 10))
               ? `Late fee added (${parseInt(entry.calendarDaysLate, 10)} days late)`
@@ -26502,6 +26912,702 @@
     window.hidePaymentHistory = function() {
       document.getElementById('paymentHistoryModal').classList.add('hidden');
     };
+
+    // ---------------------------------------------------------------------------
+    // Develop testing harness (Ctrl/Cmd + CapsLock on Accounts view, or ?devScenario=1)
+    // ---------------------------------------------------------------------------
+    (function developTestHarnessIife() {
+      const DT = { lines: [], _restore: null, lastResult: null };
+
+      function developTestArgToString(a) {
+        if (a === null || a === undefined) return String(a);
+        if (typeof a === 'string') return a;
+        if (a instanceof Error) return a.stack || a.message;
+        try {
+          return JSON.stringify(a);
+        } catch (e) {
+          return String(a);
+        }
+      }
+
+      function developTestBeginConsoleCapture() {
+        developTestEndConsoleCapture();
+        DT.lines.length = 0;
+        const methods = ['log', 'info', 'warn', 'error', 'debug'];
+        DT._restore = [];
+        methods.forEach(function (m) {
+          const orig = console[m].bind(console);
+          DT._restore.push(function () {
+            console[m] = orig;
+          });
+          console[m] = function () {
+            try {
+              const parts = Array.prototype.slice.call(arguments).map(developTestArgToString);
+              DT.lines.push('[' + new Date().toISOString() + '] [' + m + '] ' + parts.join(' '));
+            } catch (e) {
+              /* ignore */
+            }
+            return orig.apply(console, arguments);
+          };
+        });
+      }
+
+      function developTestEndConsoleCapture() {
+        if (DT._restore) {
+          DT._restore.forEach(function (fn) {
+            try {
+              fn();
+            } catch (e) {
+              /* ignore */
+            }
+          });
+          DT._restore = null;
+        }
+      }
+
+      function developTestResolveCustomer(cfg) {
+        if (!Array.isArray(customers) || !customers.length) return null;
+        const id = cfg && (cfg.customerId || cfg.id);
+        if (id) {
+          const byId = customers.find(function (c) {
+            return c && String(c.id) === String(id);
+          });
+          if (byId) return byId;
+        }
+        const frag = (cfg && (cfg.customerNameMatch || cfg.nameMatch)) || 'Susan Young';
+        const low = String(frag).toLowerCase();
+        return (
+          customers.find(function (c) {
+            return c && c.name && String(c.name).toLowerCase().indexOf(low) !== -1;
+          }) || null
+        );
+      }
+
+      function developTestEscapeHtml(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      /** Ledger modal cells nest amounts + "Details" buttons; flatten to one export-friendly string per column. */
+      function developTestLedgerCellExportText(cell) {
+        if (!cell) return '';
+        const spans = cell.querySelectorAll('span');
+        const money = [];
+        for (let i = 0; i < spans.length; i++) {
+          const t = (spans[i].textContent || '').trim();
+          if (t && /^\$[\d,.-]+/.test(t)) money.push(t);
+        }
+        if (money.length === 1) return money[0];
+        if (money.length > 1) return money.join(' + ');
+        return String(cell.textContent || '')
+          .replace(/\bPast Due Details\b/gi, '')
+          .replace(/\bLate Fee Details\b/gi, '')
+          .replace(/\bView Payment Details\b/gi, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+
+      /**
+       * @returns {{ plain: string, html: string }}
+       * plain: TSV (header + one line per row). html: standalone document — save as .html to view the ledger table.
+       */
+      function developTestExtractLedgerTableExports(customer) {
+        if (!customer || typeof displayAllLedgerModal !== 'function') {
+          return { plain: '(ledger unavailable)', html: '' };
+        }
+        try {
+          displayAllLedgerModal(customer);
+          const modal = document.getElementById('allLedgerModal');
+          const tbl = modal && modal.querySelector('table');
+          if (!tbl) {
+            if (typeof hideAllLedgerModal === 'function') hideAllLedgerModal();
+            return { plain: '(no table)', html: '' };
+          }
+          const tsvLines = [];
+          let theadHtml = '';
+          let tbodyHtml = '';
+          tbl.querySelectorAll('tr').forEach(function (tr) {
+            const isHead = !!tr.closest('thead');
+            const parts = [];
+            const htmlCells = [];
+            tr.querySelectorAll('th, td').forEach(function (cell) {
+              const t = developTestLedgerCellExportText(cell).replace(/\t/g, ' ');
+              parts.push(t);
+              const tag = isHead ? 'th' : 'td';
+              htmlCells.push('<' + tag + '>' + developTestEscapeHtml(t) + '</' + tag + '>');
+            });
+            if (!parts.length) return;
+            tsvLines.push(parts.join('\t'));
+            const rowHtml = '<tr>' + htmlCells.join('') + '</tr>';
+            if (isHead) theadHtml += rowHtml;
+            else tbodyHtml += rowHtml;
+          });
+          if (typeof hideAllLedgerModal === 'function') hideAllLedgerModal();
+          const plain = tsvLines.join('\n');
+          const title = 'All Previous Payments/Charges';
+          const custLine =
+            (customer.name || 'Customer') + ' (' + (customer.accountNumber || customer.id || '') + ')';
+          const html =
+            '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>' +
+            developTestEscapeHtml(title) +
+            '</title>\n<style>\n' +
+            'body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:24px;background:#f1f5f9;color:#0f172a;line-height:1.45;}\n' +
+            'h1{font-size:1.35rem;margin:0 0 6px;font-weight:700;}\n' +
+            'p.sub{color:#64748b;font-size:0.95rem;margin:0 0 22px;}\n' +
+            'p.note{font-size:0.8rem;color:#94a3b8;margin:16px 0 0;}\n' +
+            'table{border-collapse:collapse;width:100%;max-width:1280px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12);border-radius:8px;overflow:hidden;}\n' +
+            'th,td{border:1px solid #e2e8f0;padding:10px 12px;text-align:left;font-size:0.875rem;vertical-align:top;}\n' +
+            'th{background:#e2e8f0;font-weight:600;font-size:0.72rem;letter-spacing:.04em;color:#334155;text-transform:uppercase;}\n' +
+            'tbody tr:nth-child(even){background:#f8fafc;}\n' +
+            'tbody tr:hover{background:#eff6ff;}\n' +
+            '</style></head><body>\n' +
+            '<h1>' +
+            developTestEscapeHtml(title) +
+            '</h1>\n<p class="sub">' +
+            developTestEscapeHtml(custLine) +
+            '</p>\n<table>\n<thead>\n' +
+            theadHtml +
+            '\n</thead>\n<tbody>\n' +
+            tbodyHtml +
+            '\n</tbody>\n</table>\n' +
+            '<p class="note">Exported from develop billing scenario (tabular amounts only; breakdown links are omitted).</p>\n' +
+            '</body></html>\n';
+          return { plain: plain, html: html };
+        } catch (e) {
+          try {
+            if (typeof hideAllLedgerModal === 'function') hideAllLedgerModal();
+          } catch (e2) {
+            /* ignore */
+          }
+          return { plain: '(ledger extract error: ' + (e && e.message) + ')', html: '' };
+        }
+      }
+
+      function developTestExtractLedgerTablePlainText(customer) {
+        return developTestExtractLedgerTableExports(customer).plain;
+      }
+
+      function developTestAmountBreakdownSnapshot(customer) {
+        if (!customer) return '{}';
+        try {
+          const panel =
+            typeof getProcessBillPanelAmounts === 'function' ? getProcessBillPanelAmounts(customer) : null;
+          const calc =
+            typeof calculateCustomerTotalReadOnly === 'function' ? calculateCustomerTotalReadOnly(customer) : null;
+          return JSON.stringify(
+            {
+              panel: panel || null,
+              calc: calc
+                ? {
+                    total: calc.total,
+                    pastDue: calc.pastDue,
+                    currentDue: calc.currentDue,
+                    lateFeeAmount: calc.lateFeeAmount
+                  }
+                : null
+            },
+            null,
+            2
+          );
+        } catch (e) {
+          return JSON.stringify({ error: String(e && e.message) });
+        }
+      }
+
+      async function developTestFreshStartSingleCustomer(customer) {
+        if (!customer) throw new Error('developTest: no customer');
+        customer.deposit = 1000;
+        customer.pastDue = 0;
+        customer.paymentHistory = [];
+        customer.chargeHistory = [];
+        customer.ledgerOrderCounter = 0;
+        customer.lastPayment = 'Never';
+        customer.currentMonthPaid = 0;
+        customer.currentMonthPaidSewer = 0;
+        customer.currentMonthPaidTaxCodes = 0;
+        customer.currentMonthPaidPuc = 0;
+        customer.currentMonthPaidLateFee = 0;
+        customer.currentMonthPaymentHistory = [];
+        delete customer.lastBillPrintDate;
+        delete customer.lastBillPrintLedgerOrder;
+        delete customer.lateFeeAnchorPrintDate;
+        delete customer.lastPrintedStatementTotalDue;
+        if (typeof clearProcessBillPanelDisplayData === 'function') clearProcessBillPanelDisplayData(customer);
+        customer.lastBill60DayDepositApplied = false;
+        delete customer.daysLate;
+        delete customer.pendingDepositBillExplanation;
+        customer.billPdfSnapshots = [];
+
+        applyTestFreshStartFullPayForCustomer(customer);
+        updateCustomerPaymentStatus(customer);
+        if (typeof isCustomerManualLifecycleStatus === 'function' && !isCustomerManualLifecycleStatus(customer)) {
+          customer.paymentStatus = 'current';
+        }
+
+        if (typeof runSimulatedDayForAllCustomers === 'function') runSimulatedDayForAllCustomers();
+        const calcR = calculateCustomerTotal(customer, {
+          billUiSnapshot: true,
+          skipDepositAutoApply: true,
+          skipPanelBalanceReconciliation: true,
+          silentDiag: true
+        });
+        const stillOwed = Math.round(
+          Math.max(
+            typeof getFreshStartOwedFloorBeforeSyntheticPay === 'function'
+              ? getFreshStartOwedFloorBeforeSyntheticPay(customer)
+              : 0,
+            Math.max(0, parseFloat(calcR.total) || 0)
+          ) * 100
+        ) / 100;
+        if (stillOwed > 0.02) {
+          applyTestFreshStartFullPayForCustomer(customer);
+          updateCustomerPaymentStatus(customer);
+          if (typeof isCustomerManualLifecycleStatus === 'function' && !isCustomerManualLifecycleStatus(customer)) {
+            customer.paymentStatus = 'current';
+          }
+        }
+        filteredCustomers = customers.slice();
+        updateCustomerTable();
+        updateSettingsCustomerTable();
+        updateDashboard();
+        if (typeof saveSingleCustomerToFirestore === 'function') await saveSingleCustomerToFirestore(customer);
+      }
+
+      async function developTestProduceBillFor(customer) {
+        if (!customer) throw new Error('developTest: bill without customer');
+        const hid = document.getElementById('billSelectedCustomerId');
+        if (hid) hid.value = customer.id;
+        if (typeof window.produceBill !== 'function') throw new Error('developTest: produceBill not available');
+        await window.produceBill();
+      }
+
+      /**
+       * POS: Testing Drawer + Skip initial register count → $75 check (#123) for the scenario customer.
+       * Requires Settings → Toggles: Testing Drawer on, Skip POS initial register count on.
+       */
+      async function developTestProcessCheckPayment(customer, cfg) {
+        if (!customer) throw new Error('developTest: check payment without customer');
+        const amount = Math.round((parseFloat(cfg.checkPaymentAmount) || 75) * 100) / 100;
+        const checkNo = cfg.checkNumber != null ? String(cfg.checkNumber) : '123';
+        if (!(amount > 0)) throw new Error('developTest: check payment amount must be positive');
+
+        if (typeof syncSystemTestingDrawerFromToggle !== 'function') {
+          throw new Error('developTest: syncSystemTestingDrawerFromToggle not available');
+        }
+        await syncSystemTestingDrawerFromToggle({ reason: 'developBillingScenarioCheckPay' });
+        const td = Array.isArray(drawers)
+          ? drawers.find(function (d) {
+              return d && d.id === SYSTEM_TESTING_DRAWER_ID;
+            })
+          : null;
+        if (!td) {
+          throw new Error(
+            'developTest: System Testing Drawer missing. Enable Settings → Toggles → Testing Drawer and reload (or run sync), then retry.'
+          );
+        }
+        await window.selectDrawer(td);
+
+        try {
+          if (typeof localStorage !== 'undefined') {
+            try {
+              localStorage.removeItem('currentPaymentProcessingSession');
+            } catch (e) {
+              /* ignore */
+            }
+          }
+        } catch (e) {
+          /* ignore */
+        }
+        window.currentPaymentProcessing = null;
+
+        const togglesPay = await loadTogglesSettings();
+        if (!togglesPay || !togglesPay.skipPOSInitialRegisterCount) {
+          throw new Error(
+            'developTest: Enable Settings → Toggles → "Skip POS initial register count" so Start New Payment opens the entry form without a manual initial drawer count.'
+          );
+        }
+
+        if (typeof showPaymentModule === 'function') window.showPaymentModule();
+        await window.startNewPayment();
+
+        if (typeof window.selectCustomerFromSearch === 'function') {
+          window.selectCustomerFromSearch(customer.id);
+        } else {
+          window.selectedCustomerIdForPayment = customer.id;
+          if (typeof showCustomerPaymentInfo === 'function') showCustomerPaymentInfo(customer.id);
+        }
+
+        const pt = document.getElementById('paymentType');
+        if (pt) {
+          pt.value = 'Check';
+          if (typeof togglePaymentInputs === 'function') togglePaymentInputs();
+        }
+
+        const recv = document.getElementById('checkReceivedInput');
+        if (recv) recv.value = String(amount);
+        const cn = document.getElementById('checkNumberInput');
+        if (cn) cn.value = checkNo;
+        const coh = document.getElementById('checkOverpaymentHandling');
+        if (coh) coh.value = '';
+        const pam = document.getElementById('paymentAmount');
+        if (pam) pam.value = amount.toFixed(2);
+
+        const prevPrompt = window.prompt;
+        if (togglesPay && togglesPay.askUserCodePerTransaction) {
+          const u = Array.isArray(users)
+            ? users.find(function (x) {
+                return x && String(x.userCode || '').trim();
+              })
+            : null;
+          const code = u && u.userCode ? String(u.userCode).trim() : '';
+          if (!code) {
+            throw new Error(
+              'developTest: askUserCodePerTransaction is on but no user has userCode set; add a code or turn the toggle off for the scenario run.'
+            );
+          }
+          window.prompt = function () {
+            return code;
+          };
+        }
+        try {
+          await window.processPaymentFromModule();
+        } finally {
+          if (togglesPay && togglesPay.askUserCodePerTransaction) window.prompt = prevPrompt;
+        }
+
+        if (typeof hideAllModules === 'function') {
+          try {
+            hideAllModules(true);
+          } catch (e) {
+            /* ignore */
+          }
+        }
+      }
+
+      function developTestMergeConfig(raw) {
+        const cfg =
+          raw && typeof raw === 'object' && !Array.isArray(raw)
+            ? raw
+            : {};
+        return {
+          preset: cfg.preset || 'susanJanApr2026',
+          customerId: cfg.customerId || 'CUS-3011000',
+          customerNameMatch: cfg.customerNameMatch || 'Susan Young',
+          advanceMode: cfg.advanceMode === 'walk' ? 'walk' : 'instant',
+          captureConsole: cfg.captureConsole !== false,
+          suppressAlerts: cfg.suppressAlerts !== false,
+          openResultsTab: cfg.openResultsTab !== false,
+          anchorDate: cfg.anchorDate || '2026-01-01',
+          skipCheckPaymentMay: cfg.skipCheckPaymentMay === true,
+          checkPaymentAmount:
+            cfg.checkPaymentAmount != null && !isNaN(parseFloat(cfg.checkPaymentAmount))
+              ? parseFloat(cfg.checkPaymentAmount)
+              : 75,
+          checkNumber: cfg.checkNumber != null ? String(cfg.checkNumber) : '123'
+        };
+      }
+
+      window.runDevelopBillingScenarioFromJson = async function (raw) {
+        let parsed = raw;
+        if (typeof raw === 'string') {
+          parsed = JSON.parse(raw);
+        }
+        const cfg = developTestMergeConfig(parsed);
+        const noop = function () {};
+        const prevAlert = window.alert;
+        const prevConfirm = window.confirm;
+        if (cfg.suppressAlerts) {
+          window.alert = noop;
+          window.confirm = function () {
+            return true;
+          };
+        }
+        if (cfg.captureConsole) developTestBeginConsoleCapture();
+        const logLines = [];
+        const log = function (m) {
+          const s = typeof m === 'string' ? m : developTestArgToString(m);
+          logLines.push(s);
+          try {
+            console.info('[DevelopTest]', s);
+          } catch (e) {
+            /* ignore */
+          }
+        };
+        let errText = '';
+        try {
+          log('Scenario start preset=' + cfg.preset);
+          const customer = developTestResolveCustomer(cfg);
+          if (!customer) throw new Error('Customer not found for develop test (id / name).');
+
+          const skipAnim = cfg.advanceMode === 'instant';
+          await window.setTestDate(cfg.anchorDate, {
+            skipAnimation: skipAnim,
+            skipRunSimulatedDayForAllCustomers: false
+          });
+
+          log('Fresh start single customer ' + (customer.accountNumber || customer.id));
+          await developTestFreshStartSingleCustomer(customer);
+
+          log('Produce bill @ ' + cfg.anchorDate);
+          await developTestProduceBillFor(customer);
+
+          const milestones = [
+            { date: '2026-02-01', bill: true },
+            { date: '2026-03-01', bill: true },
+            { date: '2026-04-01', bill: true }
+          ];
+          for (let i = 0; i < milestones.length; i++) {
+            const m = milestones[i];
+            log('Advance to ' + m.date + ' (' + (skipAnim ? 'instant' : 'day walk') + ')');
+            await window.setTestDate(m.date, {
+              skipAnimation: skipAnim,
+              skipRunSimulatedDayForAllCustomers: false
+            });
+            if (m.bill) {
+              log('Produce bill @ ' + m.date);
+              await developTestProduceBillFor(customer);
+            }
+          }
+
+          if (!cfg.skipCheckPaymentMay) {
+            const checkAmtLog = Math.round((parseFloat(cfg.checkPaymentAmount) || 75) * 100) / 100;
+            const checkNoLog = cfg.checkNumber != null ? String(cfg.checkNumber) : '123';
+            log(
+              'POS check payment $' +
+                checkAmtLog.toFixed(2) +
+                ' (check #' +
+                checkNoLog +
+                ') via Testing Drawer'
+            );
+            await developTestProcessCheckPayment(customer, cfg);
+            log('Advance to 2026-05-01 (' + (skipAnim ? 'instant' : 'day walk') + ')');
+            await window.setTestDate('2026-05-01', {
+              skipAnimation: skipAnim,
+              skipRunSimulatedDayForAllCustomers: false
+            });
+            log('Produce bill @ 2026-05-01');
+            await developTestProduceBillFor(customer);
+          }
+
+          const ledgerExport = developTestExtractLedgerTableExports(customer);
+          const ledgerText = ledgerExport.plain;
+          const ledgerHtml = ledgerExport.html || '';
+          const breakdown = developTestAmountBreakdownSnapshot(customer);
+          const consoleBlock = (cfg.captureConsole ? DT.lines : []).join('\n');
+          const header =
+            'test-results.txt — CUS develop billing scenario\n' +
+            'Generated (browser local time): ' +
+            new Date().toString() +
+            '\nPreset: ' +
+            cfg.preset +
+            '\nCustomer: ' +
+            (customer.name || '') +
+            ' (' +
+            (customer.accountNumber || customer.id) +
+            ')\nSimulated date after run: ' +
+            (typeof formatLocalYMD === 'function'
+              ? formatLocalYMD(window.getCurrentDate ? window.getCurrentDate() : new Date())
+              : '') +
+            '\n\n=== Step log ===\n' +
+            logLines.join('\n') +
+            '\n\n=== Amount breakdown snapshot (JSON) ===\n' +
+            breakdown +
+            '\n\n=== Console capture ===\n' +
+            consoleBlock +
+            '\n\n=== All Previous Payments / Charges (TSV — tabs between columns, one row per line) ===\n' +
+            ledgerText +
+            (ledgerHtml
+              ? '\n\n=== Ledger table (HTML — copy from <!DOCTYPE through </html> into ledger-preview.html and open in a browser) ===\n' +
+                ledgerHtml
+              : '') +
+            '\n';
+
+          DT.lastResult = {
+            ok: true,
+            header: header,
+            ledgerText: ledgerText,
+            ledgerHtml: ledgerHtml,
+            breakdownJson: breakdown,
+            logLines: logLines.slice(),
+            consoleLines: (cfg.captureConsole ? DT.lines : []).slice()
+          };
+          window.__DEVELOP_TEST_LAST_RESULT = DT.lastResult;
+
+          if (cfg.openResultsTab) {
+            try {
+              const blob = new Blob([header], { type: 'text/plain;charset=utf-8' });
+              const url = URL.createObjectURL(blob);
+              window.open(url, '_blank', 'noopener,noreferrer');
+              setTimeout(function () {
+                try {
+                  URL.revokeObjectURL(url);
+                } catch (e) {
+                  /* ignore */
+                }
+              }, 120000);
+            } catch (e) {
+              log('Could not open results tab: ' + (e && e.message));
+            }
+          }
+          log('Scenario complete.');
+        } catch (e) {
+          errText = e && e.stack ? e.stack : String(e);
+          log('Scenario FAILED: ' + errText);
+          DT.lastResult = {
+            ok: false,
+            error: errText,
+            consoleLines: (cfg.captureConsole ? DT.lines : []).slice()
+          };
+          window.__DEVELOP_TEST_LAST_RESULT = DT.lastResult;
+          try {
+            console.error('[DevelopTest]', e);
+          } catch (e2) {
+            /* ignore */
+          }
+        } finally {
+          developTestEndConsoleCapture();
+          if (cfg.suppressAlerts) {
+            window.alert = prevAlert;
+            window.confirm = prevConfirm;
+          }
+        }
+        return DT.lastResult;
+      };
+
+      function developTestEnsureModal() {
+        let el = document.getElementById('developTestHarnessModal');
+        if (el) return el;
+        el = document.createElement('div');
+        el.id = 'developTestHarnessModal';
+        el.className =
+          'hidden fixed inset-0 z-[10050] flex items-center justify-center bg-slate-900/70 backdrop-blur-sm px-4';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-modal', 'true');
+        el.innerHTML =
+          '<div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-3xl w-full border border-slate-200 dark:border-slate-600 p-6 max-h-[90vh] flex flex-col">' +
+          '<div class="flex justify-between items-start mb-3">' +
+          '<div><h3 class="text-xl font-bold text-slate-800 dark:text-slate-100">Develop testing</h3>' +
+          '<p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Ctrl+CapsLock or Cmd+CapsLock on Accounts (not while typing in an input). If the shortcut does not fire, run <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">showDevelopTestHarnessModal()</code> in the console. Paste JSON, Run. Mutates data + Firebase like real Fresh start / Produce Bill. After Apr: $75 check (#123) via Testing Drawer → 5/1 + bill unless <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">skipCheckPaymentMay</code> is true — requires Settings → Toggles: Testing Drawer + Skip POS initial register count.</p></div>' +
+          '<button type="button" id="developTestHarnessClose" class="text-slate-400 hover:text-slate-600 p-1" aria-label="Close">&times;</button></div>' +
+          '<textarea id="developTestHarnessJson" class="w-full flex-1 min-h-[200px] font-mono text-sm border border-slate-300 dark:border-slate-600 rounded-lg p-3 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100" spellcheck="false"></textarea>' +
+          '<p id="developTestHarnessStatus" class="text-sm text-slate-600 dark:text-slate-300 mt-2 min-h-[1.25rem]"></p>' +
+          '<div class="flex gap-2 mt-3 justify-end">' +
+          '<button type="button" id="developTestHarnessRun" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-700">Run</button></div></div>';
+        document.body.appendChild(el);
+        el.querySelector('#developTestHarnessClose').addEventListener('click', function () {
+          el.classList.add('hidden');
+        });
+        el.addEventListener('click', function (ev) {
+          if (ev.target === el) el.classList.add('hidden');
+        });
+        const run = el.querySelector('#developTestHarnessRun');
+        const ta = el.querySelector('#developTestHarnessJson');
+        const st = el.querySelector('#developTestHarnessStatus');
+        if (run && !run._developHooked) {
+          run._developHooked = true;
+          run.addEventListener('click', async function () {
+            if (!ta || !st) return;
+            st.textContent = 'Running…';
+            run.disabled = true;
+            try {
+              const cfg = JSON.parse(ta.value || '{}');
+              await window.runDevelopBillingScenarioFromJson(cfg);
+              st.textContent =
+                window.__DEVELOP_TEST_LAST_RESULT && window.__DEVELOP_TEST_LAST_RESULT.ok
+                  ? 'Done. Results opened in a new tab (see window.__DEVELOP_TEST_LAST_RESULT).'
+                  : 'Finished with errors (see console + __DEVELOP_TEST_LAST_RESULT).';
+            } catch (err) {
+              st.textContent = 'Invalid JSON or run error: ' + (err && err.message);
+            } finally {
+              run.disabled = false;
+            }
+          });
+        }
+        return el;
+      }
+
+      window.showDevelopTestHarnessModal = function (prefillJson) {
+        const el = developTestEnsureModal();
+        const ta = el.querySelector('#developTestHarnessJson');
+        const st = el.querySelector('#developTestHarnessStatus');
+        if (ta) {
+          ta.value =
+            typeof prefillJson === 'string'
+              ? prefillJson
+              : JSON.stringify(
+                  {
+                    preset: 'susanJanApr2026',
+                    customerId: 'CUS-3011000',
+                    customerNameMatch: 'Susan Young',
+                    advanceMode: 'instant',
+                    captureConsole: true,
+                    suppressAlerts: true,
+                    openResultsTab: true,
+                    anchorDate: '2026-01-01'
+                  },
+                  null,
+                  2
+                );
+        }
+        if (st) st.textContent = '';
+        el.classList.remove('hidden');
+      };
+
+      document.addEventListener(
+        'keydown',
+        function (e) {
+          try {
+            if (!e || (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'))) return;
+            if (typeof currentView === 'undefined' || currentView !== 'accounts') return;
+            const dtm = document.getElementById('developTestHarnessModal');
+            if (dtm && !dtm.classList.contains('hidden')) return;
+            if (!(e.ctrlKey || e.metaKey)) return;
+            if (e.code !== 'CapsLock' && e.key !== 'CapsLock') return;
+            e.preventDefault();
+            window.showDevelopTestHarnessModal();
+          } catch (err) {
+            /* ignore */
+          }
+        },
+        true
+      );
+
+      async function developTestTryAutoRunFromUrl() {
+        try {
+          const sp = new URLSearchParams(window.location.search || '');
+          if (sp.get('devScenario') !== '1') return;
+          if (window.__developTestAutoRan) return;
+          window.__developTestAutoRan = true;
+          const waitMs = 120000;
+          const t0 = Date.now();
+          while ((!Array.isArray(customers) || customers.length === 0) && Date.now() - t0 < waitMs) {
+            await new Promise(function (r) {
+              setTimeout(r, 250);
+            });
+          }
+          let cfg = { preset: 'susanJanApr2026' };
+          try {
+            const res = await fetch('dev-scenario.json', { cache: 'no-store' });
+            if (res.ok) cfg = await res.json();
+          } catch (fe) {
+            /* use default */
+          }
+          console.info('[DevelopTest] Auto-run devScenario=1', cfg);
+          await window.runDevelopBillingScenarioFromJson(cfg);
+        } catch (e) {
+          console.error('[DevelopTest] Auto-run failed', e);
+        }
+      }
+
+      if (typeof window !== 'undefined') {
+        window.addEventListener('load', function () {
+          setTimeout(developTestTryAutoRunFromUrl, 1500);
+        });
+      }
+    })();
 
   </script>
   <style>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ledger — Susan Young (sample from develop scenario)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; background: #f1f5f9; color: #0f172a; line-height: 1.45; }
+    h1 { font-size: 1.35rem; margin: 0 0 6px; font-weight: 700; }
+    p.sub { color: #64748b; font-size: 0.95rem; margin: 0 0 22px; }
+    p.note { font-size: 0.8rem; color: #94a3b8; margin: 16px 0 0; max-width: 1280px; }
+    table { border-collapse: collapse; width: 100%; max-width: 1280px; background: #fff; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12); border-radius: 8px; overflow: hidden; }
+    th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; font-size: 0.875rem; vertical-align: top; }
+    th { background: #e2e8f0; font-weight: 600; font-size: 0.72rem; letter-spacing: 0.04em; color: #334155; text-transform: uppercase; }
+    tbody tr:nth-child(even) { background: #f8fafc; }
+    tbody tr:hover { background: #eff6ff; }
+  </style>
+</head>
+<body>
+  <h1>All Previous Payments/Charges</h1>
+  <p class="sub">Customer: SUSAN YOUNG (CUS-3011000) — static sample matching develop scenario <code>susanJanApr2026</code> output (simulated through 2026-04-01).</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Date &amp; Time</th>
+        <th>Type</th>
+        <th>Subtype</th>
+        <th>Sewer</th>
+        <th>Past Due</th>
+        <th>Tax Codes</th>
+        <th>PUC Surcharge</th>
+        <th>Late Fee</th>
+        <th>Amount Paid</th>
+        <th>Balance After</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>01/01/2026 12:00 AM</td>
+        <td>Payment</td>
+        <td>Fresh start (full pay)</td>
+        <td>$168.36</td>
+        <td>$0.00</td>
+        <td>$2.44</td>
+        <td>$7.69</td>
+        <td>$0.00</td>
+        <td>$178.49</td>
+        <td>$0.00</td>
+      </tr>
+      <tr>
+        <td>01/01/2026 12:00 AM</td>
+        <td>Charge</td>
+        <td>Billed Customer</td>
+        <td>$168.36</td>
+        <td>$0.00</td>
+        <td>$2.44</td>
+        <td>$7.69</td>
+        <td>$0.00</td>
+        <td>$0.00</td>
+        <td>$178.49</td>
+      </tr>
+      <tr>
+        <td>02/01/2026 12:00 AM</td>
+        <td>Charge</td>
+        <td>Billed Customer</td>
+        <td>$168.36</td>
+        <td>$178.49</td>
+        <td>$2.44</td>
+        <td>$7.69</td>
+        <td>$5.00</td>
+        <td>$0.00</td>
+        <td>$361.98</td>
+      </tr>
+      <tr>
+        <td>03/01/2026 12:00 AM</td>
+        <td>Charge</td>
+        <td>Billed Customer</td>
+        <td>$168.36</td>
+        <td>$178.49</td>
+        <td>$2.44</td>
+        <td>$7.69</td>
+        <td>$5.00</td>
+        <td>$0.00</td>
+        <td>$361.98</td>
+      </tr>
+      <tr>
+        <td>04/01/2026 12:00 AM</td>
+        <td>Payment</td>
+        <td>Security deposit (auto)</td>
+        <td>$168.36</td>
+        <td>$178.49</td>
+        <td>$2.44</td>
+        <td>$7.69</td>
+        <td>$10.00</td>
+        <td>$366.98</td>
+        <td>$0.00</td>
+      </tr>
+      <tr>
+        <td>04/01/2026 12:00 AM</td>
+        <td>Charge</td>
+        <td>Billed Customer</td>
+        <td>$168.36</td>
+        <td>$0.00</td>
+        <td>$2.44</td>
+        <td>$7.69</td>
+        <td>$0.00</td>
+        <td>$0.00</td>
+        <td>$178.49</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">Future runs: the develop scenario report now includes the same HTML block after the TSV section — copy it into a <code>.html</code> file, or open this sample from the server at <code>/ledger-preview-susan-janapr2026-sample.html</code>.</p>
+</body>
+</html>

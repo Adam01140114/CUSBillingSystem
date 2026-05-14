@@ -1,0 +1,13 @@
+{
+  "preset": "susanJanApr2026",
+  "customerId": "CUS-3011000",
+  "customerNameMatch": "Susan Young",
+  "anchorDate": "2026-01-01",
+  "advanceMode": "instant",
+  "captureConsole": true,
+  "suppressAlerts": true,
+  "openResultsTab": true,
+  "skipCheckPaymentMay": false,
+  "checkPaymentAmount": 75,
+  "checkNumber": "123"
+}

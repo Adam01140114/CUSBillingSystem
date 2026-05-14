@@ -6,7 +6,11 @@
   "scripts": {
     "build:css": "tailwindcss -i ./styles/tailwind-input.css -o ./public/tailwind-built.css --minify",
     "copy-vendor": "node tools/copy-vendor.cjs",
-    "start": "node server.js"
+    "start": "node server.js",
+    "start:dev-scenario": "DEV_BILLING_SCENARIO=1 node server.js",
+    "dev:scenario-help": "node tools/dev-scenario-help.cjs",
+    "test:billing-scenario": "node tools/run-billing-scenario-headless.mjs",
+    "test:billing-scenario:local": "node tools/run-billing-scenario-local.mjs"
   },
   "dependencies": {
     "body-parser": "^1.20.2",
@@ -28,6 +32,7 @@
     "node": ">=18.0.0"
   },
   "devDependencies": {
+    "playwright": "^1.50.0",
     "tailwindcss": "^3.4.17"
   }
 }
