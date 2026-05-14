@@ -4030,6 +4030,8 @@
      *   window.__BILL_DIAG_LOGGING = true
      * Optional filter (id, account #, or substring of name):
      *   window.__BILL_DIAG_CUSTOMER_ID = 'CUS-3001000'
+     * Develop billing scenario (runDevelopBillingScenarioFromJson) turns logging on and sets this to the
+     * resolved customer's account # / id when scopeDiagnosticConsole is not false.
      * Optional: log Process Bill panel / getProcessBillPanelAmounts on every refresh (can be noisy):
      *   window.__BILL_DIAG_VERBOSE_PANEL = true
      * When true, panel reconcile and Amount Breakdown footer also emit console.warn for the traced customer.
@@ -4092,6 +4094,7 @@
      *   window.__BILL_PANEL_TRACE = false  — silence both
      *   window.__BILL_PANEL_TRACE_ALL = true  — log for every customer (dev only; very noisy)
      *   window.__BILL_PANEL_TRACE_CUSTOMER_ID = 'CUS-…' | account # | name fragment — override who to trace
+     *   Develop billing scenario sets this from the resolved customer (same as accountNumber / customerId).
      */
     function tracePanelVerboseCustomerMatch(ctx) {
       try {
@@ -4206,6 +4209,32 @@
         ) {
           after = true;
           tieBreak = 'same_ms_payment_counts_after_bill';
+        }
+        // Same timestamp but payment ledgerOrder < anchor bill (POS recorded before counter caught the
+        // same-day billingCharge row). Still reduce statement unpaid — except pre-bill "give credit"
+        // (amount due $0 with creditGiven).
+        if (
+          !after &&
+          payLoKnown &&
+          Number.isFinite(billLo) &&
+          payLoNum != null &&
+          payLoNum < billLo &&
+          paySortMs != null &&
+          billSortMs != null &&
+          !isNaN(paySortMs) &&
+          !isNaN(billSortMs) &&
+          paySortMs === billSortMs &&
+          typeof isLedgerSecurityDepositAutoPay === 'function' &&
+          !isLedgerSecurityDepositAutoPay(p)
+        ) {
+          const ad0 = parseFloat(p.amountDue || 0);
+          const cg0 = parseFloat(p.creditGiven || 0);
+          const preBillCreditOnly =
+            !isNaN(ad0) && ad0 <= 0.005 && !isNaN(cg0) && cg0 > 0.005;
+          if (!preBillCreditOnly) {
+            after = true;
+            tieBreak = 'same_ms_lo_resequence_counts_after_bill';
+          }
         }
         return {
           counts: !!after,
@@ -6858,6 +6887,7 @@
 
       // Capture pre-roll state for anchor + bill line amounts (PDF columns match calc before roll)
       const openingPastDueForAnchor = parseFloat(customer.pastDue || 0);
+      const accountCreditBeforeBill = Math.round(Math.max(0, -openingPastDueForAnchor) * 100) / 100;
       const previousLastBillPrintDate = customer.lastBillPrintDate;
 
       const sewerChargeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.adjustedServiceCost) || 0) * 100) / 100;
@@ -6877,6 +6907,13 @@
       const lateFeeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.lateFeeAmount) || 0) * 100) / 100;
       const columnSumBill = Math.round(
         Math.max(0, sewerChargeOnBill + pastDueOnBill + surchargesOnBill + lateFeeOnBill) * 100
+      ) / 100;
+      const creditAppliedOnBill =
+        accountCreditBeforeBill > 0.005
+          ? Math.min(accountCreditBeforeBill, Math.round(columnSumBill * 100) / 100)
+          : 0;
+      const currentDueNetAfterCredit = Math.round(
+        Math.max(0, columnSumBill - creditAppliedOnBill) * 100
       ) / 100;
       const authRoll = Math.round(Math.max(0, parseFloat(calcBeforeRoll.total) || 0) * 100) / 100;
       // Statement total on the saved row = sum of bill line columns (same as PDF / table). applyBillProductionRollForward
@@ -6931,6 +6968,9 @@
         surchargesOnBill,
         lateFeeOnBill,
         currentDueOnBill,
+        accountCreditBeforeBill,
+        creditAppliedOnBill,
+        currentDueNetAfterCredit,
         currentDuePickBranch,
         calcBeforeRollTotal: calcBeforeRoll.total,
         calcBeforeRollCurrentDue: calcBeforeRoll.currentDue
@@ -6945,7 +6985,15 @@
         pastDueOnBill
       );
 
+      if (creditAppliedOnBill > 0.005) {
+        customer.pastDue = Math.round((openingPastDueForAnchor + creditAppliedOnBill) * 100) / 100;
+        syncPastDueCompositionToPastDueField(customer);
+      }
+
       // Then roll unpaid current into live customer pastDue/composition for post-bill state.
+      // Anchor lastPrintedStatementTotalDue to the bill row's gross column sum (currentDueOnBill), not
+      // currentDueNetAfterCredit: stmt-unpaid math is lastStmt − paymentsAfterPrint; using net understates
+      // lastStmt by creditAppliedOnBill and the next bill's pastDueOnBill drops by that same amount.
       applyBillProductionRollForward(customer, calcBeforeRoll, !!previousLastBillPrintDate, {
         closedStatementTotalFromBill: currentDueOnBill
       });
@@ -6967,7 +7015,9 @@
         taxCodesOnBill,
         pucSurchargeOnBill,
         lateFeeAmount: lateFeeOnBill,
-        currentDue: currentDueOnBill
+        currentDue: currentDueOnBill,
+        creditAppliedOnBill: creditAppliedOnBill > 0.005 ? creditAppliedOnBill : null,
+        netBalanceAfterBill: currentDueNetAfterCredit
       };
       if (pastDueCompositionSnapshot && pastDueOnBill > 0.005) {
         billRow.pastDueComposition = pastDueCompositionSnapshot;
@@ -9772,6 +9822,9 @@
         const totalCreditGiven = creditGiven > 0 ? creditGiven : (remainingPayment > 0 ? remainingPayment : 0);
 
         const calcAfterPayment = calculateCustomerTotalReadOnly(customer);
+        if (typeof syncLedgerOrderCounterFromHistory === 'function') {
+          syncLedgerOrderCounterFromHistory(customer);
+        }
         // Add to payment history (newAmountDue matches Amount Breakdown total after this event)
         const paymentRecord = {
           date: formattedDate,
@@ -25266,6 +25319,15 @@
       renderLateFeeBreakdownModal(pack);
     };
 
+    /** Balance After cell: show negative balance as credit. */
+    function formatLedgerBalanceAfterCell(val) {
+      if (val === undefined || val === null || (typeof val === 'number' && isNaN(val))) return '—';
+      const n = typeof val === 'number' ? val : parseFloat(val);
+      if (isNaN(n)) return '—';
+      if (n + 0.005 < 0) return `$${n.toFixed(2)} (credit)`;
+      return `$${Math.max(0, n).toFixed(2)}`;
+    }
+
     function displayAllLedgerModal(customer) {
       let modal = document.getElementById('allLedgerModal');
       if (!modal) {
@@ -25304,7 +25366,7 @@
         const ad = parseFloat(paymentEntry.amountDue);
         const ap = parseFloat(paymentEntry.amountPaid);
         if (!isNaN(ad) && !isNaN(ap)) {
-          return Math.round(Math.max(0, ad - ap) * 100) / 100;
+          return Math.round((ad - ap) * 100) / 100;
         }
         const nd = paymentEntry.newAmountDue;
         if (nd != null && !isNaN(parseFloat(nd))) {
@@ -25334,7 +25396,8 @@
               const ad = parseFloat(lastP.amountDue);
               const ap = parseFloat(lastP.amountPaid);
               if (!isNaN(ad) && !isNaN(ap)) {
-                nd = Math.round(Math.max(0, ad - ap) * 100) / 100;
+                const signed = Math.round((ad - ap) * 100) / 100;
+                nd = signed < -0.005 ? signed : Math.round(Math.max(0, signed) * 100) / 100;
               }
             } else {
               nd = null;
@@ -25345,7 +25408,8 @@
             const ad = parseFloat(midP.amountDue);
             const ap = parseFloat(midP.amountPaid);
             if (!isNaN(ad) && !isNaN(ap)) {
-              nd = Math.round(Math.max(0, ad - ap) * 100) / 100;
+              const signedMid = Math.round((ad - ap) * 100) / 100;
+              nd = signedMid < -0.005 ? signedMid : Math.round(Math.max(0, signedMid) * 100) / 100;
             }
           }
         }
@@ -25361,7 +25425,9 @@
         const ad = parseFloat(curP.amountDue);
         const ap = parseFloat(curP.amountPaid);
         if (isNaN(ad) || isNaN(ap)) continue;
-        resolvedNewDue[i] = Math.round(Math.max(0, ad - ap) * 100) / 100;
+        const signedBt = Math.round((ad - ap) * 100) / 100;
+        resolvedNewDue[i] =
+          signedBt < -0.005 ? signedBt : Math.round(Math.max(0, signedBt) * 100) / 100;
       }
       // Keep transaction history immutable: never overwrite per-payment post-balance
       // with today's recalculated customer total. Billing-charge Balance After = sum of that row's line
@@ -25510,6 +25576,25 @@
         const subtype =
           p.paymentMethod ||
           (isLedgerSecurityDepositAutoPay(p) ? 'Security deposit (auto)' : 'Payment');
+        const creditAmt = Math.round(Math.max(0, parseFloat(p.creditGiven || 0)) * 100) / 100;
+        let balanceAfterNum = resolvedNewDue[i];
+        const priorBillForBal = getMostRecentBillingChargeBeforePayment(customer, p);
+        if (
+          priorBillForBal &&
+          priorBillForBal.netBalanceAfterBill != null &&
+          !isNaN(parseFloat(priorBillForBal.netBalanceAfterBill))
+        ) {
+          const stmtNet = Math.round(parseFloat(priorBillForBal.netBalanceAfterBill) * 100) / 100;
+          let sumPaidAfterBillBeforeThis = 0;
+          for (let j = 0; j < paymentSortedAsc.length; j++) {
+            const pj = paymentSortedAsc[j];
+            if (pj === p) break;
+            if (!ledgerEntryStrictlyAfter(pj, priorBillForBal)) continue;
+            sumPaidAfterBillBeforeThis += Math.round(Math.max(0, parseFloat(pj.amountPaid || 0)) * 100) / 100;
+          }
+          const thisAp = Math.round(Math.max(0, parseFloat(p.amountPaid || 0)) * 100) / 100;
+          balanceAfterNum = Math.round((stmtNet - sumPaidAfterBillBeforeThis - thisAp) * 100) / 100;
+        }
         return {
           sourceKind: 'payment',
           sortMs: getLedgerEntrySortMs(p),
@@ -25522,8 +25607,9 @@
           taxCodes: taxCodesAmt,
           pucSurcharge: pucAmt,
           lateFee,
+          credit: creditAmt,
           amountPaid,
-          balanceAfter: resolvedNewDue[i],
+          balanceAfter: balanceAfterNum,
           ledgerPayment: p,
           paymentChronoIndex: i
         };
@@ -25537,9 +25623,14 @@
         const taxCodes = sp.taxCodes;
         const pucSurcharge = sp.puc;
         const lateFee = Math.round(Math.max(0, parseFloat(c.lateFeeAmount || 0)) * 100) / 100;
-        const balanceAfter = Math.round(
+        const creditApplied = Math.round(Math.max(0, parseFloat(c.creditAppliedOnBill || 0)) * 100) / 100;
+        const grossRow = Math.round(
           Math.max(0, sewer + pastDue + taxCodes + pucSurcharge + lateFee) * 100
         ) / 100;
+        const balanceAfter =
+          c.netBalanceAfterBill != null && !isNaN(parseFloat(c.netBalanceAfterBill))
+            ? Math.round(parseFloat(c.netBalanceAfterBill) * 100) / 100
+            : Math.round(Math.max(0, grossRow - creditApplied) * 100) / 100;
         return {
           sourceKind: 'charge',
           sortMs: getLedgerEntrySortMs(c),
@@ -25557,6 +25648,7 @@
           taxCodes,
           pucSurcharge,
           lateFee,
+          credit: creditApplied,
           amountPaid: 0,
           balanceAfter,
           ledgerCharge: c
@@ -25652,7 +25744,7 @@
 
       let htmlRows = '';
       if (rows.length === 0) {
-        htmlRows = '<tr><td colspan="10" class="text-center text-slate-500 dark:text-slate-400 py-8">No activity yet.</td></tr>';
+        htmlRows = '<tr><td colspan="11" class="text-center text-slate-500 dark:text-slate-400 py-8">No activity yet.</td></tr>';
       } else {
         rows.forEach((r, idx) => {
           if (r.sourceKind === 'payment' && r.ledgerPayment && r.amountPaid > 0) {
@@ -25751,7 +25843,10 @@
                   ? buildLateFeeTimerHintForCustomer(customer)
                   : ''
           };
-          const bal = (r.balanceAfter != null && !isNaN(r.balanceAfter)) ? `$${r.balanceAfter.toFixed(2)}` : '—';
+          const bal =
+            r.balanceAfter != null && !isNaN(r.balanceAfter)
+              ? formatLedgerBalanceAfterCell(r.balanceAfter)
+              : '—';
           const showPayDetail =
             r.sourceKind === 'payment' && r.ledgerPayment && r.amountPaid > 0;
           const amountPaidCell = showPayDetail
@@ -25772,25 +25867,28 @@
                 <button type="button" onclick="openLedgerLateFeeBreakdown(${idx})" class="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline text-left">Late Fee Details</button>
               </div>`
             : `$${r.lateFee.toFixed(2)}`;
+          const credNum = typeof r.credit === 'number' && !isNaN(r.credit) ? r.credit : 0;
+          const creditCell = `$${credNum.toFixed(2)}`;
           htmlRows += `
             <tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.dateTime}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.type}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.subtype}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.sewer.toFixed(2)}</td>
-              <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${pastDueCell}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${tc.toFixed(2)}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${puc.toFixed(2)}</td>
-              <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${lateFeeCell}</td>
-              <td class="px-4 py-3 text-sm text-slate-900 dark:text-slate-100">${amountPaidCell}</td>
-              <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-slate-100">${bal}</td>
+              <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.dateTime}</td>
+              <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.type}</td>
+              <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.subtype}</td>
+              <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${r.sewer.toFixed(2)}</td>
+              <td class="px-3 py-2 text-sm text-slate-900 dark:text-slate-100">${pastDueCell}</td>
+              <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${tc.toFixed(2)}</td>
+              <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">$${puc.toFixed(2)}</td>
+              <td class="px-3 py-2 text-sm text-slate-900 dark:text-slate-100">${lateFeeCell}</td>
+              <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${creditCell}</td>
+              <td class="px-3 py-2 text-sm text-slate-900 dark:text-slate-100">${amountPaidCell}</td>
+              <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-slate-100">${bal}</td>
             </tr>
           `;
         });
       }
 
       modal.innerHTML = `
-        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 max-w-7xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 sm:p-8 max-w-none w-[min(96rem,calc(100vw-1.5rem))] mx-auto max-h-[90vh] overflow-y-auto">
           <div class="flex justify-between items-center mb-6">
             <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">All Previous Payments/Charges</h2>
             <button onclick="hideAllLedgerModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
@@ -25802,20 +25900,21 @@
           <div class="mb-4 text-sm text-slate-600 dark:text-slate-400">
             <strong>Customer:</strong> ${customer.name} (${customer.accountNumber || customer.id})
           </div>
-          <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+          <div class="w-full overflow-x-visible">
+            <table class="w-full table-auto divide-y divide-slate-200 dark:divide-slate-700 text-sm">
               <thead class="bg-slate-50 dark:bg-slate-700">
                 <tr>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Date & Time</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Type</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Subtype</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Sewer</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Past Due</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Tax Codes</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">PUC Surcharge</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Late Fee</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Paid</th>
-                  <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Balance After</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Date & Time</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Type</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Subtype</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Sewer</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Past Due</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Tax Codes</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">PUC Surcharge</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Late Fee</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Credit</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Paid</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Balance After</th>
                 </tr>
               </thead>
               <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
@@ -26930,7 +27029,72 @@
         }
       }
 
-      function developTestBeginConsoleCapture() {
+      function developTestShouldCaptureConsoleLine(line, targetCustomer) {
+        if (!targetCustomer) return true;
+        const s = String(line);
+        if (s.indexOf('[DevelopTest]') !== -1) return true;
+        const id = targetCustomer.id != null ? String(targetCustomer.id) : '';
+        const acct = targetCustomer.accountNumber != null ? String(targetCustomer.accountNumber) : '';
+        const nm = targetCustomer.name != null ? String(targetCustomer.name).trim() : '';
+        if (acct && s.indexOf(acct) !== -1) return true;
+        if (id && s.indexOf(id) !== -1) return true;
+        if (nm.length >= 4 && s.toLowerCase().indexOf(nm.toLowerCase()) !== -1) return true;
+        return false;
+      }
+
+      function developTestSnapshotBillDiagGlobals() {
+        if (typeof window === 'undefined') return null;
+        return {
+          __BILL_DIAG_LOGGING: window.__BILL_DIAG_LOGGING,
+          __BILL_DIAG_CUSTOMER_ID: window.__BILL_DIAG_CUSTOMER_ID,
+          __BILL_PANEL_TRACE_CUSTOMER_ID: window.__BILL_PANEL_TRACE_CUSTOMER_ID,
+          __BILL_PANEL_TRACE: window.__BILL_PANEL_TRACE,
+          __BILL_PANEL_TRACE_ALL: window.__BILL_PANEL_TRACE_ALL
+        };
+      }
+
+      function developTestRestoreBillDiagGlobals(snap) {
+        if (!snap || typeof window === 'undefined') return;
+        const keys = [
+          '__BILL_DIAG_LOGGING',
+          '__BILL_DIAG_CUSTOMER_ID',
+          '__BILL_PANEL_TRACE_CUSTOMER_ID',
+          '__BILL_PANEL_TRACE',
+          '__BILL_PANEL_TRACE_ALL'
+        ];
+        for (let i = 0; i < keys.length; i++) {
+          const k = keys[i];
+          if (!Object.prototype.hasOwnProperty.call(snap, k) || snap[k] === undefined) {
+            try {
+              delete window[k];
+            } catch (e) {
+              /* ignore */
+            }
+          } else {
+            try {
+              window[k] = snap[k];
+            } catch (e2) {
+              /* ignore */
+            }
+          }
+        }
+      }
+
+      function developTestApplyScenarioBillDiagScope(customer, cfg) {
+        if (!customer || !cfg || cfg.scopeDiagnosticConsole === false) return;
+        try {
+          window.__BILL_DIAG_LOGGING = true;
+          const key = String(customer.accountNumber || customer.id || '').trim();
+          if (key) {
+            window.__BILL_DIAG_CUSTOMER_ID = key;
+            window.__BILL_PANEL_TRACE_CUSTOMER_ID = key;
+          }
+        } catch (e) {
+          /* ignore */
+        }
+      }
+
+      function developTestBeginConsoleCapture(targetCustomer) {
         developTestEndConsoleCapture();
         DT.lines.length = 0;
         const methods = ['log', 'info', 'warn', 'error', 'debug'];
@@ -26943,7 +27107,10 @@
           console[m] = function () {
             try {
               const parts = Array.prototype.slice.call(arguments).map(developTestArgToString);
-              DT.lines.push('[' + new Date().toISOString() + '] [' + m + '] ' + parts.join(' '));
+              const line = '[' + new Date().toISOString() + '] [' + m + '] ' + parts.join(' ');
+              if (developTestShouldCaptureConsoleLine(line, targetCustomer)) {
+                DT.lines.push(line);
+              }
             } catch (e) {
               /* ignore */
             }
@@ -26967,6 +27134,18 @@
 
       function developTestResolveCustomer(cfg) {
         if (!Array.isArray(customers) || !customers.length) return null;
+        if (cfg && cfg.accountNumber) {
+          const want = String(cfg.accountNumber).trim();
+          if (want) {
+            const byAcct = customers.find(function (c) {
+              if (!c) return false;
+              const a = c.accountNumber != null ? String(c.accountNumber).trim() : '';
+              if (a && a === want) return true;
+              return String(c.id) === want;
+            });
+            if (byAcct) return byAcct;
+          }
+        }
         const id = cfg && (cfg.customerId || cfg.id);
         if (id) {
           const byId = customers.find(function (c) {
@@ -26974,13 +27153,16 @@
           });
           if (byId) return byId;
         }
-        const frag = (cfg && (cfg.customerNameMatch || cfg.nameMatch)) || 'Susan Young';
-        const low = String(frag).toLowerCase();
-        return (
-          customers.find(function (c) {
-            return c && c.name && String(c.name).toLowerCase().indexOf(low) !== -1;
-          }) || null
-        );
+        const frag = cfg && cfg.customerNameMatch;
+        if (frag != null && String(frag).trim() !== '') {
+          const low = String(frag).trim().toLowerCase();
+          return (
+            customers.find(function (c) {
+              return c && c.name && String(c.name).toLowerCase().indexOf(low) !== -1;
+            }) || null
+          );
+        }
+        return null;
       }
 
       function developTestEscapeHtml(s) {
@@ -27058,7 +27240,7 @@
             'h1{font-size:1.35rem;margin:0 0 6px;font-weight:700;}\n' +
             'p.sub{color:#64748b;font-size:0.95rem;margin:0 0 22px;}\n' +
             'p.note{font-size:0.8rem;color:#94a3b8;margin:16px 0 0;}\n' +
-            'table{border-collapse:collapse;width:100%;max-width:1280px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12);border-radius:8px;overflow:hidden;}\n' +
+            'table{border-collapse:collapse;width:100%;max-width:100%;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12);border-radius:8px;overflow:hidden;}\n' +
             'th,td{border:1px solid #e2e8f0;padding:10px 12px;text-align:left;font-size:0.875rem;vertical-align:top;}\n' +
             'th{background:#e2e8f0;font-weight:600;font-size:0.72rem;letter-spacing:.04em;color:#334155;text-transform:uppercase;}\n' +
             'tbody tr:nth-child(even){background:#f8fafc;}\n' +
@@ -27287,27 +27469,193 @@
         }
       }
 
+      /**
+       * On 04/01 before April Produce Bill: customer owes $0 — POS check for `preAprilBillCreditAmount`
+       * with "Give credit" so `creditGiven` is stored on the payment row.
+       */
+      async function developTestProcessPreAprilCreditCheck(customer, cfg) {
+        if (!customer) throw new Error('developTest: credit check without customer');
+        const amount =
+          cfg.preAprilBillCreditAmount != null && !isNaN(parseFloat(cfg.preAprilBillCreditAmount))
+            ? Math.round(parseFloat(cfg.preAprilBillCreditAmount) * 100) / 100
+            : 0;
+        if (!(amount > 0)) throw new Error('developTest: preAprilBillCreditAmount must be positive');
+        const checkNo =
+          cfg.preAprilBillCreditCheckNumber != null ? String(cfg.preAprilBillCreditCheckNumber) : '10-CR';
+
+        if (typeof syncSystemTestingDrawerFromToggle !== 'function') {
+          throw new Error('developTest: syncSystemTestingDrawerFromToggle not available');
+        }
+        await syncSystemTestingDrawerFromToggle({ reason: 'developBillingScenarioPreAprCredit' });
+        const td = Array.isArray(drawers)
+          ? drawers.find(function (d) {
+              return d && d.id === SYSTEM_TESTING_DRAWER_ID;
+            })
+          : null;
+        if (!td) {
+          throw new Error(
+            'developTest: System Testing Drawer missing. Enable Settings → Toggles → Testing Drawer and reload (or run sync), then retry.'
+          );
+        }
+        await window.selectDrawer(td);
+
+        try {
+          if (typeof localStorage !== 'undefined') {
+            try {
+              localStorage.removeItem('currentPaymentProcessingSession');
+            } catch (e) {
+              /* ignore */
+            }
+          }
+        } catch (e) {
+          /* ignore */
+        }
+        window.currentPaymentProcessing = null;
+
+        const togglesPay = await loadTogglesSettings();
+        if (!togglesPay || !togglesPay.skipPOSInitialRegisterCount) {
+          throw new Error(
+            'developTest: Enable Settings → Toggles → "Skip POS initial register count" so Start New Payment opens the entry form without a manual initial drawer count.'
+          );
+        }
+
+        if (typeof showPaymentModule === 'function') window.showPaymentModule();
+        await window.startNewPayment();
+
+        if (typeof window.selectCustomerFromSearch === 'function') {
+          window.selectCustomerFromSearch(customer.id);
+        } else {
+          window.selectedCustomerIdForPayment = customer.id;
+          if (typeof showCustomerPaymentInfo === 'function') showCustomerPaymentInfo(customer.id);
+        }
+
+        const pt = document.getElementById('paymentType');
+        if (pt) {
+          pt.value = 'Check';
+          if (typeof togglePaymentInputs === 'function') togglePaymentInputs();
+        }
+
+        const recv = document.getElementById('checkReceivedInput');
+        if (recv) recv.value = String(amount);
+        const pam = document.getElementById('paymentAmount');
+        if (pam) pam.value = amount.toFixed(2);
+        if (typeof window.updateCheckChangeDisplay === 'function') {
+          window.updateCheckChangeDisplay();
+        }
+        const coh = document.getElementById('checkOverpaymentHandling');
+        if (coh) coh.value = 'credit';
+        if (typeof window.updateCheckChangeDisplay === 'function') {
+          window.updateCheckChangeDisplay();
+        }
+        const cn = document.getElementById('checkNumberInput');
+        if (cn) cn.value = checkNo;
+
+        const prevPrompt = window.prompt;
+        if (togglesPay && togglesPay.askUserCodePerTransaction) {
+          const u = Array.isArray(users)
+            ? users.find(function (x) {
+                return x && String(x.userCode || '').trim();
+              })
+            : null;
+          const code = u && u.userCode ? String(u.userCode).trim() : '';
+          if (!code) {
+            throw new Error(
+              'developTest: askUserCodePerTransaction is on but no user has userCode set; add a code or turn the toggle off for the scenario run.'
+            );
+          }
+          window.prompt = function () {
+            return code;
+          };
+        }
+        try {
+          await window.processPaymentFromModule();
+        } finally {
+          if (togglesPay && togglesPay.askUserCodePerTransaction) window.prompt = prevPrompt;
+        }
+
+        if (typeof hideAllModules === 'function') {
+          try {
+            hideAllModules(true);
+          } catch (e) {
+            /* ignore */
+          }
+        }
+      }
+
       function developTestMergeConfig(raw) {
         const cfg =
           raw && typeof raw === 'object' && !Array.isArray(raw)
             ? raw
             : {};
+        const acctRaw = cfg.accountNumber != null ? String(cfg.accountNumber).trim() : '';
+        const acct = acctRaw !== '' ? acctRaw : null;
+        const cidRaw =
+          cfg.customerId != null && cfg.customerId !== ''
+            ? String(cfg.customerId).trim()
+            : cfg.id != null && cfg.id !== ''
+              ? String(cfg.id).trim()
+              : '';
+        const cid = cidRaw !== '' ? cidRaw : null;
+        const useSusanDefaults = !acct && !cid;
+        const nameFragRaw =
+          cfg.customerNameMatch != null
+            ? String(cfg.customerNameMatch).trim()
+            : cfg.nameMatch != null
+              ? String(cfg.nameMatch).trim()
+              : '';
+        const nameFrag =
+          nameFragRaw !== ''
+            ? nameFragRaw
+            : useSusanDefaults
+              ? 'Susan Young'
+              : '';
         return {
           preset: cfg.preset || 'susanJanApr2026',
-          customerId: cfg.customerId || 'CUS-3011000',
-          customerNameMatch: cfg.customerNameMatch || 'Susan Young',
-          advanceMode: cfg.advanceMode === 'walk' ? 'walk' : 'instant',
+          accountNumber: acct,
+          customerId: cid || (useSusanDefaults ? 'CUS-3011000' : null),
+          customerNameMatch: nameFrag,
+          // Default walk: one calendar day at a time (same as Test date UI), not an instant jump.
+          advanceMode: cfg.advanceMode === 'instant' ? 'instant' : 'walk',
+          walkStepDelayMs:
+            typeof cfg.walkStepDelayMs === 'number' && cfg.walkStepDelayMs >= 0
+              ? cfg.walkStepDelayMs
+              : null,
           captureConsole: cfg.captureConsole !== false,
           suppressAlerts: cfg.suppressAlerts !== false,
           openResultsTab: cfg.openResultsTab !== false,
+          /** When true (default), [BillDiag]/[BillPanelTrace] and exported console capture target this customer only. */
+          scopeDiagnosticConsole: cfg.scopeDiagnosticConsole !== false,
           anchorDate: cfg.anchorDate || '2026-01-01',
           skipCheckPaymentMay: cfg.skipCheckPaymentMay === true,
           checkPaymentAmount:
             cfg.checkPaymentAmount != null && !isNaN(parseFloat(cfg.checkPaymentAmount))
               ? parseFloat(cfg.checkPaymentAmount)
               : 75,
-          checkNumber: cfg.checkNumber != null ? String(cfg.checkNumber) : '123'
+          checkNumber: cfg.checkNumber != null ? String(cfg.checkNumber) : '123',
+          preAprilBillCreditAmount:
+            cfg.preAprilBillCreditAmount != null && !isNaN(parseFloat(cfg.preAprilBillCreditAmount))
+              ? parseFloat(cfg.preAprilBillCreditAmount)
+              : null,
+          preAprilBillCreditCheckNumber:
+            cfg.preAprilBillCreditCheckNumber != null ? String(cfg.preAprilBillCreditCheckNumber) : '10-CR'
         };
+      }
+
+      /** Options for setTestDate during develop scenario (walk = per-day like manual UI). */
+      function developTestDateAdvanceOpts(cfg, skipAnim) {
+        const o = {
+          skipAnimation: skipAnim,
+          skipRunSimulatedDayForAllCustomers: false
+        };
+        if (
+          !skipAnim &&
+          cfg.walkStepDelayMs != null &&
+          typeof cfg.walkStepDelayMs === 'number' &&
+          cfg.walkStepDelayMs >= 0
+        ) {
+          o.stepDelayMs = cfg.walkStepDelayMs;
+        }
+        return o;
       }
 
       window.runDevelopBillingScenarioFromJson = async function (raw) {
@@ -27319,13 +27667,13 @@
         const noop = function () {};
         const prevAlert = window.alert;
         const prevConfirm = window.confirm;
+        const prevBillDiagSnap = developTestSnapshotBillDiagGlobals();
         if (cfg.suppressAlerts) {
           window.alert = noop;
           window.confirm = function () {
             return true;
           };
         }
-        if (cfg.captureConsole) developTestBeginConsoleCapture();
         const logLines = [];
         const log = function (m) {
           const s = typeof m === 'string' ? m : developTestArgToString(m);
@@ -27338,13 +27686,32 @@
         };
         let errText = '';
         try {
-          log('Scenario start preset=' + cfg.preset);
           const customer = developTestResolveCustomer(cfg);
-          if (!customer) throw new Error('Customer not found for develop test (id / name).');
+          if (!customer) {
+            throw new Error(
+              'Customer not found. In scenario JSON set accountNumber (must match a loaded account #), ' +
+                'customerId, or customerNameMatch. Headless: TEST_ACCOUNT_NUMBER=… or TEST_CUSTOMER_ID=…'
+            );
+          }
+          developTestApplyScenarioBillDiagScope(customer, cfg);
+          if (cfg.captureConsole) {
+            developTestBeginConsoleCapture(
+              cfg.scopeDiagnosticConsole !== false ? customer : null
+            );
+          }
+
+          log('Scenario start preset=' + cfg.preset + ', target ' + (customer.accountNumber || customer.id));
 
           const skipAnim = cfg.advanceMode === 'instant';
+          log(
+            'Set anchor ' +
+              cfg.anchorDate +
+              ' (instant snap — avoids backward day-walk from real clock; milestones use ' +
+              (skipAnim ? 'instant' : 'one day at a time') +
+              ')'
+          );
           await window.setTestDate(cfg.anchorDate, {
-            skipAnimation: skipAnim,
+            skipAnimation: true,
             skipRunSimulatedDayForAllCustomers: false
           });
 
@@ -27354,18 +27721,38 @@
           log('Produce bill @ ' + cfg.anchorDate);
           await developTestProduceBillFor(customer);
 
+          const creditApr =
+            cfg.preAprilBillCreditAmount != null &&
+            !isNaN(cfg.preAprilBillCreditAmount) &&
+            Math.round(parseFloat(cfg.preAprilBillCreditAmount) * 100) / 100 > 0.005;
+
           const milestones = [
             { date: '2026-02-01', bill: true },
             { date: '2026-03-01', bill: true },
-            { date: '2026-04-01', bill: true }
+            { date: '2026-03-02', bill: false }
           ];
+          if (creditApr) {
+            milestones.push({ date: '2026-04-01', bill: false });
+            milestones.push({ _preAprilCredit: true });
+            milestones.push({ date: '2026-04-01', bill: true });
+          } else {
+            milestones.push({ date: '2026-04-01', bill: true });
+          }
+
           for (let i = 0; i < milestones.length; i++) {
             const m = milestones[i];
+            if (m._preAprilCredit) {
+              const cr = Math.round(parseFloat(cfg.preAprilBillCreditAmount) * 100) / 100;
+              log(
+                '2026-04-01 (before April bill): POS check $' +
+                  cr.toFixed(2) +
+                  ' with Give credit (expect credit on account; total due $0 before this pay)'
+              );
+              await developTestProcessPreAprilCreditCheck(customer, cfg);
+              continue;
+            }
             log('Advance to ' + m.date + ' (' + (skipAnim ? 'instant' : 'day walk') + ')');
-            await window.setTestDate(m.date, {
-              skipAnimation: skipAnim,
-              skipRunSimulatedDayForAllCustomers: false
-            });
+            await window.setTestDate(m.date, developTestDateAdvanceOpts(cfg, skipAnim));
             if (m.bill) {
               log('Produce bill @ ' + m.date);
               await developTestProduceBillFor(customer);
@@ -27384,10 +27771,7 @@
             );
             await developTestProcessCheckPayment(customer, cfg);
             log('Advance to 2026-05-01 (' + (skipAnim ? 'instant' : 'day walk') + ')');
-            await window.setTestDate('2026-05-01', {
-              skipAnimation: skipAnim,
-              skipRunSimulatedDayForAllCustomers: false
-            });
+            await window.setTestDate('2026-05-01', developTestDateAdvanceOpts(cfg, skipAnim));
             log('Produce bill @ 2026-05-01');
             await developTestProduceBillFor(customer);
           }
@@ -27398,7 +27782,7 @@
           const breakdown = developTestAmountBreakdownSnapshot(customer);
           const consoleBlock = (cfg.captureConsole ? DT.lines : []).join('\n');
           const header =
-            'test-results.txt — CUS develop billing scenario\n' +
+            'CUS develop billing scenario export\n' +
             'Generated (browser local time): ' +
             new Date().toString() +
             '\nPreset: ' +
@@ -27469,6 +27853,7 @@
           }
         } finally {
           developTestEndConsoleCapture();
+          developTestRestoreBillDiagGlobals(prevBillDiagSnap);
           if (cfg.suppressAlerts) {
             window.alert = prevAlert;
             window.confirm = prevConfirm;
@@ -27490,7 +27875,7 @@
           '<div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-3xl w-full border border-slate-200 dark:border-slate-600 p-6 max-h-[90vh] flex flex-col">' +
           '<div class="flex justify-between items-start mb-3">' +
           '<div><h3 class="text-xl font-bold text-slate-800 dark:text-slate-100">Develop testing</h3>' +
-          '<p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Ctrl+CapsLock or Cmd+CapsLock on Accounts (not while typing in an input). If the shortcut does not fire, run <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">showDevelopTestHarnessModal()</code> in the console. Paste JSON, Run. Mutates data + Firebase like real Fresh start / Produce Bill. After Apr: $75 check (#123) via Testing Drawer → 5/1 + bill unless <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">skipCheckPaymentMay</code> is true — requires Settings → Toggles: Testing Drawer + Skip POS initial register count.</p></div>' +
+          '<p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Ctrl+CapsLock or Cmd+CapsLock on Accounts (not while typing in an input). If the shortcut does not fire, run <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">showDevelopTestHarnessModal()</code> in the console. Paste JSON, Run. Set <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">accountNumber</code> to any loaded account # (e.g. CUS-…) to run on that customer; <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">customerId</code> / name match still work. While the scenario runs, billing trace logs and the exported console block are scoped to that customer (<code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">scopeDiagnosticConsole: false</code> disables both). Default <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">advanceMode</code> is <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">walk</code> (one calendar day at a time, like advancing the test date in the UI); use <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">instant</code> to jump. Optional <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">walkStepDelayMs</code> (e.g. 0) overrides pause between walk steps. Mutates data + Firebase like real Fresh start / Produce Bill. After Apr: $75 check (#123) via Testing Drawer → 5/1 + bill unless <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">skipCheckPaymentMay</code> is true — requires Settings → Toggles: Testing Drawer + Skip POS initial register count.</p></div>' +
           '<button type="button" id="developTestHarnessClose" class="text-slate-400 hover:text-slate-600 p-1" aria-label="Close">&times;</button></div>' +
           '<textarea id="developTestHarnessJson" class="w-full flex-1 min-h-[200px] font-mono text-sm border border-slate-300 dark:border-slate-600 rounded-lg p-3 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100" spellcheck="false"></textarea>' +
           '<p id="developTestHarnessStatus" class="text-sm text-slate-600 dark:text-slate-300 mt-2 min-h-[1.25rem]"></p>' +
@@ -27540,9 +27925,10 @@
               : JSON.stringify(
                   {
                     preset: 'susanJanApr2026',
+                    accountNumber: '',
                     customerId: 'CUS-3011000',
                     customerNameMatch: 'Susan Young',
-                    advanceMode: 'instant',
+                    advanceMode: 'walk',
                     captureConsole: true,
                     suppressAlerts: true,
                     openResultsTab: true,

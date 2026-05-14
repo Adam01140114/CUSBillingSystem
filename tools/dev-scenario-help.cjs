@@ -17,6 +17,7 @@ console.log('   A) Press Ctrl+CapsLock (Windows/Linux) or Cmd+CapsLock (macOS), 
 console.log('   B) Copy this file to public/dev-scenario.json (optional edits), then open:\n');
 console.log('      http://localhost:8000/index.html?devScenario=1\n');
 console.log('4. Results: new tab with plain text; also inspect window.__DEVELOP_TEST_LAST_RESULT in DevTools.\n');
+console.log('Use "accountNumber": "CUS-…" in JSON (or TEST_ACCOUNT_NUMBER for npm) to run on any loaded customer.\n');
 console.log('advanceMode: "instant" (default) or "walk" (uses the same day-by-day overlay as the date picker).\n');
 console.log('After Jan–Apr bills: $75 check (default #123) via Testing Drawer, then 5/1 + bill — requires Settings → Toggles:\n');
 console.log('  Testing Drawer ON, Skip POS initial register count ON. Set skipCheckPaymentMay: true to skip that block.\n');
@@ -24,5 +25,6 @@ console.log('--- Headless (Node writes test-results.txt) ---\n');
 console.log('  Terminal 1: npm start\n');
 console.log('  npm install && npx playwright install chromium   # once per machine\n');
 console.log('  export FIREBASE_TEST_EMAIL="..." FIREBASE_TEST_PASSWORD="..."\n');
+console.log('  Optional: TEST_ACCOUNT_NUMBER=CUS-1234567 npm run test:billing-scenario:local\n');
 console.log('  npm run test:billing-scenario:local   # uses tools/billing-test.local.json (gitignored) or env vars\n');
 console.log('  → writes ./test-results.txt (override with OUTPUT_PATH=...)\n');

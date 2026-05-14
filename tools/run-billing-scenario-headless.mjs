@@ -13,6 +13,10 @@
  *   DEV_SCENARIO_JSON=/path/to/scenario.json   (defaults to ./public/dev-scenario.json if it exists, else built-in default)
  *   OUTPUT_PATH=./test-results.txt
  *   HEADED=1   (show browser for debugging)
+ *
+ * Target customer (must exist in Firestore after login):
+ *   TEST_ACCOUNT_NUMBER=CUS-3011000   (or DEV_SCENARIO_CUSTOMER_ACCOUNT — merged into scenario as accountNumber)
+ *   TEST_CUSTOMER_ID=…                (Firestore id; merged as customerId; used if account lookup fails)
  */
 
 import fs from 'fs';
@@ -28,7 +32,8 @@ function defaultScenario() {
     customerId: 'CUS-3011000',
     customerNameMatch: 'Susan Young',
     anchorDate: '2026-01-01',
-    advanceMode: 'instant',
+    advanceMode: 'walk',
+    walkStepDelayMs: 0,
     captureConsole: true,
     suppressAlerts: true,
     openResultsTab: false
@@ -107,6 +112,15 @@ async function main() {
     suppressAlerts: true,
     captureConsole: scenario.captureConsole !== false
   };
+  const accountFromEnv =
+    process.env.TEST_ACCOUNT_NUMBER || process.env.DEV_SCENARIO_CUSTOMER_ACCOUNT;
+  if (accountFromEnv && String(accountFromEnv).trim()) {
+    scenario = { ...scenario, accountNumber: String(accountFromEnv).trim() };
+  }
+  const idFromEnv = process.env.TEST_CUSTOMER_ID || process.env.DEV_SCENARIO_CUSTOMER_ID;
+  if (idFromEnv && String(idFromEnv).trim()) {
+    scenario = { ...scenario, customerId: String(idFromEnv).trim() };
+  }
 
   const outPath = path.resolve(process.cwd(), process.env.OUTPUT_PATH || 'test-results.txt');
   const shotPath = path.resolve(process.cwd(), process.env.SCREENSHOT_PATH || 'test-results-screenshot.png');

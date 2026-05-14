@@ -1,0 +1,16 @@
+{
+  "preset": "billAveyJanApr2026Credit",
+  "accountNumber": "CUS-3000500",
+  "customerNameMatch": "BILL AVEY",
+  "anchorDate": "2026-01-01",
+  "advanceMode": "walk",
+  "walkStepDelayMs": 0,
+  "captureConsole": true,
+  "suppressAlerts": true,
+  "openResultsTab": false,
+  "skipCheckPaymentMay": false,
+  "checkPaymentAmount": 75,
+  "checkNumber": "123",
+  "preAprilBillCreditAmount": 10,
+  "preAprilBillCreditCheckNumber": "10-CR"
+}

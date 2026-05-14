@@ -10,7 +10,8 @@
     "start:dev-scenario": "DEV_BILLING_SCENARIO=1 node server.js",
     "dev:scenario-help": "node tools/dev-scenario-help.cjs",
     "test:billing-scenario": "node tools/run-billing-scenario-headless.mjs",
-    "test:billing-scenario:local": "node tools/run-billing-scenario-local.mjs"
+    "test:billing-scenario:local": "node tools/run-billing-scenario-local.mjs",
+    "test_credit": "node tools/run-billing-scenario-credit-local.mjs"
   },
   "dependencies": {
     "body-parser": "^1.20.2",

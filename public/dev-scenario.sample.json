@@ -1,9 +1,11 @@
 {
   "preset": "susanJanApr2026",
+  "accountNumber": "CUS-3011000",
   "customerId": "CUS-3011000",
   "customerNameMatch": "Susan Young",
   "anchorDate": "2026-01-01",
-  "advanceMode": "instant",
+  "advanceMode": "walk",
+  "walkStepDelayMs": 0,
   "captureConsole": true,
   "suppressAlerts": true,
   "openResultsTab": true,
