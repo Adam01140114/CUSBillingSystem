@@ -208,12 +208,64 @@
     }
     .export-bar button:hover { background: rgba(61, 156, 249, 0.35); }
     .export-bar span { color: var(--muted); font-size: 0.85rem; }
+    .mt-past-due-btn {
+      font: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--accent);
+      background: transparent;
+      border: none;
+      padding: 0.15rem 0;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .mt-past-due-btn:hover { color: #7ec3ff; }
+    .mt-past-due-label { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.5rem; }
+    .mt-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .mt-modal-overlay.hidden { display: none; }
+    .mt-modal-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      max-width: 420px;
+      width: calc(100% - 2rem);
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+    }
+    .mt-modal-handle {
+      cursor: move;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    .mt-modal-handle h4 { margin: 0; font-size: 1rem; }
+    .mt-modal-close {
+      font: inherit;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 0.2rem 0.55rem;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>Master Test viewer</h1>
-    <p>Import <code>test_script_results.txt</code> (actual run) and optionally <code>test_script_success_results.txt</code> (golden). The master test uses <strong>8 steps</strong>. Double-click <strong>Actual</strong> cells: ledger row/column edits sync across steps; money cells keep a fixed <strong>$</strong> and only the number is editable. Export → new tab.</p>
+    <p>Import <code>test_script_results.txt</code> (actual run) and optionally <code>test_script_success_results.txt</code> (golden). The master test uses <strong>9 steps</strong>. Double-click <strong>Actual</strong> cells to edit; use <strong>Past Due Details</strong> on ledger Past Due cells for a draggable popup. Export → new tab.</p>
   </header>
   <div class="toolbar">
     <div class="field">
@@ -226,6 +278,20 @@
     </div>
   </div>
   <main id="root"></main>
+
+  <div id="pastDueModal" class="mt-modal-overlay hidden" aria-hidden="true">
+    <div class="mt-modal-panel" id="pastDueModalPanel">
+      <div class="mt-modal-handle" id="pastDueModalHandle">
+        <div>
+          <h4>Past Due details</h4>
+          <p class="mt-past-due-label" id="pastDueModalLabel"></p>
+        </div>
+        <button type="button" class="mt-modal-close" id="pastDueModalClose">Close</button>
+      </div>
+      <p class="hint-edit" style="margin:0 0 0.5rem">Double-click a value to edit ($ stays fixed).</p>
+      <div class="kv" id="pastDueModalKv"></div>
+    </div>
+  </div>
 
   <footer class="export-bar">
     <button type="button" id="btnExportCustom">Export custom_results.txt (new tab)</button>
@@ -244,6 +310,21 @@
       return chunks.map((c) => c.trim()).filter(Boolean);
     }
 
+    const PAST_DUE_DETAIL_KEYS = [
+      'Past due amount',
+      'Tax Codes',
+      'PUC Surcharge',
+      'Sewer Charge',
+      'Credit',
+      'Total (Past Due line)'
+    ];
+
+    function normalizePastDueDetailKey(k) {
+      const s = String(k || '').trim();
+      if (s === 'Puc surcharge') return 'PUC Surcharge';
+      return s;
+    }
+
     function parseStepBlock(block) {
       const m = /^Step\s+(\d+):/m.exec(block);
       const stepNum = m ? parseInt(m[1], 10) : 0;
@@ -251,6 +332,7 @@
       const di = block.indexOf('Description:');
       const pi = block.indexOf('Payments/Charges Table Shows:');
       const ai = block.indexOf('Amount Breakdown Shows:');
+      const pdi = block.indexOf('View Past Due Details Shows:');
       const bi = block.indexOf('Bill PDF Preview Shows:');
       if (di !== -1 && pi !== -1) {
         desc = block
@@ -260,19 +342,79 @@
       }
       let ledgerRaw = '';
       if (pi !== -1) {
-        const end = ai !== -1 ? ai : bi !== -1 ? bi : block.length;
+        const end = ai !== -1 ? ai : pdi !== -1 ? pdi : bi !== -1 ? bi : block.length;
         ledgerRaw = block.slice(pi + 'Payments/Charges Table Shows:'.length, end).trim();
       }
       let amountRaw = '';
       if (ai !== -1) {
-        const end = bi !== -1 ? bi : block.length;
+        const end = pdi !== -1 ? pdi : bi !== -1 ? bi : block.length;
         amountRaw = block.slice(ai + 'Amount Breakdown Shows:'.length, end).trim();
+      }
+      let pastDueRaw = '';
+      if (pdi !== -1) {
+        const end = bi !== -1 ? bi : block.length;
+        pastDueRaw = block.slice(pdi + 'View Past Due Details Shows:'.length, end).trim();
       }
       let pdfRaw = '';
       if (bi !== -1) {
         pdfRaw = block.slice(bi + 'Bill PDF Preview Shows:'.length).trim();
       }
-      return { stepNum, desc, ledgerRaw, amountRaw, pdfRaw };
+      return { stepNum, desc, ledgerRaw, amountRaw, pastDueRaw, pdfRaw };
+    }
+
+    function parsePastDueDetailsVertical(raw) {
+      const t = normalizeLines(raw).trim();
+      if (!t || t === '(none)' || t === '(unavailable)' || t.indexOf('(past due') === 0) {
+        return [];
+      }
+      const chunks = t.split(/\n\n+/);
+      const out = [];
+      chunks.forEach(function (chunk) {
+        const lines = chunk
+          .split('\n')
+          .map(function (l) {
+            return l.trim();
+          })
+          .filter(function (l) {
+            return l !== '';
+          });
+        if (!lines.length) return;
+        const rowM = /^\[ROW (\d+)\]$/i.exec(lines[0]);
+        const rowIndex = rowM ? parseInt(rowM[1], 10) : out.length;
+        const labelStart = rowM ? 1 : 0;
+        const keyStart = lines.findIndex(function (l) {
+          return l === 'Past due amount';
+        });
+        if (keyStart < 0) return;
+        const label = lines.slice(labelStart, keyStart).join(' ').trim();
+        const totalIdx = lines.findIndex(function (l, i) {
+          return i > keyStart && (l === 'Total (Past Due line)' || l === 'Total Due');
+        });
+        if (totalIdx < 0) return;
+        const keys = lines.slice(keyStart, totalIdx + 1).map(normalizePastDueDetailKey);
+        const vals = lines.slice(totalIdx + 1, totalIdx + 1 + keys.length);
+        const pairs = keys.map(function (k, i) {
+          return { key: k, val: vals[i] != null ? vals[i] : '$0' };
+        });
+        out.push({ rowIndex: rowIndex, label: label, pairs: pairs });
+      });
+      return out;
+    }
+
+    function pastDueEntriesToVertical(entries) {
+      if (!entries || !entries.length) return '(none)';
+      return entries
+        .map(function (e, i) {
+          const lines = ['[ROW ' + (e.rowIndex != null ? e.rowIndex : i) + ']', e.label || ''];
+          PAST_DUE_DETAIL_KEYS.forEach(function (k) {
+            lines.push(k);
+          });
+          e.pairs.forEach(function (p) {
+            lines.push(p.val);
+          });
+          return lines.join('\n');
+        })
+        .join('\n\n');
     }
 
     function parseVerticalLedger(raw) {
@@ -413,6 +555,25 @@
       return /^\$[-\d.,]+$/.test(String(s || '').trim());
     }
 
+    /** Ledger import often omits "$" (e.g. 178.49 or 0). */
+    function looksLikeMoneyValue(s) {
+      const t = String(s == null ? '' : s).trim();
+      if (!t) return false;
+      if (isEditableMoneyValue(t)) return true;
+      return /^-?\d{1,3}(,\d{3})*(\.\d+)?$/.test(t) || /^-?\d+(\.\d+)?$/.test(t);
+    }
+
+    /** Stored ledger cell text (matches import: 0, 178.49, or $178.49). */
+    function ledgerCellStoredMoney(text) {
+      const m = moneyValueFromNumericPart(
+        isEditableMoneyValue(text) ? stripLeadingDollar(text) : text
+      );
+      const n = parseFloat(stripLeadingDollar(m));
+      if (isNaN(n) || Math.abs(n) < 0.005) return '0';
+      if (Math.abs(n - Math.round(n)) < 0.005) return String(Math.round(n));
+      return n.toFixed(2);
+    }
+
     function stripLeadingDollar(s) {
       const t = String(s || '').trim();
       if (t.charAt(0) !== '$') return t;
@@ -452,6 +613,7 @@
       stepsA.forEach(function (s) {
         const lh = parseVerticalLedger(s.ledgerRaw);
         const amountA = parseAmountBreakdownVertical(s.amountRaw);
+        const pastDueA = parsePastDueDetailsVertical(s.pastDueRaw || '');
         const pdfRawTrim = (s.pdfRaw || '').trim();
         const pdfA = pdfRawTrim ? parseVerticalKeyValues(s.pdfRaw, PDF_KEYS) : null;
         editableByStep.set(s.stepNum, {
@@ -459,6 +621,15 @@
           ledger: deepCloneLedger(lh),
           amount: amountA.map(function (p) {
             return { key: p.key, val: p.val };
+          }),
+          pastDue: pastDueA.map(function (e) {
+            return {
+              rowIndex: e.rowIndex,
+              label: e.label,
+              pairs: e.pairs.map(function (p) {
+                return { key: p.key, val: p.val };
+              })
+            };
           }),
           pdf: pdfA ? pdfA.map(function (p) {
             return { key: p.key, val: p.val };
@@ -502,11 +673,66 @@
         ledgerToVertical(d.ledger) +
         '\n\n' +
         'Amount Breakdown Shows:\n\n' +
-        pairsToVertical(d.amount);
+        pairsToVertical(d.amount) +
+        '\n\nView Past Due Details Shows:\n\n' +
+        pastDueEntriesToVertical(d.pastDue);
       if (d.hasPdf && d.pdf && d.pdf.length) {
         body += '\n\nBill PDF Preview Shows:\n\n' + pairsToVertical(d.pdf);
       }
       return body;
+    }
+
+    function findPastDueColIndex(headers) {
+      for (let i = 0; i < headers.length; i++) {
+        if (/^past\s+due$/i.test(String(headers[i] || '').trim())) return i;
+      }
+      return -1;
+    }
+
+    function getPastDueEntryForRow(stepNum, rowIndex) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !Array.isArray(d.pastDue)) return null;
+      return (
+        d.pastDue.find(function (e) {
+          return e.rowIndex === rowIndex;
+        }) || null
+      );
+    }
+
+    function ledgerHeadersFromAnyStep() {
+      for (let i = 0; i < stepOrder.length; i++) {
+        const d = editableByStep.get(stepOrder[i]);
+        if (d && d.ledger && d.ledger.headers && d.ledger.headers.length) {
+          return d.ledger.headers;
+        }
+      }
+      return [];
+    }
+
+    function findLedgerColByHeaderPatterns(headers, patterns) {
+      if (!headers || !headers.length) return -1;
+      for (let i = 0; i < headers.length; i++) {
+        const h = String(headers[i] || '').trim();
+        for (let j = 0; j < patterns.length; j++) {
+          if (patterns[j].test(h)) return i;
+        }
+      }
+      return -1;
+    }
+
+    function pastDuePairKeyToLedgerCol(pairKey, headers) {
+      const map = {
+        'Sewer Charge': [/^sewer$/i],
+        'Tax Codes': [/^tax\s*codes?$/i],
+        'PUC Surcharge': [/^puc\s*surcharge$/i],
+        'Puc surcharge': [/^puc\s*surcharge$/i],
+        Credit: [/^credit$/i],
+        /** Ledger Past Due column = statement line total only (not the composition bucket). */
+        'Total (Past Due line)': [/^past\s*due$/i]
+      };
+      const patterns = map[pairKey];
+      if (!patterns) return -1;
+      return findLedgerColByHeaderPatterns(headers, patterns);
     }
 
     function buildExportText() {
@@ -516,6 +742,7 @@
 
     function renderLedgerTable(headers, rows, stepNum, role) {
       const editable = role === 'actual';
+      const pastDueCol = findPastDueColIndex(headers);
       const thead = '<tr>' + headers.map((h) => '<th>' + escapeHtml(h) + '</th>').join('') + '</tr>';
       const tbody = rows
         .map(function (r, ri) {
@@ -523,6 +750,42 @@
             '<tr>' +
             r
               .map(function (c, ci) {
+                if (editable && pastDueCol >= 0 && ci === pastDueCol) {
+                  const num = escapeHtml(
+                    stripLeadingDollar(
+                      looksLikeMoneyValue(c) ? moneyValueFromNumericPart(c) : String(c || '0')
+                    )
+                  );
+                  const hasPd = !!getPastDueEntryForRow(stepNum, ri);
+                  const btn = hasPd
+                    ? '<br><button type="button" class="mt-past-due-btn" data-past-due-open="1" data-step="' +
+                      stepNum +
+                      '" data-row="' +
+                      ri +
+                      '">Past Due Details</button>'
+                    : '';
+                  return (
+                    '<td class="mt-money-td" data-money-wrap="1" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">' +
+                    '<span class="mt-currency-prefix">$</span>' +
+                    '<span class="mt-money-value" data-editable="1" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">' +
+                    num +
+                    '</span>' +
+                    btn +
+                    '</td>'
+                  );
+                }
                 if (editable && isEditableMoneyValue(c)) {
                   const num = escapeHtml(stripLeadingDollar(c));
                   return (
@@ -562,6 +825,101 @@
       return '<table class="data" data-role="' + role + '"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table>';
     }
 
+    function pairValueIsMoneyLike(val) {
+      const t = String(val == null ? '' : val).trim();
+      if (!t) return false;
+      return isEditableMoneyValue(t) || /^-?\d/.test(t);
+    }
+
+    function resolveEditableTarget(target) {
+      let t = target;
+      if (t && t.closest) {
+        const mw = t.closest('td[data-money-wrap], .kv-money-wrap');
+        if (mw && !(t.getAttribute && t.getAttribute('data-editable') === '1')) {
+          const inner = mw.querySelector('.mt-money-value[data-editable="1"]');
+          if (inner) t = inner;
+        }
+      }
+      return t;
+    }
+
+    function activateEditableCell(t) {
+      if (!t || !t.getAttribute || t.getAttribute('data-editable') !== '1') return;
+      if (t.getAttribute('contenteditable') === 'true') return;
+      t.setAttribute('contenteditable', 'true');
+      t.focus();
+      try {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(t);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    function commitEditableCell(t) {
+      if (!t || !t.getAttribute || t.getAttribute('data-editable') !== '1') return;
+      if (t.getAttribute('contenteditable') !== 'true') return;
+      const textRaw = cellText(t);
+      const isMoneyCell = t.classList && t.classList.contains('mt-money-value');
+      const stored = isMoneyCell ? moneyValueFromNumericPart(textRaw) : textRaw;
+      if (isMoneyCell) {
+        t.textContent = stripLeadingDollar(stored);
+      } else {
+        t.textContent = stored;
+      }
+      t.removeAttribute('contenteditable');
+      const step = parseInt(t.getAttribute('data-step'), 10);
+      const section = t.getAttribute('data-section');
+      if (section === 'ledger') {
+        const row = parseInt(t.getAttribute('data-row'), 10);
+        const col = parseInt(t.getAttribute('data-col'), 10);
+        const ledgerStored = ledgerCellStoredMoney(stored);
+        const pastDueCol = findPastDueColIndex(ledgerHeadersFromAnyStep());
+        propagateLedgerCellToAllSteps(row, col, ledgerStored);
+        syncLedgerCellsInDom(row, col, ledgerStored, { pastDueCol: col === pastDueCol });
+        if (col === pastDueCol) {
+          syncPastDueTotalLineOnly(row, stored);
+        }
+      } else if (section === 'pastdue-modal' && pastDueModalCtx) {
+        const ki = parseInt(t.getAttribute('data-kv'), 10);
+        propagatePastDuePairEdit(pastDueModalCtx.rowIndex, ki, stored);
+      } else if (section === 'amount' || section === 'pdf' || section.indexOf('pastdue-') === 0) {
+        const ki = parseInt(t.getAttribute('data-kv'), 10);
+        applyKvEdit(step, section, ki, stored);
+      }
+    }
+
+    function attachEditableListeners(container) {
+      if (!container || container.dataset.editableBound === '1') return;
+      container.dataset.editableBound = '1';
+      container.addEventListener('dblclick', function (e) {
+        activateEditableCell(resolveEditableTarget(e.target));
+      });
+      container.addEventListener(
+        'blur',
+        function (e) {
+          commitEditableCell(e.target);
+        },
+        true
+      );
+      container.addEventListener('keydown', function (e) {
+        const t = e.target;
+        if (!t || !t.getAttribute || t.getAttribute('data-editable') !== '1') return;
+        if (t.getAttribute('contenteditable') !== 'true') return;
+        if (t.classList.contains('mt-money-value') && e.key === '$') {
+          e.preventDefault();
+          return;
+        }
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          t.blur();
+        }
+      });
+    }
+
     function renderKV(pairs, stepNum, section, editable) {
       if (!editable) {
         return (
@@ -574,12 +932,17 @@
           '</div>'
         );
       }
+      const moneySection = section === 'pastdue-modal' || section.indexOf('pastdue-') === 0;
       return (
         '<div class="kv">' +
         pairs
           .map(function (p, i) {
-            if (editable && isEditableMoneyValue(p.val)) {
-              const num = escapeHtml(stripLeadingDollar(p.val));
+            if (editable && (isEditableMoneyValue(p.val) || (moneySection && pairValueIsMoneyLike(p.val)))) {
+              const num = escapeHtml(
+                isEditableMoneyValue(p.val)
+                  ? stripLeadingDollar(p.val)
+                  : stripLeadingDollar(moneyValueFromNumericPart(p.val))
+              );
               return (
                 '<div>' +
                 escapeHtml(p.key) +
@@ -675,9 +1038,14 @@
       });
     }
 
-    function syncLedgerCellsInDom(row, col, fullText) {
+    function syncLedgerCellsInDom(row, col, fullText, opts) {
+      opts = opts || {};
       const root = document.getElementById('root');
       if (!root) return;
+      const displayNum = stripLeadingDollar(
+        moneyValueFromNumericPart(isEditableMoneyValue(fullText) ? stripLeadingDollar(fullText) : fullText)
+      );
+      const storedDisplay = ledgerCellStoredMoney(fullText);
       const selSpan =
         'span.mt-money-value[data-editable="1"][data-section="ledger"][data-row="' +
         row +
@@ -688,95 +1056,241 @@
       if (spans.length) {
         spans.forEach(function (el) {
           if (el.getAttribute('contenteditable') === 'true') return;
-          el.textContent = stripLeadingDollar(fullText);
+          el.textContent = displayNum;
+        });
+        if (!opts.pastDueCol) return;
+      }
+      if (!opts.pastDueCol) {
+        const selTd =
+          'td[data-editable="1"][data-section="ledger"][data-row="' + row + '"][data-col="' + col + '"]';
+        root.querySelectorAll(selTd).forEach(function (el) {
+          if (el.getAttribute('contenteditable') === 'true') return;
+          if (el.querySelector('.mt-past-due-btn')) return;
+          el.textContent = storedDisplay;
         });
         return;
       }
-      const selTd =
-        'td[data-editable="1"][data-section="ledger"][data-row="' + row + '"][data-col="' + col + '"]';
-      root.querySelectorAll(selTd).forEach(function (el) {
+      root.querySelectorAll('td[data-section="ledger"][data-row="' + row + '"][data-col="' + col + '"]').forEach(
+        function (td) {
+          if (td.querySelector('span.mt-money-value[data-editable="1"]')) return;
+          const step = td.getAttribute('data-step');
+          const btn =
+            '<br><button type="button" class="mt-past-due-btn" data-past-due-open="1" data-step="' +
+            step +
+            '" data-row="' +
+            row +
+            '">Past Due Details</button>';
+          td.className = 'mt-money-td';
+          td.setAttribute('data-money-wrap', '1');
+          td.innerHTML =
+            '<span class="mt-currency-prefix">$</span>' +
+            '<span class="mt-money-value" data-editable="1" data-section="ledger" data-step="' +
+            step +
+            '" data-row="' +
+            row +
+            '" data-col="' +
+            col +
+            '">' +
+            escapeHtml(displayNum) +
+            '</span>' +
+            btn;
+        }
+      );
+    }
+
+    /** Sync exported Total (Past Due line) from ledger column — never overwrite Past due amount bucket. */
+    function syncPastDueTotalLineOnly(rowIndex, text) {
+      const money = moneyValueFromNumericPart(
+        isEditableMoneyValue(text) ? stripLeadingDollar(text) : text
+      );
+      stepOrder.forEach(function (sn) {
+        const entry = getPastDueEntryForRow(sn, rowIndex);
+        if (!entry || !entry.pairs) return;
+        entry.pairs.forEach(function (p) {
+          if (p.key === 'Total (Past Due line)') {
+            p.val = money;
+          }
+        });
+      });
+    }
+
+    function refreshLedgerPastDueRowInDom(rowIndex) {
+      const headers = ledgerHeadersFromAnyStep();
+      const col = findPastDueColIndex(headers);
+      if (col < 0) return;
+      for (let i = 0; i < stepOrder.length; i++) {
+        const d = editableByStep.get(stepOrder[i]);
+        if (!d || !d.ledger.rows[rowIndex]) continue;
+        syncLedgerCellsInDom(rowIndex, col, d.ledger.rows[rowIndex][col], { pastDueCol: true });
+      }
+    }
+
+    let pastDueModalCtx = null;
+
+    function syncPastDueModalKvInDom(pairIndex, fullText) {
+      const kvRoot = document.getElementById('pastDueModalKv');
+      if (!kvRoot) return;
+      const display = isEditableMoneyValue(fullText) ? stripLeadingDollar(fullText) : fullText;
+      kvRoot.querySelectorAll(
+        'span.mt-money-value[data-editable="1"][data-section="pastdue-modal"][data-kv="' + pairIndex + '"]'
+      ).forEach(function (el) {
+        if (el.getAttribute('contenteditable') === 'true') return;
+        el.textContent = display;
+      });
+      kvRoot.querySelectorAll(
+        '.kv-val[data-editable="1"][data-section="pastdue-modal"][data-kv="' + pairIndex + '"]'
+      ).forEach(function (el) {
         if (el.getAttribute('contenteditable') === 'true') return;
         el.textContent = fullText;
       });
     }
 
+    /** Same ledger row index across every step: past-due popup + matching ledger columns. */
+    function propagatePastDuePairEdit(rowIndex, pairIndex, text) {
+      if (rowIndex == null || isNaN(rowIndex) || pairIndex == null || isNaN(pairIndex)) return;
+      let pairKey = null;
+      for (let i = 0; i < stepOrder.length; i++) {
+        const entry = getPastDueEntryForRow(stepOrder[i], rowIndex);
+        if (entry && entry.pairs[pairIndex]) {
+          pairKey = entry.pairs[pairIndex].key;
+          break;
+        }
+      }
+      stepOrder.forEach(function (sn) {
+        const d = editableByStep.get(sn);
+        if (!d || !Array.isArray(d.pastDue)) return;
+        const entry = d.pastDue.find(function (e) {
+          return e.rowIndex === rowIndex;
+        });
+        if (!entry || !entry.pairs) return;
+        if (entry.pairs[pairIndex]) {
+          entry.pairs[pairIndex].val = text;
+        }
+        if (pairKey) {
+          entry.pairs.forEach(function (p) {
+            if (p.key === pairKey) p.val = text;
+          });
+        }
+      });
+      if (pairKey === 'Total (Past Due line)') {
+        syncPastDueTotalLineOnly(rowIndex, text);
+      }
+      const headers = ledgerHeadersFromAnyStep();
+      const col = pairKey ? pastDuePairKeyToLedgerCol(pairKey, headers) : -1;
+      if (col >= 0) {
+        const ledgerStored = ledgerCellStoredMoney(text);
+        propagateLedgerCellToAllSteps(rowIndex, col, ledgerStored);
+        syncLedgerCellsInDom(rowIndex, col, ledgerStored, {
+          pastDueCol: col === findPastDueColIndex(headers)
+        });
+      }
+      syncPastDueModalKvInDom(pairIndex, text);
+    }
+
     function applyKvEdit(stepNum, section, index, text) {
       const d = editableByStep.get(stepNum);
       if (!d) return;
+      if (section.indexOf('pastdue-') === 0) {
+        const ei = parseInt(section.slice('pastdue-'.length), 10);
+        const entry = d.pastDue && d.pastDue[ei];
+        if (entry) propagatePastDuePairEdit(entry.rowIndex, index, text);
+        return;
+      }
       const list = section === 'pdf' ? d.pdf : d.amount;
       if (!list || !list[index]) return;
       list[index].val = text;
     }
 
+    function openPastDueModal(stepNum, rowIndex, entryIndex) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !Array.isArray(d.pastDue)) return;
+      let ei = entryIndex;
+      let entry = null;
+      if (ei == null && rowIndex != null) {
+        entry = getPastDueEntryForRow(stepNum, rowIndex);
+        if (entry) ei = d.pastDue.findIndex(function (e) { return e === entry; });
+      } else if (ei != null) {
+        entry = d.pastDue[ei];
+      }
+      if (!entry || ei == null || ei < 0) return;
+      pastDueModalCtx = { stepNum: stepNum, entryIndex: ei, rowIndex: entry.rowIndex };
+      document.getElementById('pastDueModalLabel').textContent = entry.label || '';
+      document.getElementById('pastDueModalKv').innerHTML = renderKV(entry.pairs, stepNum, 'pastdue-modal', true);
+      const overlay = document.getElementById('pastDueModal');
+      overlay.classList.remove('hidden');
+      overlay.setAttribute('aria-hidden', 'false');
+    }
+
+    function flushPastDueModalEdits() {
+      const kvRoot = document.getElementById('pastDueModalKv');
+      if (!kvRoot) return;
+      const active = kvRoot.querySelector('[contenteditable="true"]');
+      if (active) active.blur();
+    }
+
+    function closePastDueModal() {
+      const ctx = pastDueModalCtx;
+      flushPastDueModalEdits();
+      if (ctx && ctx.rowIndex != null) {
+        refreshLedgerPastDueRowInDom(ctx.rowIndex);
+      }
+      const overlay = document.getElementById('pastDueModal');
+      overlay.classList.add('hidden');
+      overlay.setAttribute('aria-hidden', 'true');
+      pastDueModalCtx = null;
+    }
+
+    function bindPastDueModal() {
+      const overlay = document.getElementById('pastDueModal');
+      const panel = document.getElementById('pastDueModalPanel');
+      const handle = document.getElementById('pastDueModalHandle');
+      if (!overlay || overlay.dataset.bound === '1') return;
+      overlay.dataset.bound = '1';
+      document.getElementById('pastDueModalClose').addEventListener('click', closePastDueModal);
+      overlay.addEventListener('click', function (e) {
+        if (e.target === overlay) closePastDueModal();
+      });
+      let drag = null;
+      handle.addEventListener('mousedown', function (e) {
+        if (e.button !== 0 || e.target.closest('button')) return;
+        const rect = panel.getBoundingClientRect();
+        drag = { sx: e.clientX, sy: e.clientY, left: rect.left, top: rect.top, w: rect.width };
+        panel.style.position = 'fixed';
+        panel.style.margin = '0';
+        e.preventDefault();
+      });
+      document.addEventListener('mousemove', function (e) {
+        if (!drag) return;
+        let left = drag.left + e.clientX - drag.sx;
+        let top = drag.top + e.clientY - drag.sy;
+        left = Math.max(8, Math.min(left, window.innerWidth - drag.w - 8));
+        top = Math.max(8, Math.min(top, window.innerHeight - 48));
+        panel.style.left = left + 'px';
+        panel.style.top = top + 'px';
+      });
+      document.addEventListener('mouseup', function () {
+        drag = null;
+      });
+      attachEditableListeners(overlay);
+    }
+
     function bindEditHandlers(root) {
-      root.addEventListener('dblclick', function (e) {
-        let t = e.target;
-        if (t && t.closest) {
-          const mw = t.closest('td[data-money-wrap], .kv-money-wrap');
-          if (mw && !(t.getAttribute && t.getAttribute('data-editable') === '1')) {
-            const inner = mw.querySelector('.mt-money-value[data-editable="1"]');
-            if (inner) t = inner;
-          }
-        }
-        if (!t || !t.getAttribute) return;
-        if (t.getAttribute('data-editable') !== '1') return;
-        if (t.getAttribute('contenteditable') === 'true') return;
-        t.setAttribute('contenteditable', 'true');
-        t.focus();
-        try {
-          const sel = window.getSelection();
-          const range = document.createRange();
-          range.selectNodeContents(t);
-          sel.removeAllRanges();
-          sel.addRange(range);
-        } catch (err) {
-          /* ignore */
-        }
+      attachEditableListeners(root);
+
+      root.addEventListener('click', function (e) {
+        const btn = e.target.closest('[data-past-due-open]');
+        if (!btn) return;
+        e.preventDefault();
+        const step = parseInt(btn.getAttribute('data-step'), 10);
+        const rowAttr = btn.getAttribute('data-row');
+        const entryAttr = btn.getAttribute('data-entry');
+        openPastDueModal(
+          step,
+          rowAttr != null ? parseInt(rowAttr, 10) : null,
+          entryAttr != null ? parseInt(entryAttr, 10) : null
+        );
       });
 
-      root.addEventListener(
-        'blur',
-        function (e) {
-          const t = e.target;
-          if (!t || !t.getAttribute || t.getAttribute('data-editable') !== '1') return;
-          if (t.getAttribute('contenteditable') !== 'true') return;
-          const textRaw = cellText(t);
-          const isMoneyCell = t.classList && t.classList.contains('mt-money-value');
-          const stored = isMoneyCell ? moneyValueFromNumericPart(textRaw) : textRaw;
-          if (isMoneyCell) {
-            t.textContent = stripLeadingDollar(stored);
-          } else {
-            t.textContent = stored;
-          }
-          t.removeAttribute('contenteditable');
-          const step = parseInt(t.getAttribute('data-step'), 10);
-          const section = t.getAttribute('data-section');
-          if (section === 'ledger') {
-            const row = parseInt(t.getAttribute('data-row'), 10);
-            const col = parseInt(t.getAttribute('data-col'), 10);
-            propagateLedgerCellToAllSteps(row, col, stored);
-            syncLedgerCellsInDom(row, col, stored);
-          } else if (section === 'amount' || section === 'pdf') {
-            const ki = parseInt(t.getAttribute('data-kv'), 10);
-            applyKvEdit(step, section, ki, stored);
-          }
-        },
-        true
-      );
-
-      root.addEventListener('keydown', function (e) {
-        const t = e.target;
-        if (!t || !t.getAttribute || t.getAttribute('data-editable') !== '1') return;
-        if (t.getAttribute('contenteditable') !== 'true') return;
-        if (t.classList.contains('mt-money-value') && e.key === '$') {
-          e.preventDefault();
-          return;
-        }
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          t.blur();
-        }
-      });
     }
 
     function renderAll(actualText, goldenText) {
@@ -800,6 +1314,7 @@
           return renderStepCard(s, byNum[s.stepNum] || null);
         }).join('');
         bindEditHandlers(root);
+        bindPastDueModal();
         if (hint) hint.textContent = 'Ledger: same row/column syncs across steps. Money: $ is fixed, edit digits only. Export → new tab.';
       } catch (err) {
         root.innerHTML = '<p class="err">' + escapeHtml(err.message || String(err)) + '</p>';
@@ -855,6 +1370,8 @@
         URL.revokeObjectURL(url);
       }, 60000);
     });
+
+    bindPastDueModal();
   </script>
 </body>
 </html>

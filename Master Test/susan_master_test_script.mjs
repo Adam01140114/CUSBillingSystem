@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Susan Young — Master Test (8-step billing walk: 4/1 advance, $10 check, and bill are separate steps).
+ * Susan Young — Master Test (9-step billing walk: 3/2 bill, 4/1 advance, $10 check, and bill are separate steps).
  * Runs the Playwright harness in tools/run-susan-master-test-headless.mjs.
  *
  * Credentials: same as Test Scripts/test_script1.mjs — env vars or tools/billing-test.local.json
@@ -13,7 +13,7 @@
  *   MASTER_TEST_RESULTS=./Master\ Test/test_script_results.txt
  *   MASTER_TEST_CONSOLE=./Master\ Test/test_script_console_logs.txt
  *   TEST_ACCOUNT_NUMBER=CUS-3011000
- *   MASTER_TEST_ADVANCE=instant|walk
+ *   MASTER_TEST_ADVANCE=walk|instant  (default walk — day-by-day so deposit fires on day 60, e.g. 3/2/26)
  *   MASTER_TEST_CHECK_AMOUNT=10
  *   MASTER_TEST_CHECK_NUMBER=MT-10
  */

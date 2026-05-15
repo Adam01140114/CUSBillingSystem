@@ -70,7 +70,8 @@ async function main() {
   const headed = process.env.HEADED === '1' || process.env.HEADED === 'true';
 
   const scenario = {
-    advanceMode: process.env.MASTER_TEST_ADVANCE === 'walk' ? 'walk' : 'instant',
+    /** walk = one simulated calendar day at a time (required for 60-day deposit trigger on 3/2, not 4/1). */
+    advanceMode: process.env.MASTER_TEST_ADVANCE === 'instant' ? 'instant' : 'walk',
     accountNumber: (process.env.TEST_ACCOUNT_NUMBER || 'CUS-3011000').trim(),
     captureConsole: true,
     suppressAlerts: true,
@@ -205,7 +206,8 @@ async function main() {
 
     const report = result && typeof result.masterTestReport === 'string' ? result.masterTestReport : '';
     fs.mkdirSync(path.dirname(outResults), { recursive: true });
-    fs.writeFileSync(outResults, report || JSON.stringify(result, null, 2) + '\n', 'utf8');
+    const reportBody = report || JSON.stringify(result, null, 2);
+    fs.writeFileSync(outResults, reportBody.replace(/\n+$/, ''), 'utf8');
     console.error('[susan-master-test] Wrote', outResults);
 
     const lines = result && Array.isArray(result.consoleLines) ? result.consoleLines : [];
