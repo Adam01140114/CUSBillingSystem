@@ -25608,12 +25608,6 @@
               ${Math.abs((pack.paymentPastDueApplied || 0) - pack.pastDue) > 0.02 ? ` <span class="text-xs text-slate-500">(Past Due column shows the statement snapshot: $${pack.pastDue.toFixed(2)})</span>` : ''}
             </div>`
           : '';
-      const stmtPay = pack.statementForPayment
-        ? `<div class="mb-3">
-            <p class="text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">Statement this payment applied to</p>
-            ${renderPastDueSnapshotTable(pack.statementForPayment)}
-          </div>`
-        : '';
       let compForPastDueModal = pack.displayComposition;
       if (!compForPastDueModal && pack.pastDueComposition) {
         compForPastDueModal =
@@ -25641,9 +25635,7 @@
           </div>
           ${compositionBlock}
           ${payBlock}
-          ${stmtPay}
           ${pack.showNoPriorBillingStatement ? `<p class="text-xs text-slate-500 dark:text-slate-400 mb-3">This is the first billed statement on record; there is no prior bill to compare.</p>` : ''}
-          ${!pack.statementForPayment && pack.rowKind === 'payment' ? `<p class="text-xs text-slate-500 dark:text-slate-400 mb-3">No billing charge row was found before this payment to list statement line items.</p>` : ''}
           <button type="button" onclick="closeLedgerPastDueBreakdownModal()" class="w-full bg-blue-600 text-white font-medium py-2 rounded-lg hover:bg-blue-700">Close</button>
         </div>`);
     };
