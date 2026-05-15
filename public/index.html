@@ -4197,43 +4197,42 @@
         const billLo = getLedgerEntryOrder(lastBillRow);
         let after = ledgerChronoStrictlyAfter(p, lastBillRow);
         let tieBreak = after ? 'after_latest_billing_charge_row' : 'not_after_latest_billing_charge_row';
-        // Same wall-clock instant as the anchor bill but payment ledgerOrder ≤ bill (or unknown): POS still
-        // applies to the balance after that bill — do not drop from paidAfter or stmtUnpaid stays gross-high.
-        if (
+        const ad0 = parseFloat(p.amountDue || 0);
+        const cg0 = parseFloat(p.creditGiven || 0);
+        const preBillCreditOnly =
+          !isNaN(ad0) && ad0 <= 0.005 && !isNaN(cg0) && cg0 > 0.005;
+        const sameWallMs =
           !after &&
           paySortMs != null &&
           billSortMs != null &&
           !isNaN(paySortMs) &&
           !isNaN(billSortMs) &&
-          paySortMs === billSortMs
-        ) {
-          after = true;
-          tieBreak = 'same_ms_payment_counts_after_bill';
-        }
-        // Same timestamp but payment ledgerOrder < anchor bill (POS recorded before counter caught the
-        // same-day billingCharge row). Still reduce statement unpaid — except pre-bill "give credit"
-        // (amount due $0 with creditGiven).
-        if (
-          !after &&
-          payLoKnown &&
-          Number.isFinite(billLo) &&
-          payLoNum != null &&
-          payLoNum < billLo &&
-          paySortMs != null &&
-          billSortMs != null &&
-          !isNaN(paySortMs) &&
-          !isNaN(billSortMs) &&
-          paySortMs === billSortMs &&
-          typeof isLedgerSecurityDepositAutoPay === 'function' &&
-          !isLedgerSecurityDepositAutoPay(p)
-        ) {
-          const ad0 = parseFloat(p.amountDue || 0);
-          const cg0 = parseFloat(p.creditGiven || 0);
-          const preBillCreditOnly =
-            !isNaN(ad0) && ad0 <= 0.005 && !isNaN(cg0) && cg0 > 0.005;
-          if (!preBillCreditOnly) {
+          paySortMs === billSortMs;
+        // Same clock instant as the anchor bill: do not blanket-treat every payment as "after" the bill.
+        // Rows with ledgerOrder strictly before the billing row are before this bill (e.g. same-day credit
+        // before Produce Bill) and must not shrink lastStmt−paidAfter or bypass the frozen panel. The
+        // exception is POS-vs-ledger reorder: real money with payLo < billLo still applies to post-bill
+        // balance (not deposit rows; not pure "give credit" with $0 amount due).
+        if (sameWallMs) {
+          if (
+            payLoKnown &&
+            payLoNum != null &&
+            Number.isFinite(billLo) &&
+            payLoNum < billLo
+          ) {
+            if (
+              !preBillCreditOnly &&
+              typeof isLedgerSecurityDepositAutoPay === 'function' &&
+              !isLedgerSecurityDepositAutoPay(p)
+            ) {
+              after = true;
+              tieBreak = 'same_ms_lo_resequence_counts_after_bill';
+            } else {
+              tieBreak = 'same_ms_ledger_before_bill_no_stmt_reduction';
+            }
+          } else {
             after = true;
-            tieBreak = 'same_ms_lo_resequence_counts_after_bill';
+            tieBreak = 'same_ms_payment_counts_after_bill';
           }
         }
         return {
@@ -4387,6 +4386,45 @@
     }
 
     /**
+     * Same clock instant as the anchor billing row, ledgerOrder strictly before that row: "give credit"
+     * rows (amount due ~$0, creditGiven > 0). They are not "after" the bill for frozen-panel bypass, but
+     * once real payments post-date the bill they still reduce the printed statement remainder (e.g. $10
+     * credit before April Produce Bill + $75 partial → opening $93.49, not $103.49).
+     */
+    function getSumPreAnchorGiveCreditTowardLastPrintedStatement(customer) {
+      if (!customer) return 0;
+      const lastBillRow =
+        typeof getAnchorBillingChargeHistoryRowForLastPrint === 'function'
+          ? getAnchorBillingChargeHistoryRowForLastPrint(customer)
+          : null;
+      if (!lastBillRow) return 0;
+      const billSortMs = getLedgerEntrySortMs(lastBillRow);
+      const billLo = getLedgerEntryOrder(lastBillRow);
+      if (billSortMs == null || isNaN(billSortMs) || !Number.isFinite(billLo)) return 0;
+      const hist = customer.paymentHistory || [];
+      let sum = 0;
+      for (let i = 0; i < hist.length; i++) {
+        const p = hist[i];
+        if (!p || p.source === 'testFreshStart') continue;
+        const pmLow = String(p.paymentMethod || '').toLowerCase();
+        if (pmLow.includes('fresh start')) continue;
+        const paySortMs = getLedgerEntrySortMs(p);
+        const payLoKnown =
+          typeof p.ledgerOrder === 'number' && Number.isFinite(Number(p.ledgerOrder));
+        const payLoNum = payLoKnown ? Number(p.ledgerOrder) : null;
+        if (paySortMs == null || isNaN(paySortMs) || paySortMs !== billSortMs) continue;
+        if (!payLoKnown || payLoNum == null || payLoNum >= billLo) continue;
+        const ad0 = parseFloat(p.amountDue || 0);
+        const cg0 = parseFloat(p.creditGiven || 0);
+        const preBillCreditOnly =
+          !isNaN(ad0) && ad0 <= 0.005 && !isNaN(cg0) && cg0 > 0.005;
+        if (!preBillCreditOnly) continue;
+        sum += Math.max(0, cg0);
+      }
+      return Math.round(sum * 100) / 100;
+    }
+
+    /**
      * Unpaid balance from the last printed bill (lastPrintedStatementTotalDue minus payments after that bill).
      * calculateCustomerTotal uses ledger pastDue when positive; this remainder is the prior bridge only while
      * rolled principal has not yet populated customer.pastDue (first bill / pre-roll views).
@@ -4485,13 +4523,29 @@
         }
       }
       const paidAfter = getSumPaymentAmountsAfterLastBillPrint(customer);
-      const out = Math.max(0, Math.round((lastStmt - paidAfter) * 100) / 100);
+      let preAnchorCredit =
+        paidAfter > 0.005
+          ? getSumPreAnchorGiveCreditTowardLastPrintedStatement(customer)
+          : 0;
+      const anchorStmt =
+        typeof getAnchorBillingChargeHistoryRowForLastPrint === 'function'
+          ? getAnchorBillingChargeHistoryRowForLastPrint(customer)
+          : null;
+      if (
+        anchorStmt &&
+        anchorStmt.creditAppliedOnBill != null &&
+        parseFloat(anchorStmt.creditAppliedOnBill) > 0.005
+      ) {
+        preAnchorCredit = 0;
+      }
+      const out = Math.max(0, Math.round((lastStmt - paidAfter - preAnchorCredit) * 100) / 100);
       if (billDiagCustomerMatch(customer)) {
         billDiag('getOutstandingLastStatementUnpaid:result', customer, {
           lastBillPrintDate: customer.lastBillPrintDate,
           lastBillPrintLedgerOrder: billLo,
           lastPrintedStatementTotalDue: lastStmt,
           paidAfter,
+          preAnchorGiveCreditTowardStatement: preAnchorCredit,
           outstanding: out,
           paymentHistoryLength: hist.length,
           paymentTrace
@@ -4725,6 +4779,37 @@
         });
       }
       return { pdfPreviousCharges: prev, pdfTotalAmount: sum };
+    }
+
+    /**
+     * Negative customer.pastDue = account credit before Produce Bill. Allocate it across PDF lines
+     * (previous charges, then late fee, then current due) so total_amount / current_due match what the
+     * customer owes after credit — same net as chargeHistory netBalanceAfterBill / ledger Balance After.
+     */
+    function applyAccountCreditForBillPdf(customer, pdfPreviousCharges, pdfLateFee, pdfCurrentDueDisplay) {
+      const out = {
+        pdfPreviousCharges: Math.max(0, Math.round((parseFloat(pdfPreviousCharges) || 0) * 100) / 100),
+        pdfLateFee: Math.max(0, Math.round((parseFloat(pdfLateFee) || 0) * 100) / 100),
+        pdfCurrentDueDisplay: Math.max(0, Math.round((parseFloat(pdfCurrentDueDisplay) || 0) * 100) / 100),
+        creditAppliedToLines: 0
+      };
+      if (!customer) return out;
+      const creditAvail = Math.round(Math.max(0, -parseFloat(customer.pastDue || 0)) * 100) / 100;
+      if (creditAvail <= 0.005) return out;
+      const cap = Math.round(
+        Math.min(creditAvail, out.pdfPreviousCharges + out.pdfLateFee + out.pdfCurrentDueDisplay) * 100
+      ) / 100;
+      let rem = cap;
+      const takeP = Math.min(rem, out.pdfPreviousCharges);
+      out.pdfPreviousCharges = Math.round((out.pdfPreviousCharges - takeP) * 100) / 100;
+      rem = Math.round((rem - takeP) * 100) / 100;
+      const takeLf = Math.min(rem, out.pdfLateFee);
+      out.pdfLateFee = Math.round((out.pdfLateFee - takeLf) * 100) / 100;
+      rem = Math.round((rem - takeLf) * 100) / 100;
+      const takeC = Math.min(rem, out.pdfCurrentDueDisplay);
+      out.pdfCurrentDueDisplay = Math.round((out.pdfCurrentDueDisplay - takeC) * 100) / 100;
+      out.creditAppliedToLines = Math.round((takeP + takeLf + takeC) * 100) / 100;
+      return out;
     }
 
     /** Persist PDF line items so Process Bill customer info matches the last generated bill (past due ≠ rolled pastDue+late lump). */
@@ -5012,7 +5097,14 @@
       const before = subtotalBeforePuc + pucSurchargeAmount + (lateFeeAmount || 0);
 
       if (Math.abs(aggregatePaid - splitSum) < 0.02) {
-        return Math.max(0, Math.round((before - aggregatePaid) * 100) / 100);
+        const net = Math.round((before - aggregatePaid) * 100) / 100;
+        // Security-deposit auto-apply (and similar) can inflate currentMonthPaid* to the full statement
+        // while `before` is only this calendar cycle — aggregate branch would clamp Current Due to $0 until reload.
+        if (aggregatePaid > before + 0.02 && net < -OWED.EPS) {
+          /* fall through to per-bucket remainders */
+        } else {
+          return Math.max(0, net);
+        }
       }
       const sewerRem = Math.max(0, adjustedServiceCost - paidSewer);
       const taxRem = Math.max(0, totalSurcharge - paidTax);
@@ -6568,7 +6660,10 @@
         const pastDueLineForPanel = getPanelPastDueLineDollars(customer, pastDue);
         const lateFeePanel = Math.max(0, lateFeeAmount || 0);
         const panelDraft = {
-          total: Math.max(0, total),
+          total:
+            credit > OWED.EPS && bal.combined < -OWED.EPS
+              ? Math.round(bal.combined * 100) / 100
+              : Math.max(0, total),
           pastDue: pastDueLineForPanel,
           lateFee: lateFeePanel,
           dueDateStr: '',
@@ -6581,6 +6676,39 @@
         applyOpenBalanceSnapshotCapToPanelAmounts(customer, panelDraft);
         reconcileProcessBillPanelTotalInvariants(customer, panelDraft);
         total = panelDraft.total;
+      }
+
+      // Match getProcessBillPanelAmounts frozen branch: Amount Breakdown / read-only totals use statement
+      // face + accrued auto-late, not full rolled ledger + next-cycle while the panel snapshot is frozen.
+      let returnPastDue = pastDue;
+      let returnTotal = total;
+      if (!skipPanelBalanceReconciliation) {
+        const fzs = customer.processBillPanelFrozenSnapshot;
+        if (fzs && typeof fzs.amountDue === 'number') {
+          const pafFrozen =
+            typeof getSumPaymentAmountsAfterLastBillPrint === 'function'
+              ? getSumPaymentAmountsAfterLastBillPrint(customer)
+              : 0;
+          if (pafFrozen <= OWED.EPS) {
+            const fTot = Math.max(0, parseFloat(fzs.amountDue) || 0);
+            const fLateSnap = Math.max(0, parseFloat(fzs.lateFee) || 0);
+            const liveL = Math.max(0, lateFeeAmount || 0);
+            const dispL = Math.round((fLateSnap + liveL) * 100) / 100;
+            const dispT = Math.max(0, Math.round((fTot - fLateSnap + dispL) * 100) / 100);
+            let applyFrozenFacing = true;
+            if (
+              typeof isCalendarPeriodAfterLastBillPrint === 'function' &&
+              !isCalendarPeriodAfterLastBillPrint(customer) &&
+              returnTotal + OWED.EPS < dispT
+            ) {
+              applyFrozenFacing = false;
+            }
+            if (applyFrozenFacing) {
+              returnTotal = dispT;
+              returnPastDue = Math.max(0, parseFloat(fzs.pastDue) || 0);
+            }
+          }
+        }
       }
 
       if (!silentDiag && billDiagCustomerMatch(customer)) {
@@ -6612,14 +6740,14 @@
           calendarAfterLastPrint: isCalendarPeriodAfterLastBillPrint(customer),
           stmtMatchTol: bal.stmtMatchTol,
           rawBalanceTotal: bal.total,
-          panelFinalTotal: total
+          panelFinalTotal: returnTotal
         });
       }
 
       return {
         baseServiceCost,
         adjustedServiceCost,
-        pastDue,
+        pastDue: returnPastDue,
         credit,
         lateFeeAmount,
         totalSurcharge,
@@ -6627,7 +6755,7 @@
         pucSurchargeAmount,
         currentDueBeforePayment,
         currentDue,
-        total
+        total: returnTotal
       };
     }
 
@@ -6798,9 +6926,13 @@
       const grossCurrentOwed = Math.round(
         (calc.subtotalBeforePuc + calc.pucSurchargeAmount + calc.lateFeeAmount) * 100
       ) / 100;
-      let unpaidCurrent = Math.max(0, parseFloat(calc.currentDue) || 0);
+      let unpaidCurrent =
+        options.unpaidCurrentForRoll != null && options.unpaidCurrentForRoll !== ''
+          ? Math.max(0, Math.round((parseFloat(options.unpaidCurrentForRoll) || 0) * 100) / 100)
+          : Math.max(0, parseFloat(calc.currentDue) || 0);
 
       if (
+        options.unpaidCurrentForRoll == null &&
         unpaidCurrent + 0.005 < grossCurrentOwed &&
         currentCycleReductionIsOnlyTestFreshStartPhantom(customer, grossCurrentOwed, unpaidCurrent)
       ) {
@@ -6893,7 +7025,14 @@
       const sewerChargeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.adjustedServiceCost) || 0) * 100) / 100;
       const taxDetailsForBillRow = buildTaxCodeDetailsForPdf(customer, calcBeforeRoll);
       const pdfCurForReconcile = getPdfCurrentCycleDueExcludingLateFromCalc(calcBeforeRoll);
-      const lateForBillRow = Math.round(Math.max(0, parseFloat(calcBeforeRoll.lateFeeAmount) || 0) * 100) / 100;
+      const lateGrossForBillRow = Math.round(Math.max(0, parseFloat(calcBeforeRoll.lateFeeAmount) || 0) * 100) / 100;
+      const paidLateAfterLastBillPrint =
+        typeof getLateFeePaidAfterCurrentBillLedgerOrder === 'function'
+          ? getLateFeePaidAfterCurrentBillLedgerOrder(customer)
+          : 0;
+      const lateForBillRow = Math.round(
+        Math.max(0, lateGrossForBillRow - paidLateAfterLastBillPrint) * 100
+      ) / 100;
       const reconBillRow = getPdfPreviousChargesReconciledToTotal(
         customer,
         calcBeforeRoll,
@@ -6904,7 +7043,7 @@
       const taxCodesOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.totalSurcharge) || 0) * 100) / 100;
       const pucSurchargeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.pucSurchargeAmount) || 0) * 100) / 100;
       const surchargesOnBill = Math.round((taxCodesOnBill + pucSurchargeOnBill) * 100) / 100;
-      const lateFeeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.lateFeeAmount) || 0) * 100) / 100;
+      const lateFeeOnBill = lateForBillRow;
       const columnSumBill = Math.round(
         Math.max(0, sewerChargeOnBill + pastDueOnBill + surchargesOnBill + lateFeeOnBill) * 100
       ) / 100;
@@ -6991,11 +7130,13 @@
       }
 
       // Then roll unpaid current into live customer pastDue/composition for post-bill state.
-      // Anchor lastPrintedStatementTotalDue to the bill row's gross column sum (currentDueOnBill), not
-      // currentDueNetAfterCredit: stmt-unpaid math is lastStmt − paymentsAfterPrint; using net understates
-      // lastStmt by creditAppliedOnBill and the next bill's pastDueOnBill drops by that same amount.
+      // Anchor lastPrintedStatementTotalDue to what the customer still owes after on-bill account credit
+      // (net); use gross column sum when no credit so stmt-unpaid / next-bill past-due columns stay aligned.
       applyBillProductionRollForward(customer, calcBeforeRoll, !!previousLastBillPrintDate, {
-        closedStatementTotalFromBill: currentDueOnBill
+        closedStatementTotalFromBill:
+          creditAppliedOnBill > 0.005 ? currentDueNetAfterCredit : currentDueOnBill,
+        unpaidCurrentForRoll:
+          creditAppliedOnBill > 0.005 ? currentDueNetAfterCredit : undefined
       });
       syncPastDueCompositionToPastDueField(customer);
 
@@ -7426,6 +7567,30 @@
 
         const anchorIsoForBill =
           customer.lateFeeAnchorPrintDate || customer.lastBillPrintDate || null;
+
+        // Reset the delinquency timer anchor to today so the 60-day clock restarts from this
+        // deposit event. Without this, the timer keeps counting from the original anchor and
+        // triggers a second deposit auto-apply on the very next billing cycle.
+        const newDueAfterDeposit = Math.round(Math.max(0, parseFloat(customer.pastDue || 0)) * 100) / 100;
+        if (newDueAfterDeposit <= 0.005) {
+          // Fully paid — clear the anchor entirely so getContinuousDelinquencyDays returns 0
+          delete customer.lateFeeAnchorPrintDate;
+          billDiag('maybeApplyDepositAt60Days:resetAnchor', customer, {
+            reason: 'deposit_paid_in_full',
+            continuous306090Before: continuous306090,
+            newDueAfterDeposit
+          });
+        } else {
+          // Partially paid — restart anchor from today so the next 60-day window begins now
+          customer.lateFeeAnchorPrintDate = today.toISOString();
+          billDiag('maybeApplyDepositAt60Days:resetAnchor', customer, {
+            reason: 'deposit_partial_pay_restart',
+            continuous306090Before: continuous306090,
+            newDueAfterDeposit,
+            newAnchor: customer.lateFeeAnchorPrintDate
+          });
+        }
+
         customer.pendingDepositBillExplanation = {
           triggerDateStr: depDateStr,
           anchorPrintDateIso: anchorIsoForBill,
@@ -7439,7 +7604,15 @@
         const allocLate = Math.round((parseFloat(customer.currentMonthPaidLateFee || 0) - beforeLate) * 100) / 100;
         const allocPastDue = Math.round((beforePastDue - Math.max(0, parseFloat(customer.pastDue || 0))) * 100) / 100;
 
-        const calcAfterDeposit = calculateCustomerTotal(customer);
+        // Hierarchy pass mutates currentMonthPaid* (POS-style buckets). Deposit dollars belong on paymentHistory /
+        // currentMonthPaymentHistory greens — not in those buckets, or getCurrentCycleDueWithPaymentConsistency
+        // subtracts the full payment from one cycle's `before` and zeros Amount Breakdown until a full reload.
+        customer.currentMonthPaidSewer = beforeSewer;
+        customer.currentMonthPaidTaxCodes = beforeTax;
+        customer.currentMonthPaidPuc = beforePuc;
+        customer.currentMonthPaidLateFee = beforeLate;
+        customer.currentMonthPaid = Math.round((beforeSewer + beforeTax + beforePuc + beforeLate) * 100) / 100;
+
         const depositPaymentNumber = customer.paymentHistory.length + 1;
         const depositBreakdown = mergeAppliedBreakdown({
           'Late fees': allocLate,
@@ -7478,7 +7651,7 @@
           taxCodesOnBill: allocTax,
           pucSurchargeOnBill: allocPuc,
           pastDueOnBill: allocPastDue,
-          newAmountDue: Math.round(Math.max(0, calcAfterDeposit.total) * 100) / 100,
+          newAmountDue: 0,
           paymentMethod: 'Security deposit (auto)',
           source: 'depositAutoApply',
           paymentNumber: depositPaymentNumber,
@@ -7496,21 +7669,37 @@
             allocationSummary: formatDepositWithdrawalAllocationSummary(depositBreakdown)
           }
         });
+        // Clear frozen / PDF line snapshots before recomputing totals so getPanelPastDueLineDollars and
+        // computeCustomerOwedBalanceTotal do not double-count statement past vs cleared ledger (deposit row
+        // would otherwise get newAmountDue ≈ full statement while Amount Breakdown already shows ~$183).
+        clearProcessBillPanelDisplayData(customer);
+        const calcAfterDeposit = calculateCustomerTotal(customer);
+        const depositRowJustPushed = customer.paymentHistory[customer.paymentHistory.length - 1];
+        const depositRemainderOwed = Math.round(Math.max(0, trueOwed - applied) * 100) / 100;
+        const liveTotalAfterDeposit = Math.round(Math.max(0, calcAfterDeposit.total) * 100) / 100;
+        if (depositRowJustPushed && depositRowJustPushed.source === 'depositAutoApply') {
+          depositRowJustPushed.newAmountDue =
+            depositRemainderOwed <= 0.005 ? 0 : liveTotalAfterDeposit;
+        }
         billDiag('maybeApplyDepositAt60Days:applied', customer, {
           continuous306090Days: continuous306090,
           depositThresholdDays: getDepositWithdrawDelinquencyDays(),
           depositBefore: deposit,
           trueOwed,
           applied,
+          depositRemainderOwed,
           depositAfter: customer.deposit,
           allocPastDue,
           allocLate,
           allocSewer,
-          newAmountDueAfter: Math.round(Math.max(0, calcAfterDeposit.total) * 100) / 100,
+          newAmountDueStored:
+            depositRowJustPushed && depositRowJustPushed.source === 'depositAutoApply'
+              ? depositRowJustPushed.newAmountDue
+              : null,
+          liveTotalAfterDeposit,
           lateFeeInCalcSnapshot: calcBeforeDeposit.lateFeeAmount,
           lateFeeUsedForHierarchy: lateFeeAmt
         });
-        clearProcessBillPanelDisplayData(customer);
 
         // Persist asynchronously; don't block UI
         if (typeof saveSingleCustomerToFirestore === 'function') {
@@ -7721,6 +7910,35 @@
       return rows;
     }
 
+    /** Last non–fresh-start payment row (deposit auto-apply, check, etc.). */
+    function getLastNonFreshStartPayment(customer) {
+      if (!customer || !Array.isArray(customer.paymentHistory)) return null;
+      const payHist = customer.paymentHistory.filter(
+        (p) =>
+          p &&
+          p.source !== 'testFreshStart' &&
+          !String(p.paymentMethod || '').toLowerCase().includes('fresh start')
+      );
+      if (!payHist.length) return null;
+      payHist.sort((a, b) => {
+        const ma = getLedgerEntrySortMs(a);
+        const mb = getLedgerEntrySortMs(b);
+        if (ma !== mb) return ma - mb;
+        return getLedgerEntryOrder(a) - getLedgerEntryOrder(b);
+      });
+      return payHist[payHist.length - 1];
+    }
+
+    /** Security deposit auto-apply that fully closed the balance on that payment row (amountDue − amountPaid ≈ 0). */
+    function lastPaymentIsFullSecurityDepositAutoApply(customer) {
+      const last = getLastNonFreshStartPayment(customer);
+      if (!last || last.source !== 'depositAutoApply') return false;
+      const ad = parseFloat(last.amountDue);
+      const ap = parseFloat(last.amountPaid);
+      if (isNaN(ad) || isNaN(ap) || !(ap > 0.005)) return false;
+      return Math.abs(Math.round((ad - ap) * 100) / 100) < 0.005;
+    }
+
     /**
      * Open balance after the last real payment until the next **Produce Bill** `billingCharge` row.
      * Uses **amountDue − amountPaid** when both are numeric (same priority as the ledger table's
@@ -7757,7 +7975,9 @@
       const ad = parseFloat(lastPay.amountDue);
       const ap = parseFloat(lastPay.amountPaid);
       if (!isNaN(ad) && !isNaN(ap)) {
-        return Math.max(0, Math.round((ad - ap) * 100) / 100);
+        const signed = Math.round((ad - ap) * 100) / 100;
+        if (signed < -OWED.EPS) return signed;
+        return Math.max(0, signed);
       }
       const ndRaw = lastPay.newAmountDue;
       if (ndRaw === undefined || ndRaw === null || ndRaw === '') return null;
@@ -7771,16 +7991,31 @@
       if (!out || !customer) return out;
       const snap = getAuthoritativeOpenBalanceAfterLastPaymentIfStillApplicable(customer);
       if (snap == null) return out;
+      // Check/cash overpayment on $0 balance: ledger "Balance After" is negative (account credit).
+      if (snap < -OWED.EPS) {
+        out.total = snap;
+        out.pastDue = 0;
+        out.lateFee = 0;
+        billDiag('applyOpenBalanceSnapshotCapToPanelAmounts:account_credit_snap', customer, { snap });
+        return out;
+      }
       const curTotal = Math.max(0, parseFloat(out.total) || 0);
       if (!(snap + OWED.EPS < curTotal)) return out;
       // Last payment row shows $0 "balance after" while no billingCharge exists after that pay yet — new
-      // cycle charges still accrue. Capping curTotal to snap=0 wipes Amount Breakdown + PDF total_amount.
+      // cycle charges still accrue. Exception: full security-deposit auto-apply closed the statement;
+      // Amount Breakdown should stay $0 until the next Produce Bill (see expected master test).
       if (snap <= OWED.EPS && curTotal > OWED.EPS) {
-        logBillPanelTrace('applyOpenBalanceSnapshotCapToPanelAmounts:skip_stale_zero_snap', customer, {
+        if (!lastPaymentIsFullSecurityDepositAutoApply(customer)) {
+          logBillPanelTrace('applyOpenBalanceSnapshotCapToPanelAmounts:skip_stale_zero_snap', customer, {
+            snap,
+            curTotal
+          });
+          return out;
+        }
+        billDiag('applyOpenBalanceSnapshotCapToPanelAmounts:cap_after_full_deposit', customer, {
           snap,
-          curTotal
+          curTotalBeforeCap: curTotal
         });
-        return out;
       }
       const paidLate = parseFloat(customer.currentMonthPaidLateFee || 0) || 0;
       const lateRem = Math.max(0, Math.max(0, parseFloat(out.lateFee) || 0) - paidLate);
@@ -7818,6 +8053,39 @@
      */
     function reconcileProcessBillPanelTotalInvariants(customer, out) {
       if (!out || !customer) return out;
+      // Frozen Process Bill panel = last printed statement face (including on-bill account credit). The
+      // live "past + current cycle + late" floor would overshoot that net and undo credit (e.g. 168.49 → 178.49).
+      if (out.fromFrozen === true) return out;
+      const ledgerPdRaw = parseFloat(customer.pastDue);
+      if (!isNaN(ledgerPdRaw) && ledgerPdRaw < -OWED.EPS) {
+        const acctCredit = Math.round(Math.abs(ledgerPdRaw) * 100) / 100;
+        out.total = Math.round(-acctCredit * 100) / 100;
+        out.pastDue = 0;
+        out.lateFee = 0;
+        billDiag('reconcileProcessBillPanelTotalInvariants:account_credit_only', customer, {
+          ledgerPastDue: ledgerPdRaw,
+          panelTotal: out.total
+        });
+        return out;
+      }
+      // Full security-deposit auto-apply closed the open balance; no billingCharge row exists after that
+      // payment yet — do not floor total back up to unbilled cycle accruals (master test / Amount Breakdown $0).
+      if (
+        lastPaymentIsFullSecurityDepositAutoApply(customer) &&
+        getAuthoritativeOpenBalanceAfterLastPaymentIfStillApplicable(customer) != null &&
+        getAuthoritativeOpenBalanceAfterLastPaymentIfStillApplicable(customer) <= OWED.EPS
+      ) {
+        const prev = Math.max(0, parseFloat(out.total) || 0);
+        if (prev <= OWED.EPS + 0.02) {
+          out.total = 0;
+          out.pastDue = 0;
+          out.lateFee = 0;
+          billDiag('reconcileProcessBillPanelTotalInvariants:hold_zero_after_full_deposit', customer, {
+            openBalanceSnap: 0
+          });
+          return out;
+        }
+      }
       const parts = getSubtotalBeforePucAndPucSurcharge(customer);
       const cycleExclAutoLate = Math.max(
         0,
@@ -8300,8 +8568,12 @@
     function billPdfDataRecordToFormData(pdfData) {
       const formData = new FormData();
       if (!pdfData || typeof pdfData !== 'object') return formData;
-      Object.keys(pdfData).forEach((key) => {
-        const val = pdfData[key];
+      const fields = Object.assign({}, pdfData);
+      if (fields.credit == null || String(fields.credit).trim() === '') {
+        fields.credit = '$0.00';
+      }
+      Object.keys(fields).forEach((key) => {
+        const val = fields[key];
         if (val === undefined || val === null) return;
         formData.append(key, String(val));
       });
@@ -8556,7 +8828,12 @@
         formData.append('days_in_cycle', String(daysInCycle));
         formData.append('print_date', formatDateMMDDYYYY(now));
         const pdfSewerChargeAmount = Math.max(0, Math.round(adjustedServiceCost * 100) / 100);
-        const pdfLateFee = Math.max(0, Math.round((lateFeeAmount || 0) * 100) / 100);
+        let pdfLateFee = Math.max(0, Math.round((lateFeeAmount || 0) * 100) / 100);
+        const paidLateForPdf =
+          typeof getLateFeePaidAfterCurrentBillLedgerOrder === 'function'
+            ? getLateFeePaidAfterCurrentBillLedgerOrder(customer)
+            : 0;
+        pdfLateFee = Math.max(0, Math.round((pdfLateFee - paidLateForPdf) * 100) / 100);
         const dspForLatePdf =
           typeof getDaysSinceLastBillPrint === 'function' ? getDaysSinceLastBillPrint(customer) : null;
         logBillPanelTrace('produceBill:lateFeePdf', customer, {
@@ -8579,7 +8856,7 @@
           pdfCurrentDueForReconcile,
           pdfLateFee
         );
-        const pdfPreviousCharges = pdfLineTotals.pdfPreviousCharges;
+        let pdfPreviousCharges = pdfLineTotals.pdfPreviousCharges;
         let pdfTotalAmount = pdfLineTotals.pdfTotalAmount;
         if (Math.abs(pdfTotalAmount - calc.total) > OWED.EPS) {
           if (calc.total < OWED.EPS && pdfTotalAmount > OWED.EPS) {
@@ -8610,9 +8887,25 @@
           }
         }
 
+        const pdfCurrentDueGrossForForm = pdfCurrentDueDisplay;
+        const pdfCredAlloc = applyAccountCreditForBillPdf(
+          customer,
+          pdfPreviousCharges,
+          pdfLateFee,
+          pdfCurrentDueDisplay
+        );
+        pdfPreviousCharges = pdfCredAlloc.pdfPreviousCharges;
+        pdfLateFee = pdfCredAlloc.pdfLateFee;
+        const pdfCurrentDueForForm = pdfCurrentDueGrossForForm;
+        if (pdfCredAlloc.creditAppliedToLines > 0.005) {
+          pdfTotalAmount = Math.round(
+            (pdfPreviousCharges + pdfLateFee + pdfCredAlloc.pdfCurrentDueDisplay) * 100
+          ) / 100;
+        }
+
         const naiveFirstFourPlusPucAgain = Math.max(
           0,
-          Math.round((pdfCurrentDueDisplay + pucSurchargeAmountRecalc) * 100) / 100
+          Math.round((pdfCurrentDueForForm + pucSurchargeAmountRecalc) * 100) / 100
         );
         logBillPanelTrace('produceBill:pdfReconcileCur', customer, {
           taxCodeDetailsLen: taxCodeDetails.length,
@@ -8629,7 +8922,7 @@
         billDiag('produceBill:pdfPayload', customer, {
           calcTotal: calc.total,
           pdfSewerChargeAmount,
-          pdfCurrentDueDisplay,
+          pdfCurrentDueDisplay: pdfCurrentDueForForm,
           pdfCurrentDueForReconcile,
           pdfPreviousCharges,
           pdfLateFee,
@@ -8641,32 +8934,48 @@
         // New PDF field mapping
         formData.append('sewer_charge', 'Sewer Charge');
         formData.append('sewer_charge_amount', `$${pdfSewerChargeAmount.toFixed(2)}`);
-        formData.append('current_due', `$${pdfCurrentDueDisplay.toFixed(2)}`);
+        formData.append('current_due', `$${pdfCurrentDueForForm.toFixed(2)}`);
         formData.append('previous_charges', `$${pdfPreviousCharges.toFixed(2)}`);
         formData.append('late_fee', `$${pdfLateFee.toFixed(2)}`);
+        const pdfCreditApplied = Math.max(
+          0,
+          Math.round((pdfCredAlloc.creditAppliedToLines || 0) * 100) / 100
+        );
+        formData.append('credit', `$${pdfCreditApplied.toFixed(2)}`);
 
-        const pdfSummaryLineSum = Math.round(
-          (pdfCurrentDueDisplay + pdfPreviousCharges + pdfLateFee) * 100
+        const pdfSummaryLineSumGross = Math.round(
+          (pdfCurrentDueForForm + pdfPreviousCharges + pdfLateFee) * 100
         ) / 100;
+        const pdfSummaryLineSum =
+          pdfCredAlloc.creditAppliedToLines > 0.005
+            ? Math.round(
+                (pdfPreviousCharges + pdfLateFee + pdfCredAlloc.pdfCurrentDueDisplay) * 100
+              ) / 100
+            : pdfSummaryLineSumGross;
         const calcRounded = Math.max(0, Math.round((parseFloat(calc.total) || 0) * 100) / 100);
         const pdfReconcileRounded = Math.max(0, Math.round(pdfTotalAmount * 100) / 100);
         let unifiedTotalDueForBill = calcRounded;
-        if (calcRounded < OWED.EPS && pdfReconcileRounded > OWED.EPS) {
-          unifiedTotalDueForBill = Math.max(pdfReconcileRounded, pdfSummaryLineSum);
+        if (pdfCredAlloc.creditAppliedToLines > 0.005) {
+          unifiedTotalDueForBill = pdfReconcileRounded;
+        } else if (calcRounded < OWED.EPS && pdfReconcileRounded > OWED.EPS) {
+          unifiedTotalDueForBill = Math.max(pdfReconcileRounded, pdfSummaryLineSumGross);
         } else {
           unifiedTotalDueForBill = calcRounded;
         }
-        if (pdfSummaryLineSum > unifiedTotalDueForBill + OWED.EPS) {
+        if (
+          pdfCredAlloc.creditAppliedToLines <= 0.005 &&
+          pdfSummaryLineSumGross > unifiedTotalDueForBill + OWED.EPS
+        ) {
           logBillPanelTrace('produceBill:total_amount_lifted_to_pdf_summary_lines', customer, {
             unifiedBeforeLift: unifiedTotalDueForBill,
             pdfSummaryLineSum,
             calcRounded,
             pdfReconcileRounded,
-            pdfCurrentDueDisplay,
+            pdfCurrentDueDisplay: pdfCurrentDueForForm,
             pdfPreviousCharges,
             pdfLateFee
           });
-          unifiedTotalDueForBill = pdfSummaryLineSum;
+          unifiedTotalDueForBill = pdfSummaryLineSumGross;
         }
 
         const pdfLineSumCheck = pdfSummaryLineSum;
@@ -8677,7 +8986,7 @@
               customerName: customer.name,
               message:
                 'current_due + previous_charges + late_fee ≠ total_amount after unified pick; check reconcile vs summary lines',
-              currentDueField: pdfCurrentDueDisplay,
+              currentDueField: pdfCurrentDueForForm,
               previousCharges: pdfPreviousCharges,
               lateFee: pdfLateFee,
               lineSum: pdfLineSumCheck,
@@ -9023,9 +9332,17 @@
               }
             }
 
-            const poNum = Math.max(0, Math.round((parseFloat(pdfOutstanding) || 0) * 100) / 100);
-            const lfNum = Math.max(0, Math.round((parseFloat(lateFeeAmount) || 0) * 100) / 100);
-            const pdfSummaryLineSum = Math.round((pdfCurrentDueDisplay + poNum + lfNum) * 100) / 100;
+            let poNum = Math.max(0, Math.round((parseFloat(pdfOutstanding) || 0) * 100) / 100);
+            let lfNum = Math.max(0, Math.round((parseFloat(lateFeeAmount) || 0) * 100) / 100);
+            const pdfCredBatch = applyAccountCreditForBillPdf(customer, poNum, lfNum, pdfCurrentDueDisplay);
+            poNum = pdfCredBatch.pdfPreviousCharges;
+            lfNum = pdfCredBatch.pdfLateFee;
+            const pdfCurFormBatch = pdfCredBatch.pdfCurrentDueDisplay;
+            if (pdfCredBatch.creditAppliedToLines > 0.005) {
+              pdfTotalNum = Math.round((poNum + lfNum + pdfCurFormBatch) * 100) / 100;
+            }
+
+            const pdfSummaryLineSum = Math.round((pdfCurFormBatch + poNum + lfNum) * 100) / 100;
             const calcRoundedBatch = Math.max(0, Math.round(totalAmount * 100) / 100);
             const pdfReconcileBatch = Math.max(0, Math.round(pdfTotalNum * 100) / 100);
             let unifiedTotalDueForBill = calcRoundedBatch;
@@ -9041,7 +9358,7 @@
                 pdfSummaryLineSum,
                 calcRoundedBatch,
                 pdfReconcileBatch,
-                pdfCurrentDueDisplay,
+                pdfCurrentDueDisplay: pdfCurFormBatch,
                 pdfOutstanding: poNum,
                 lateFeeAmount: lfNum
               });
@@ -9051,7 +9368,7 @@
             billDiag('produceBillingCycle:pdfPayload', customer, {
               cycleNumber,
               calcTotal: totalAmount,
-              pdfCurrentDueDisplay,
+              pdfCurrentDueDisplay: pdfCurFormBatch,
               pdfCurrentDueForReconcile,
               pdfOutstanding,
               lateFeeAmount,
@@ -9089,9 +9406,10 @@
                 print_date: formatDateMMDDYYYY(now),
                 sewer_charge: 'Sewer Charge',
                 sewer_charge_amount: `$${Math.max(0, adjustedServiceCost).toFixed(2)}`,
-                current_due: `$${pdfCurrentDueDisplay.toFixed(2)}`,
-                previous_charges: `$${Math.max(0, pdfOutstanding).toFixed(2)}`,
-                late_fee: `$${Math.max(0, lateFeeAmount).toFixed(2)}`,
+                current_due: `$${pdfCurFormBatch.toFixed(2)}`,
+                previous_charges: `$${poNum.toFixed(2)}`,
+                late_fee: `$${lfNum.toFixed(2)}`,
+                credit: `$${Math.max(0, Math.round((pdfCredBatch.creditAppliedToLines || 0) * 100) / 100).toFixed(2)}`,
                 total_amount: `$${unifiedTotalDueForBill.toFixed(2)}`,
                 due_date: dueDateStr,
                 deposit_explaination: depositExplainForSnapshot,
@@ -9115,6 +9433,7 @@
             formData.append('current_due', customerSnapshot.pdfData.current_due || '$0.00');
             formData.append('previous_charges', customerSnapshot.pdfData.previous_charges);
             formData.append('late_fee', customerSnapshot.pdfData.late_fee || '$0.00');
+            formData.append('credit', customerSnapshot.pdfData.credit || '$0.00');
             formData.append('total_amount', customerSnapshot.pdfData.total_amount);
             formData.append('due_date', customerSnapshot.pdfData.due_date);
             formData.append(
@@ -9760,14 +10079,21 @@
 
         const paymentsApplied = [];
 
-        let remainingPayment = applyCustomerPaymentByHierarchy(
-          customer,
-          paymentAmount,
-          calcForHierarchy,
-          formattedDate,
-          paymentsApplied,
-          false
-        );
+        // $0 balance (e.g. after full security deposit): do not allocate check/cash into accrual
+        // buckets (late/current) — entire tender becomes account credit when "Give credit" is selected.
+        let remainingPayment;
+        if (totalOwedBeforePayment <= 0.005) {
+          remainingPayment = Math.round(Math.max(0, paymentAmount) * 100) / 100;
+        } else {
+          remainingPayment = applyCustomerPaymentByHierarchy(
+            customer,
+            paymentAmount,
+            calcForHierarchy,
+            formattedDate,
+            paymentsApplied,
+            false
+          );
+        }
 
         // Calculate credit after payment hierarchy is applied
         // Credit is the actual overpayment: checkReceived - paymentAmount (when credit is selected)
@@ -9825,6 +10151,10 @@
         if (typeof syncLedgerOrderCounterFromHistory === 'function') {
           syncLedgerOrderCounterFromHistory(customer);
         }
+        const signedBalanceAfterPayment =
+          totalOwedBeforePayment <= 0.005 && totalCreditGiven > 0.005
+            ? Math.round((totalOwedBeforePayment - totalCreditGiven) * 100) / 100
+            : Math.round((parseFloat(calcAfterPayment.total) || 0) * 100) / 100;
         // Add to payment history (newAmountDue matches Amount Breakdown total after this event)
         const paymentRecord = {
           date: formattedDate,
@@ -9835,7 +10165,10 @@
           creditGiven: totalCreditGiven > 0 ? totalCreditGiven : null,
           paymentMethod: paymentType,
           lateFeeAmount: Math.round(lateFeeBeforePayment * 100) / 100,
-          newAmountDue: Math.round(Math.max(0, calcAfterPayment.total) * 100) / 100,
+          newAmountDue:
+            signedBalanceAfterPayment < -0.005
+              ? signedBalanceAfterPayment
+              : Math.round(Math.max(0, signedBalanceAfterPayment) * 100) / 100,
           paymentNumber: globalPaymentNumber,
           appliedBreakdown: buildAppliedBreakdownFromPaymentsApplied(paymentsApplied)
         };
@@ -22845,35 +23178,7 @@
         pastLineFooter > OWED.ZERO &&
         cycleExclAutoLateBreakdown > OWED.ZERO &&
         Math.abs(pastLineFooter - cycleExclAutoLateBreakdown) <= OWED.PANEL_MIRROR;
-      let footerCycleDueDisplay = cycleExclAutoLateBreakdown;
-      if (rolledPastEqualsCycleFooter) {
-        footerCycleDueDisplay = Math.max(
-          0,
-          Math.round(
-            (Math.max(0, panel.total) - pastLineFooter - lateFeeRemainingFooter) * 100
-          ) / 100
-        );
-      }
-      if (rolledPastEqualsCycleFooter) {
-        if (typeof window !== 'undefined' && window.__BILL_DIAG_VERBOSE_PANEL === true && billDiagCustomerMatch(customer)) {
-          try {
-            console.warn('[AmountBreakdownFooter]', {
-              customerId: customer.id,
-              customerName: customer.name,
-              accountNumber: customer.accountNumber,
-              message:
-                'First-bill mirror: PDF past line matches cycle subtotal; footer Current Due is residual so lines sum to Total Due',
-              panelTotal: panel.total,
-              pastLineFooter,
-              rawCycleExclLate: cycleExclAutoLateBreakdown,
-              lateRemaining: lateFeeRemainingFooter,
-              footerCycleDueDisplay
-            });
-          } catch (e) {
-            /* ignore */
-          }
-        }
-      }
+      // footerCycleDueDisplay is set after sewer + tax remaining lines (Current Due = sewer due + charge codes due).
 
       // Check if customer has actually paid their bill in full
       // Show "paid" message if Total Due = $0.00 AND they have made payments
@@ -23189,6 +23494,35 @@
             `;
             sewerDetailsEl.appendChild(r);
           });
+        }
+      }
+
+      // Current Due = sewer due + charge codes due (same numbers as the line items above).
+      let footerCycleDueDisplay = Math.round((sewerRemainingDisplay + taxCodesRemainingDisplay) * 100) / 100;
+      if (rolledPastEqualsCycleFooter && !forceZeroPrimaryLines) {
+        footerCycleDueDisplay = Math.max(
+          0,
+          Math.round(
+            (Math.max(0, panel.total) - pastLineFooter - lateFeeRemainingFooter) * 100
+          ) / 100
+        );
+        if (typeof window !== 'undefined' && window.__BILL_DIAG_VERBOSE_PANEL === true && billDiagCustomerMatch(customer)) {
+          try {
+            console.warn('[AmountBreakdownFooter]', {
+              customerId: customer.id,
+              customerName: customer.name,
+              accountNumber: customer.accountNumber,
+              message:
+                'First-bill mirror: PDF past line matches cycle subtotal; footer Current Due is residual so lines sum to Total Due',
+              panelTotal: panel.total,
+              pastLineFooter,
+              sewerPlusTaxRemaining: Math.round((sewerRemainingDisplay + taxCodesRemainingDisplay) * 100) / 100,
+              lateRemaining: lateFeeRemainingFooter,
+              footerCycleDueDisplay
+            });
+          } catch (e) {
+            /* ignore */
+          }
         }
       }
 
@@ -25325,6 +25659,7 @@
       const n = typeof val === 'number' ? val : parseFloat(val);
       if (isNaN(n)) return '—';
       if (n + 0.005 < 0) return `$${n.toFixed(2)} (credit)`;
+      if (Math.abs(n) < 0.005) return '$0';
       return `$${Math.max(0, n).toFixed(2)}`;
     }
 
@@ -25365,12 +25700,24 @@
         if (!paymentEntry) return null;
         const ad = parseFloat(paymentEntry.amountDue);
         const ap = parseFloat(paymentEntry.amountPaid);
+        const ndRaw = paymentEntry.newAmountDue;
+        const ndParsed =
+          ndRaw != null && ndRaw !== '' && !isNaN(parseFloat(ndRaw))
+            ? Math.round(Math.max(0, parseFloat(ndRaw)) * 100) / 100
+            : null;
         if (!isNaN(ad) && !isNaN(ap)) {
-          return Math.round((ad - ap) * 100) / 100;
+          const remainder = Math.round((ad - ap) * 100) / 100;
+          const pm = String(paymentEntry.paymentMethod || '').toLowerCase();
+          const isDepositAuto =
+            paymentEntry.source === 'depositAutoApply' ||
+            (pm.includes('security deposit') && pm.includes('auto'));
+          if (isDepositAuto && Math.abs(remainder) < 0.005) {
+            return Math.max(0, remainder);
+          }
+          return remainder;
         }
-        const nd = paymentEntry.newAmountDue;
-        if (nd != null && !isNaN(parseFloat(nd))) {
-          return Math.round(Math.max(0, parseFloat(nd)) * 100) / 100;
+        if (ndParsed != null && !isNaN(ndParsed)) {
+          return ndParsed;
         }
         return null;
       }
@@ -25514,7 +25861,11 @@
           combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
         } else {
           const priorBill = getMostRecentBillingChargeBeforePayment(customer, p);
-          if (priorBill) {
+          // Deposit auto rows record the real hierarchy split on the payment; the prior bill is the statement
+          // face and can under-state what the deposit actually applied when trueOwed includes accruals / late
+          // not on that printed row — then column sums would not match Amount Paid (e.g. $183.49 vs $201.98).
+          // Check/cash on a $0 balance (credit-only payment): show zero bill columns, not the prior statement face.
+          if (priorBill && !isLedgerSecurityDepositAutoPay(p) && amountDue > 0.005) {
             sewer = Math.round(Math.max(0, parseFloat(priorBill.sewerChargeOnBill || 0)) * 100) / 100;
             pastDue = Math.round(Math.max(0, parseFloat(priorBill.pastDueOnBill || 0)) * 100) / 100;
             const sp = ledgerTaxCodesAndPucFromEntry(priorBill);
@@ -25522,9 +25873,13 @@
             pucAmt = sp.puc;
             combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
             lateFee = Math.round(Math.max(0, parseFloat(priorBill.lateFeeAmount || 0)) * 100) / 100;
-            if (isLedgerSecurityDepositAutoPay(p)) {
-              lateFee = Math.max(lateFee, lateFeeFromSnapshot);
-            }
+          } else if (priorBill && !isLedgerSecurityDepositAutoPay(p) && amountDue <= 0.005) {
+            sewer = 0;
+            pastDue = 0;
+            taxCodesAmt = 0;
+            pucAmt = 0;
+            combinedSurcharges = 0;
+            lateFee = 0;
           } else {
             const br = computePaymentAppliedBreakdown(p, customer, i);
             const brSum = getCanonicalHierarchyLabels().reduce((s, k) => s + (br[k] || 0), 0);
@@ -25576,13 +25931,18 @@
         const subtype =
           p.paymentMethod ||
           (isLedgerSecurityDepositAutoPay(p) ? 'Security deposit (auto)' : 'Payment');
-        const creditAmt = Math.round(Math.max(0, parseFloat(p.creditGiven || 0)) * 100) / 100;
+        const creditAmt =
+          amountDue > 0.005
+            ? Math.round(Math.max(0, parseFloat(p.creditGiven || 0)) * 100) / 100
+            : 0;
         let balanceAfterNum = resolvedNewDue[i];
         const priorBillForBal = getMostRecentBillingChargeBeforePayment(customer, p);
         if (
           priorBillForBal &&
           priorBillForBal.netBalanceAfterBill != null &&
-          !isNaN(parseFloat(priorBillForBal.netBalanceAfterBill))
+          !isNaN(parseFloat(priorBillForBal.netBalanceAfterBill)) &&
+          !isLedgerSecurityDepositAutoPay(p) &&
+          amountDue > 0.005
         ) {
           const stmtNet = Math.round(parseFloat(priorBillForBal.netBalanceAfterBill) * 100) / 100;
           let sumPaidAfterBillBeforeThis = 0;
@@ -25868,7 +26228,10 @@
               </div>`
             : `$${r.lateFee.toFixed(2)}`;
           const credNum = typeof r.credit === 'number' && !isNaN(r.credit) ? r.credit : 0;
-          const creditCell = `$${credNum.toFixed(2)}`;
+          const creditCell =
+            credNum > 0.005 && Math.abs(credNum - Math.round(credNum)) < 0.005
+              ? '$' + Math.round(credNum)
+              : `$${credNum.toFixed(2)}`;
           htmlRows += `
             <tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">
               <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.dateTime}</td>
@@ -27182,14 +27545,15 @@
           const t = (spans[i].textContent || '').trim();
           if (t && /^\$[\d,.-]+/.test(t)) money.push(t);
         }
-        if (money.length === 1) return money[0];
+        if (money.length === 1) return money[0].replace(/^\$0\.00$/, '$0');
         if (money.length > 1) return money.join(' + ');
         return String(cell.textContent || '')
           .replace(/\bPast Due Details\b/gi, '')
           .replace(/\bLate Fee Details\b/gi, '')
           .replace(/\bView Payment Details\b/gi, '')
           .replace(/\s+/g, ' ')
-          .trim();
+          .trim()
+          .replace(/^\$0\.00$/, '$0');
       }
 
       /**
@@ -27272,28 +27636,163 @@
         return developTestExtractLedgerTableExports(customer).plain;
       }
 
+      /** Latest archived bill PDF: form field map + archive meta (newest first in billPdfSnapshots). */
+      function developTestLatestPdfBillArchive(customer) {
+        const arr = customer && Array.isArray(customer.billPdfSnapshots) ? customer.billPdfSnapshots : [];
+        if (!arr.length) return null;
+        const e = arr[0];
+        if (!e || !e.pdfData || typeof e.pdfData !== 'object') return null;
+        let fields;
+        try {
+          fields = JSON.parse(JSON.stringify(e.pdfData));
+        } catch (err) {
+          fields = e.pdfData;
+        }
+        return {
+          savedAtIso: e.savedAtIso || null,
+          source: e.source || null,
+          cycleNumber: e.cycleNumber != null ? e.cycleNumber : null,
+          fields: fields
+        };
+      }
+
+      function developTestFrozenPanelSnapshotSummary(customer) {
+        const fz = customer && customer.processBillPanelFrozenSnapshot;
+        if (!fz || typeof fz !== 'object') return null;
+        return {
+          amountDue: fz.amountDue,
+          pastDue: fz.pastDue,
+          lateFee: fz.lateFee,
+          dueDateStr: fz.dueDateStr,
+          statusClass: fz.statusClass,
+          statusLabel: fz.statusLabel
+        };
+      }
+
+      /**
+       * When the archived PDF is still the last Produce Bill but the panel has moved on (e.g. date walk
+       * with $0 balance), omit full `fields` so exports do not imply a false match vs processBillPanel.total.
+       */
+      function developTestPdfBillArchiveAlignedWithPanel(panel, archive) {
+        if (!archive || !archive.fields) return archive;
+        if (!panel || panel.error || typeof panel.total !== 'number') return archive;
+        const ta = archive.fields.total_amount;
+        if (ta == null || ta === '') return archive;
+        const pdfn = parseFloat(String(ta).replace(/[^0-9.-]/g, ''));
+        if (isNaN(pdfn)) return archive;
+        if (Math.abs(pdfn - panel.total) <= 0.05) return archive;
+        return {
+          omittedBecauseArchivedPdfDoesNotMatchPanel: true,
+          processBillPanelTotalAtStep: panel.total,
+          archivedPdfTotalAmount: ta,
+          savedAtIso: archive.savedAtIso || null,
+          source: archive.source || null,
+          cycleNumber: archive.cycleNumber != null ? archive.cycleNumber : null
+        };
+      }
+
+      /**
+       * When the anchor billing row has netBalanceAfterBill (post–on-bill credit), flag if Process Bill /
+       * read-only total still shows the gross face so the mismatch cannot hide in exports.
+       */
+      function developTestLedgerAnchorNetVsPanel(customer, panel, calc) {
+        if (!customer || !panel || panel.error || typeof panel.total !== 'number') return null;
+        let br = null;
+        try {
+          br =
+            typeof getAnchorBillingChargeHistoryRowForLastPrint === 'function'
+              ? getAnchorBillingChargeHistoryRowForLastPrint(customer)
+              : null;
+        } catch (e) {
+          return null;
+        }
+        if (!br || br.netBalanceAfterBill == null || br.netBalanceAfterBill === '') return null;
+        const nb = parseFloat(br.netBalanceAfterBill);
+        if (isNaN(nb)) return null;
+        const ct = calc && typeof calc.total === 'number' && !isNaN(calc.total) ? calc.total : null;
+        if (Math.abs(nb - panel.total) <= 0.05 && (ct == null || Math.abs(nb - ct) <= 0.05)) return null;
+        // Frozen panel + read-only can both track new late after the anchor print while netBalanceAfterBill
+        // is still the prior statement row — not a gross-vs-net slip.
+        if (ct != null && Math.abs(panel.total - ct) <= 0.05) return null;
+        // On-bill credit / net statement: flag when panel and read-only disagree while one side matches ledger.
+        if (
+          ct != null &&
+          Math.abs(panel.total - ct) > 0.05 &&
+          (Math.abs(nb - ct) <= 0.05 || Math.abs(nb - panel.total) <= 0.05)
+        ) {
+          return {
+            ledgerNetBalanceAfterBill: nb,
+            processBillPanelTotal: panel.total,
+            readOnlyCalcTotal: ct
+          };
+        }
+        return null;
+      }
+
+      /**
+       * One row for the test export: Process Bill / Amount Breakdown path (panel + read-only calc + frozen snapshot)
+       * plus PDF bill field map from the last Produce Bill, plus the full Payments/Charges table (TSV) **at this step**
+       * (same shape as the final `=== All Previous Payments / Charges ===` block — no end-of-run-only shortcut).
+       */
+      function developTestValidationStepSnapshot(customer, stepLabel) {
+        const simulatedDate =
+          typeof formatLocalYMD === 'function' && typeof window.getCurrentDate === 'function'
+            ? formatLocalYMD(window.getCurrentDate())
+            : '';
+        let panel = null;
+        let calc = null;
+        try {
+          panel =
+            typeof getProcessBillPanelAmounts === 'function' ? getProcessBillPanelAmounts(customer) : null;
+        } catch (e1) {
+          panel = { error: String(e1 && e1.message) };
+        }
+        try {
+          calc =
+            typeof calculateCustomerTotalReadOnly === 'function'
+              ? calculateCustomerTotalReadOnly(customer)
+              : null;
+        } catch (e2) {
+          calc = { error: String(e2 && e2.message) };
+        }
+        let ledgerPaymentsChargesTsv = '';
+        try {
+          ledgerPaymentsChargesTsv = developTestExtractLedgerTablePlainText(customer);
+        } catch (e3) {
+          ledgerPaymentsChargesTsv = '(ledger TSV at step: ' + String(e3 && e3.message) + ')';
+        }
+        return {
+          step: stepLabel,
+          simulatedDate: simulatedDate || null,
+          amountBreakdown: {
+            processBillPanel: panel,
+            calculateCustomerTotalReadOnly: calc,
+            frozenPanelSnapshot: developTestFrozenPanelSnapshotSummary(customer),
+            lastBillPdfPastDueLine: customer.lastBillPdfPastDueLine,
+            lastBillPdfLateFeeLine: customer.lastBillPdfLateFeeLine
+          },
+          ledgerPaymentsChargesTsv: ledgerPaymentsChargesTsv,
+          ledgerAnchorNetVsPanelTotal: developTestLedgerAnchorNetVsPanel(customer, panel, calc),
+          pdfBillArchive: developTestPdfBillArchiveAlignedWithPanel(
+            panel,
+            developTestLatestPdfBillArchive(customer)
+          )
+        };
+      }
+
+      function developTestRecordValidationStep(validationSteps, customer, stepLabel) {
+        if (!Array.isArray(validationSteps) || !customer) return;
+        try {
+          validationSteps.push(developTestValidationStepSnapshot(customer, stepLabel));
+        } catch (e) {
+          validationSteps.push({ step: stepLabel, error: String(e && e.message) });
+        }
+      }
+
       function developTestAmountBreakdownSnapshot(customer) {
         if (!customer) return '{}';
         try {
-          const panel =
-            typeof getProcessBillPanelAmounts === 'function' ? getProcessBillPanelAmounts(customer) : null;
-          const calc =
-            typeof calculateCustomerTotalReadOnly === 'function' ? calculateCustomerTotalReadOnly(customer) : null;
-          return JSON.stringify(
-            {
-              panel: panel || null,
-              calc: calc
-                ? {
-                    total: calc.total,
-                    pastDue: calc.pastDue,
-                    currentDue: calc.currentDue,
-                    lateFeeAmount: calc.lateFeeAmount
-                  }
-                : null
-            },
-            null,
-            2
-          );
+          return JSON.stringify(developTestValidationStepSnapshot(customer, 'final_only').amountBreakdown, null, 2);
         } catch (e) {
           return JSON.stringify({ error: String(e && e.message) });
         }
@@ -27658,6 +28157,392 @@
         return o;
       }
 
+      /** Vertical ledger text for Susan Master Test export (one column header/value per line, row blocks). */
+      function developTestMasterTestLedgerVertical(tsv) {
+        const s = String(tsv || '').trim();
+        if (!s) return '(empty)';
+        const lines = s.split(/\r?\n/).filter(function (l) {
+          return l.trim();
+        });
+        if (!lines.length) return '(empty)';
+        const headers = lines[0].split('\t');
+        let out = headers.join('\n');
+        for (let i = 1; i < lines.length; i++) {
+          out += '\n' + lines[i].split('\t').join('\n');
+        }
+        return out;
+      }
+
+      /** Susan Master Test export: $0 with no decimals, else $X.XX (matches test_script_results template). */
+      function developTestMasterTestMoney(n) {
+        const x = Math.round((isNaN(n) ? 0 : n) * 100) / 100;
+        if (Math.abs(x) < 0.005) return '$0';
+        if (x < -0.005) {
+          const a = Math.abs(x);
+          if (Math.abs(a - Math.round(a)) < 0.005) return '$-' + Math.round(a);
+          return '-$' + a.toFixed(2);
+        }
+        return '$' + x.toFixed(2);
+      }
+
+      /** Credit line on master-test amount breakdown (whole dollars without cents). */
+      function developTestMasterTestCreditMoney(n) {
+        const x = Math.round((isNaN(n) ? 0 : n) * 100) / 100;
+        if (Math.abs(x) < 0.005) return '$0';
+        if (Math.abs(x - Math.round(x)) < 0.005) return '$' + Math.round(x);
+        return '$' + x.toFixed(2);
+      }
+
+      function developTestMasterTestMoneyFromPdfField(s) {
+        if (s == null || String(s).trim() === '') return '$0';
+        const n = parseFloat(String(s).replace(/[^0-9.-]/g, ''));
+        return developTestMasterTestMoney(isNaN(n) ? 0 : n);
+      }
+
+      /**
+       * Compact amount breakdown lines for Susan Master Test (Sewer Charge, Tax Charge, Past Due, Late Fee, Credit, Total amount due).
+       * Uses panel total as authoritative, then reconciles sewer + tax so the printed lines sum with
+       * past / late / credit to total (avoids mixing gross read-only cycle charges with net Process Bill totals).
+       */
+      function developTestMasterTestAmountLines(customer) {
+        let panel = null;
+        let calc = null;
+        try {
+          panel = typeof getProcessBillPanelAmounts === 'function' ? getProcessBillPanelAmounts(customer) : null;
+        } catch (e1) {
+          panel = null;
+        }
+        try {
+          calc =
+            typeof calculateCustomerTotalReadOnly === 'function'
+              ? calculateCustomerTotalReadOnly(customer)
+              : null;
+        } catch (e2) {
+          calc = null;
+        }
+        const taxCodes = Math.round((parseFloat(calc && calc.totalSurcharge) || 0) * 100) / 100;
+        const puc = Math.round((parseFloat(calc && calc.pucSurchargeAmount) || 0) * 100) / 100;
+        const taxCharges = Math.round((taxCodes + puc) * 100) / 100;
+        const pastDue = Math.round((parseFloat(panel && panel.pastDue) || parseFloat(calc && calc.pastDue) || 0) * 100) / 100;
+        const lateFee = Math.round((parseFloat(panel && panel.lateFee) || parseFloat(calc && calc.lateFeeAmount) || 0) * 100) / 100;
+        let credit = Math.round((parseFloat(calc && calc.credit) || 0) * 100) / 100;
+        const lastBillRow =
+          typeof getLatestBillingChargeHistoryRow === 'function'
+            ? getLatestBillingChargeHistoryRow(customer)
+            : null;
+        const pastDueLedgerRaw = parseFloat(customer.pastDue);
+        const accountCreditOnly =
+          !isNaN(pastDueLedgerRaw) && pastDueLedgerRaw < -0.005;
+        if (credit < 0.005 && lastBillRow && parseFloat(lastBillRow.creditAppliedOnBill) > 0.005) {
+          credit = Math.round(parseFloat(lastBillRow.creditAppliedOnBill) * 100) / 100;
+        }
+        let totalDue = Math.round((parseFloat(panel && panel.total) || parseFloat(calc && calc.total) || 0) * 100) / 100;
+        if (accountCreditOnly) {
+          credit = Math.round(Math.abs(pastDueLedgerRaw) * 100) / 100;
+          totalDue = Math.round(pastDueLedgerRaw * 100) / 100;
+        } else if (
+          credit > 0.005 &&
+          lastBillRow &&
+          parseFloat(lastBillRow.creditAppliedOnBill) > 0.005 &&
+          lastBillRow.netBalanceAfterBill != null &&
+          !isNaN(parseFloat(lastBillRow.netBalanceAfterBill))
+        ) {
+          totalDue = Math.round(parseFloat(lastBillRow.netBalanceAfterBill) * 100) / 100;
+        } else if (credit > 0.005 && totalDue > credit + 0.02) {
+          totalDue = Math.round((totalDue - credit) * 100) / 100;
+        }
+        /* total ≈ sewer + tax + pastDue + lateFee − credit */
+        let sewer = Math.round(
+          Math.max(0, totalDue - pastDue - lateFee + credit - taxCharges) * 100
+        ) / 100;
+        let tax = taxCharges;
+        let sum = Math.round((sewer + tax + pastDue + lateFee - credit) * 100) / 100;
+        if (Math.abs(sum - totalDue) > 0.02) {
+          tax = Math.round(Math.max(0, totalDue - pastDue - lateFee + credit - sewer) * 100) / 100;
+          sum = Math.round((sewer + tax + pastDue + lateFee - credit) * 100) / 100;
+        }
+        if (Math.abs(sum - totalDue) > 0.02) {
+          sewer = Math.round(Math.max(0, totalDue - pastDue - lateFee + credit - tax) * 100) / 100;
+        }
+        return (
+          'Sewer Charge\n' +
+          'Tax Charge\n' +
+          'Past Due\n' +
+          'Late Fee\n' +
+          'Credit\n' +
+          'Total amount due\n' +
+          developTestMasterTestMoney(sewer) +
+          '\n' +
+          developTestMasterTestMoney(tax) +
+          '\n' +
+          developTestMasterTestMoney(pastDue) +
+          '\n' +
+          developTestMasterTestMoney(lateFee) +
+          '\n' +
+          developTestMasterTestCreditMoney(credit) +
+          '\n' +
+          developTestMasterTestMoney(totalDue)
+        );
+      }
+
+      /** Latest PDF bill summary lines for Susan Master Test. */
+      function developTestMasterTestPdfLines(customer) {
+        const arch = typeof developTestLatestPdfBillArchive === 'function' ? developTestLatestPdfBillArchive(customer) : null;
+        if (!arch || !arch.fields) return null;
+        const f = arch.fields;
+        const cur =
+          f.current_due != null && f.current_due !== ''
+            ? developTestMasterTestMoneyFromPdfField(f.current_due)
+            : '$0';
+        const prevRaw =
+          f.previous_charges != null && f.previous_charges !== ''
+            ? f.previous_charges
+            : f.previous_amount != null && f.previous_amount !== ''
+              ? f.previous_amount
+              : '';
+        const prev = developTestMasterTestMoneyFromPdfField(prevRaw);
+        const late =
+          f.late_fee != null && f.late_fee !== '' ? developTestMasterTestMoneyFromPdfField(f.late_fee) : '$0';
+        const cred =
+          f.credit != null && f.credit !== ''
+            ? developTestMasterTestCreditMoney(
+                parseFloat(String(f.credit).replace(/[^0-9.-]/g, '')) || 0
+              )
+            : '$0';
+        const tot =
+          f.total_amount != null && f.total_amount !== '' ? developTestMasterTestMoneyFromPdfField(f.total_amount) : '$0';
+        return (
+          'Current_due\n' +
+          'Previous_amount\n' +
+          'Late_fee\n' +
+          'Credit\n' +
+          'Total_amount\n' +
+          cur +
+          '\n' +
+          prev +
+          '\n' +
+          late +
+          '\n' +
+          cred +
+          '\n' +
+          tot
+        );
+      }
+
+      function developTestMasterTestFormatStep(stepNum, description, ledgerVert, amountVert, pdfVert) {
+        let body =
+          'Step ' +
+          stepNum +
+          ':\n\n' +
+          'Description: \n' +
+          description +
+          '\n\n' +
+          'Payments/Charges Table Shows:\n\n' +
+          ledgerVert +
+          '\n\n' +
+          'Amount Breakdown Shows:\n\n' +
+          amountVert;
+        if (pdfVert != null) {
+          body += '\n\nBill PDF Preview Shows:\n\n' + pdfVert;
+        }
+        return body;
+      }
+
+      /**
+       * Susan Young master billing walk (8 exported steps: advance to 4/1, pay $10, and bill are separate).
+       * Used by Master Test / headless runner.
+       * @returns {{ ok: boolean, error?: string, masterTestReport: string, masterTestSteps: object[], consoleLines: string[] }}
+       */
+      window.runSusanMasterTest = async function (opts) {
+        opts = opts || {};
+        const advanceMode = opts.advanceMode === 'instant' ? 'instant' : 'walk';
+        const skipAnim = advanceMode === 'instant';
+        const cfg = developTestMergeConfig(
+          Object.assign(
+            {
+              preset: 'susanMaster',
+              accountNumber: opts.accountNumber || 'CUS-3011000',
+              customerNameMatch: 'Susan Young',
+              captureConsole: opts.captureConsole !== false,
+              suppressAlerts: true,
+              openResultsTab: false,
+              scopeDiagnosticConsole: opts.scopeDiagnosticConsole !== false,
+              walkStepDelayMs: opts.walkStepDelayMs != null ? opts.walkStepDelayMs : 0
+            },
+            opts
+          )
+        );
+        const noop = function () {};
+        const prevAlert = window.alert;
+        const prevConfirm = window.confirm;
+        const prevBillDiagSnap = developTestSnapshotBillDiagGlobals();
+        if (cfg.suppressAlerts) {
+          window.alert = noop;
+          window.confirm = function () {
+            return true;
+          };
+        }
+        const masterTestSteps = [];
+        let errText = '';
+        try {
+          const customer = developTestResolveCustomer(cfg);
+          if (!customer) {
+            throw new Error(
+              'Susan master test: customer not found. Set accountNumber / TEST_ACCOUNT_NUMBER (e.g. CUS-3011000).'
+            );
+          }
+          developTestApplyScenarioBillDiagScope(customer, cfg);
+          if (cfg.captureConsole) {
+            /* Master test: capture every console line for test_script_console_logs.txt (BillDiag lines often omit account # in the text). */
+            developTestBeginConsoleCapture(null);
+          }
+
+          async function snap(stepNum, description, withPdf) {
+            let ledgerTsv = '';
+            try {
+              ledgerTsv =
+                typeof developTestExtractLedgerTablePlainText === 'function'
+                  ? developTestExtractLedgerTablePlainText(customer)
+                  : '(ledger unavailable)';
+            } catch (eL) {
+              ledgerTsv = '(ledger error: ' + (eL && eL.message) + ')';
+            }
+            const ledgerVert = developTestMasterTestLedgerVertical(ledgerTsv);
+            const amountVert = developTestMasterTestAmountLines(customer);
+            const pdfVert = withPdf ? developTestMasterTestPdfLines(customer) : null;
+            const block = developTestMasterTestFormatStep(stepNum, description, ledgerVert, amountVert, pdfVert);
+            masterTestSteps.push({
+              step: stepNum,
+              description: description,
+              ledgerTsv: ledgerTsv,
+              ledgerVertical: ledgerVert,
+              amountVertical: amountVert,
+              pdfVertical: pdfVert
+            });
+            return block;
+          }
+
+          const dateOpts = developTestDateAdvanceOpts(cfg, skipAnim);
+
+          await window.setTestDate('2026-01-01', {
+            skipAnimation: true,
+            skipRunSimulatedDayForAllCustomers: false
+          });
+          await developTestFreshStartSingleCustomer(customer);
+          const masterCheckAmount =
+            opts.masterCheckAmount != null && !isNaN(parseFloat(opts.masterCheckAmount))
+              ? parseFloat(opts.masterCheckAmount)
+              : opts.checkPaymentAmount != null && !isNaN(parseFloat(opts.checkPaymentAmount))
+                ? parseFloat(opts.checkPaymentAmount)
+                : 10;
+          const masterCheckNumber =
+            opts.masterCheckNumber != null ? String(opts.masterCheckNumber) : 'MT-10';
+          const parts = [];
+          parts.push(
+            await snap(
+              1,
+              'Do a fresh start and then set the test date to 1/1/26\nLog what the payments/charges table shows\nLog what the amount breakdown shows',
+              false
+            )
+          );
+
+          await developTestProduceBillFor(customer);
+          parts.push(
+            await snap(
+              2,
+              'Bill them\nLog what the payments/charges table shows\nLog what the amount breakdown shows\nLog what PDF Bill shows',
+              true
+            )
+          );
+
+          await window.setTestDate('2026-02-01', dateOpts);
+          await developTestProduceBillFor(customer);
+          parts.push(
+            await snap(
+              3,
+              'Advance date to 2/1/26 and bill them again\nLog what the payments/charges shows\nLog what the amount breakdown shows\nLog what PDF Bill shows',
+              true
+            )
+          );
+
+          await window.setTestDate('2026-03-01', dateOpts);
+          await developTestProduceBillFor(customer);
+          parts.push(
+            await snap(
+              4,
+              'Advance date to 3/1/26 and bill them again\nLog what the payments/charges shows\nLog what the amount breakdown shows\nLog what PDF bill shows',
+              true
+            )
+          );
+
+          await window.setTestDate('2026-04-01', dateOpts);
+          parts.push(
+            await snap(
+              5,
+              'Advance date to 4/1/26\nLog what the payments/charges shows\nLog what the amount breakdown shows',
+              false
+            )
+          );
+
+          await developTestProcessPreAprilCreditCheck(customer, {
+            preAprilBillCreditAmount: masterCheckAmount,
+            preAprilBillCreditCheckNumber: masterCheckNumber
+          });
+          parts.push(
+            await snap(
+              6,
+              'Have susan pay 10 dollars.\nLog what the payments/charges shows\nLog what the amount breakdown shows',
+              false
+            )
+          );
+
+          await developTestProduceBillFor(customer);
+          parts.push(
+            await snap(
+              7,
+              'Bill her\nLog what the payments/charges shows\nLog what the amount breakdown shows\nLog what PDF bill shows',
+              true
+            )
+          );
+
+          await window.setTestDate('2026-05-01', dateOpts);
+          await developTestProduceBillFor(customer);
+          parts.push(
+            await snap(
+              8,
+              'Advance date to 5/1/26 and bill them again\nLog what the payments/charges shows\nLog what the amount breakdown shows\nLog what PDF bill shows',
+              true
+            )
+          );
+
+          const masterTestReport = parts.join('\n\n\n') + '\n';
+          const cap = cfg.captureConsole ? DT.lines.slice() : [];
+          return {
+            ok: true,
+            masterTestReport: masterTestReport,
+            masterTestSteps: masterTestSteps,
+            consoleLines: cap
+          };
+        } catch (e) {
+          errText = e && e.stack ? e.stack : String(e);
+          const cap = cfg.captureConsole ? DT.lines.slice() : [];
+          return {
+            ok: false,
+            error: errText,
+            masterTestReport: '',
+            masterTestSteps: masterTestSteps,
+            consoleLines: cap
+          };
+        } finally {
+          developTestEndConsoleCapture();
+          developTestRestoreBillDiagGlobals(prevBillDiagSnap);
+          if (cfg.suppressAlerts) {
+            window.alert = prevAlert;
+            window.confirm = prevConfirm;
+          }
+        }
+      };
+
       window.runDevelopBillingScenarioFromJson = async function (raw) {
         let parsed = raw;
         if (typeof raw === 'string') {
@@ -27702,6 +28587,8 @@
 
           log('Scenario start preset=' + cfg.preset + ', target ' + (customer.accountNumber || customer.id));
 
+          const validationSteps = [];
+
           const skipAnim = cfg.advanceMode === 'instant';
           log(
             'Set anchor ' +
@@ -27717,9 +28604,11 @@
 
           log('Fresh start single customer ' + (customer.accountNumber || customer.id));
           await developTestFreshStartSingleCustomer(customer);
+          developTestRecordValidationStep(validationSteps, customer, 'after_fresh_start');
 
           log('Produce bill @ ' + cfg.anchorDate);
           await developTestProduceBillFor(customer);
+          developTestRecordValidationStep(validationSteps, customer, 'after_bill_' + cfg.anchorDate);
 
           const creditApr =
             cfg.preAprilBillCreditAmount != null &&
@@ -27749,13 +28638,16 @@
                   ' with Give credit (expect credit on account; total due $0 before this pay)'
               );
               await developTestProcessPreAprilCreditCheck(customer, cfg);
+              developTestRecordValidationStep(validationSteps, customer, 'after_pre_april_credit_check');
               continue;
             }
             log('Advance to ' + m.date + ' (' + (skipAnim ? 'instant' : 'day walk') + ')');
             await window.setTestDate(m.date, developTestDateAdvanceOpts(cfg, skipAnim));
+            developTestRecordValidationStep(validationSteps, customer, 'after_advance_' + m.date);
             if (m.bill) {
               log('Produce bill @ ' + m.date);
               await developTestProduceBillFor(customer);
+              developTestRecordValidationStep(validationSteps, customer, 'after_bill_' + m.date);
             }
           }
 
@@ -27770,16 +28662,24 @@
                 ') via Testing Drawer'
             );
             await developTestProcessCheckPayment(customer, cfg);
+            developTestRecordValidationStep(
+              validationSteps,
+              customer,
+              'after_partial_check_' + String(Math.round((parseFloat(cfg.checkPaymentAmount) || 75) * 100) / 100)
+            );
             log('Advance to 2026-05-01 (' + (skipAnim ? 'instant' : 'day walk') + ')');
             await window.setTestDate('2026-05-01', developTestDateAdvanceOpts(cfg, skipAnim));
+            developTestRecordValidationStep(validationSteps, customer, 'after_advance_2026-05-01');
             log('Produce bill @ 2026-05-01');
             await developTestProduceBillFor(customer);
+            developTestRecordValidationStep(validationSteps, customer, 'after_bill_2026-05-01');
           }
 
           const ledgerExport = developTestExtractLedgerTableExports(customer);
           const ledgerText = ledgerExport.plain;
           const ledgerHtml = ledgerExport.html || '';
           const breakdown = developTestAmountBreakdownSnapshot(customer);
+          const validationStepsJson = JSON.stringify(validationSteps, null, 2);
           const consoleBlock = (cfg.captureConsole ? DT.lines : []).join('\n');
           const header =
             'CUS develop billing scenario export\n' +
@@ -27797,7 +28697,9 @@
               : '') +
             '\n\n=== Step log ===\n' +
             logLines.join('\n') +
-            '\n\n=== Amount breakdown snapshot (JSON) ===\n' +
+            '\n\n=== Validation snapshots (Amount Breakdown + PDF + full ledger TSV at each step) ===\n' +
+            validationStepsJson +
+            '\n\n=== Final amount breakdown only (JSON) ===\n' +
             breakdown +
             '\n\n=== Console capture ===\n' +
             consoleBlock +
@@ -27815,6 +28717,8 @@
             ledgerText: ledgerText,
             ledgerHtml: ledgerHtml,
             breakdownJson: breakdown,
+            validationSteps: validationSteps.slice(),
+            validationStepsJson: validationStepsJson,
             logLines: logLines.slice(),
             consoleLines: (cfg.captureConsole ? DT.lines : []).slice()
           };

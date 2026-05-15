@@ -1,0 +1,760 @@
+Step 1:
+
+Description: 
+Do a fresh start and then set the test date to 1/1/26
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Past Due
+Tax Codes
+PUC Surcharge
+Late Fee
+Credit
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start (full pay)
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$178.49
+$0.00
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$0
+$0
+$0
+$0
+$0
+$0
+
+
+Step 2:
+
+Description: 
+Bill them
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log what PDF Bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Past Due
+Tax Codes
+PUC Surcharge
+Late Fee
+Credit
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start (full pay)
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$178.49
+$0.00
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$0.00
+$178.49
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.13
+$0
+$0
+$0
+$178.49
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.49
+$0
+$0
+$0
+$178.49
+
+
+Step 3:
+
+Description: 
+Advance date to 2/1/26 and bill them again
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log what PDF Bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Past Due
+Tax Codes
+PUC Surcharge
+Late Fee
+Credit
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start (full pay)
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$178.49
+$0.00
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$0.00
+$178.49
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$178.49
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$361.98
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.13
+$178.49
+$5.00
+$0
+$361.98
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.49
+$178.49
+$5.00
+$0
+$361.98
+
+
+Step 4:
+
+Description: 
+Advance date to 3/1/26 and bill them again
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log what PDF bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Past Due
+Tax Codes
+PUC Surcharge
+Late Fee
+Credit
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start (full pay)
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$178.49
+$0.00
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$0.00
+$178.49
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$178.49
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$361.98
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$361.98
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$545.47
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.13
+$361.98
+$5.00
+$0
+$545.47
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.49
+$361.98
+$5.00
+$0
+$545.47
+
+
+Step 5:
+
+Description: 
+Advance date to 4/1/26
+Log what the payments/charges shows
+Log what the amount breakdown shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Past Due
+Tax Codes
+PUC Surcharge
+Late Fee
+Credit
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start (full pay)
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$178.49
+$0.00
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$0.00
+$178.49
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$178.49
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$361.98
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$361.98
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$545.47
+04/01/2026 12:00 AM
+Payment
+Security deposit (auto)
+$168.36
+$361.98
+$2.44
+$7.69
+$10.00
+$0.00
+$550.47
+$0
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$0
+$0
+$0
+$0
+$0
+$0
+
+
+Step 6:
+
+Description: 
+Have susan pay 10 dollars.
+Log what the payments/charges shows
+Log what the amount breakdown shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Past Due
+Tax Codes
+PUC Surcharge
+Late Fee
+Credit
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start (full pay)
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$178.49
+$0.00
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$0.00
+$178.49
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$178.49
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$361.98
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$361.98
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$545.47
+04/01/2026 12:00 AM
+Payment
+Security deposit (auto)
+$168.36
+$361.98
+$2.44
+$7.69
+$10.00
+$0.00
+$550.47
+$0
+04/01/2026 12:00 AM
+Payment
+Check
+$0
+$0
+$0
+$0
+$0
+$0.00
+$10.00
+$-10.00 (credit)
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$0
+$0
+$0
+$0
+$10
+$-10
+
+
+Step 7:
+
+Description: 
+Bill her
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log what PDF bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Past Due
+Tax Codes
+PUC Surcharge
+Late Fee
+Credit
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start (full pay)
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$178.49
+$0.00
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$0.00
+$178.49
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$178.49
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$361.98
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$361.98
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$545.47
+04/01/2026 12:00 AM
+Payment
+Security deposit (auto)
+$168.36
+$361.98
+$2.44
+$7.69
+$10.00
+$0.00
+$550.47
+$0
+04/01/2026 12:00 AM
+Payment
+Check
+$0
+$0
+$0
+$0
+$0
+$0.00
+$10.00
+$-10.00 (credit)
+04/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0.00
+$2.44
+$7.69
+$0
+$10
+$0.00
+$168.49
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.13
+$0
+$0
+$10
+$168.49
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.49
+$0
+$0
+$10
+$168.49
+
+
+Step 8:
+
+Description: 
+Advance date to 5/1/26 and bill them again
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log what PDF bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Past Due
+Tax Codes
+PUC Surcharge
+Late Fee
+Credit
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start (full pay)
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$178.49
+$0.00
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0.00
+$2.44
+$7.69
+$0.00
+$0.00
+$0.00
+$178.49
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$178.49
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$361.98
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$361.98
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$545.47
+04/01/2026 12:00 AM
+Payment
+Security deposit (auto)
+$168.36
+$361.98
+$2.44
+$7.69
+$10.00
+$0.00
+$550.47
+$0
+04/01/2026 12:00 AM
+Payment
+Check
+$0
+$0
+$0
+$0
+$0
+$0.00
+$10.00
+$-10.00 (credit)
+04/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0.00
+$2.44
+$7.69
+$0
+$10
+$0.00
+$168.49
+05/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$168.49
+$2.44
+$7.69
+$5.00
+$0.00
+$0.00
+$351.98
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.13
+$168.49
+$5.00
+$0
+$351.98
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.49
+$168.49
+$5.00
+$0
+$351.98

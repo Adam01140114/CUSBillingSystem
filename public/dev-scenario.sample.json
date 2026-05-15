@@ -11,5 +11,7 @@
   "openResultsTab": true,
   "skipCheckPaymentMay": false,
   "checkPaymentAmount": 75,
-  "checkNumber": "123"
+  "checkNumber": "123",
+  "preAprilBillCreditAmount": 10,
+  "preAprilBillCreditCheckNumber": "10-CR"
 }

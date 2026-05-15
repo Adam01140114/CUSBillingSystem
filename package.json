@@ -10,8 +10,12 @@
     "start:dev-scenario": "DEV_BILLING_SCENARIO=1 node server.js",
     "dev:scenario-help": "node tools/dev-scenario-help.cjs",
     "test:billing-scenario": "node tools/run-billing-scenario-headless.mjs",
-    "test:billing-scenario:local": "node tools/run-billing-scenario-local.mjs",
-    "test_credit": "node tools/run-billing-scenario-credit-local.mjs"
+    "test:billing-scenario:local": "node \"Test Scripts/test_script1.mjs\"",
+    "test_credit": "node \"Test Scripts/test_script2.mjs\"",
+    "test_script1": "node \"Test Scripts/test_script1.mjs\"",
+    "test_script2": "node \"Test Scripts/test_script2.mjs\"",
+    "test:master:susan": "node \"Master Test/susan_master_test_script.mjs\"",
+    "format:validation-report": "node tools/format-validation-report.mjs"
   },
   "dependencies": {
     "body-parser": "^1.20.2",

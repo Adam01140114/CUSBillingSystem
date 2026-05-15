@@ -22738,7 +22738,8 @@
           combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
         } else {
           const priorBill = getMostRecentBillingChargeBeforePayment(customer, p);
-          if (priorBill) {
+          // Deposit auto: real split is on the payment row; prior bill face can sum to less than amountPaid.
+          if (priorBill && p.source !== 'depositAutoApply') {
             sewer = Math.round(Math.max(0, parseFloat(priorBill.sewerChargeOnBill || 0)) * 100) / 100;
             pastDue = Math.round(Math.max(0, parseFloat(priorBill.pastDueOnBill || 0)) * 100) / 100;
             const sp = ledgerTaxCodesAndPucFromEntry(priorBill);
@@ -22746,9 +22747,6 @@
             pucAmt = sp.puc;
             combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
             lateFee = Math.round(Math.max(0, parseFloat(priorBill.lateFeeAmount || 0)) * 100) / 100;
-            if (p.source === 'depositAutoApply') {
-              lateFee = Math.max(lateFee, lateFeeFromSnapshot);
-            }
           } else {
             const br = mergeAppliedBreakdown(
               p.appliedBreakdown && typeof p.appliedBreakdown === 'object'

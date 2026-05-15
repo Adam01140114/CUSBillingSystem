@@ -288,6 +288,25 @@ async function main() {
     fs.writeFileSync(outPath, text, 'utf8');
     console.error('[test:billing-scenario] Wrote', outPath);
 
+    const capN = result && Array.isArray(result.consoleLines) ? result.consoleLines.length : 0;
+    if (capN > 0) {
+      console.error(
+        '[test:billing-scenario] BillDiag / browser console: ' +
+          capN +
+          ' line(s) — search output file for "=== Console capture ===" (scenario sets __BILL_DIAG_LOGGING for the target customer).'
+      );
+    }
+    const consoleLogPath = process.env.CONSOLE_LOG_PATH;
+    if (consoleLogPath && result && Array.isArray(result.consoleLines) && result.consoleLines.length) {
+      try {
+        const cl = path.resolve(process.cwd(), consoleLogPath);
+        fs.writeFileSync(cl, result.consoleLines.join('\n') + '\n', 'utf8');
+        console.error('[test:billing-scenario] Wrote console capture only to', cl);
+      } catch (e) {
+        console.error('[test:billing-scenario] CONSOLE_LOG_PATH write failed:', e && e.message);
+      }
+    }
+
     if (!result || !result.ok) {
       console.error('[test:billing-scenario] Scenario reported failure. See', outPath);
       scenarioExitCode = 2;

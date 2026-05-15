@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Master Test — results viewer</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #3d9cf9;
+      --ok: #34d399;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      padding-bottom: 5.5rem;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    header h1 {
+      margin: 0 0 0.35rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+    header p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: flex-end;
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .field label {
+      display: block;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    .field input[type="file"] {
+      max-width: 280px;
+      font-size: 0.85rem;
+    }
+    main { padding: 1rem 1.5rem 1rem; max-width: 1200px; margin: 0 auto; }
+    .step-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 1.5rem;
+      overflow: hidden;
+    }
+    .step-card h2 {
+      margin: 0;
+      padding: 0.85rem 1rem;
+      font-size: 1rem;
+      background: rgba(61, 156, 249, 0.12);
+      border-bottom: 1px solid var(--border);
+    }
+    .step-desc {
+      padding: 0.75rem 1rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      white-space: pre-wrap;
+      border-bottom: 1px solid var(--border);
+    }
+    .section {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .section:last-child { border-bottom: none; }
+    .section h3 {
+      margin: 0 0 0.75rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--accent);
+    }
+    table.data {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    table.data th, table.data td {
+      border: 1px solid var(--border);
+      padding: 0.45rem 0.6rem;
+      text-align: left;
+    }
+    table.data thead th {
+      background: rgba(255,255,255,0.04);
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.72rem;
+    }
+    table.data tbody tr:nth-child(even) { background: rgba(0,0,0,0.15); }
+    table.data td[data-editable="1"] {
+      cursor: cell;
+      user-select: text;
+    }
+    table.data td[data-editable="1"]:hover { background: rgba(61, 156, 249, 0.08); }
+    table.data td[contenteditable="true"] {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+      background: rgba(61, 156, 249, 0.12);
+    }
+    td.mt-money-td {
+      white-space: nowrap;
+    }
+    .mt-currency-prefix {
+      user-select: none;
+      font-weight: 600;
+      color: var(--text);
+      margin-right: 0;
+    }
+    span.mt-money-value[data-editable="1"] {
+      cursor: text;
+      min-width: 2.5ch;
+      display: inline-block;
+      outline: none;
+    }
+    span.mt-money-value[data-editable="1"]:hover {
+      background: rgba(61, 156, 249, 0.08);
+      border-radius: 2px;
+    }
+    span.mt-money-value[contenteditable="true"] {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+      border-radius: 2px;
+      background: rgba(61, 156, 249, 0.12);
+    }
+    .kv-money-wrap {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: nowrap;
+      gap: 0;
+    }
+    .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem 1rem; max-width: 420px; }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    .kv-val[data-editable="1"] {
+      cursor: cell;
+      border: 1px dashed transparent;
+      padding: 0.15rem 0.25rem;
+      border-radius: 4px;
+    }
+    .kv-val[data-editable="1"]:hover { border-color: var(--border); background: rgba(61, 156, 249, 0.08); }
+    .kv-val[contenteditable="true"] {
+      outline: 2px solid var(--accent);
+      border-color: transparent;
+      background: rgba(61, 156, 249, 0.12);
+    }
+    .compare-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 900px) {
+      .compare-grid { grid-template-columns: 1fr; }
+    }
+    .diff-flag {
+      display: inline-block;
+      margin-left: 0.5rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      background: rgba(251, 191, 36, 0.2);
+      color: var(--warn);
+    }
+    .err { color: #f87171; font-size: 0.9rem; padding: 1rem; }
+    .hint-edit { font-size: 0.75rem; color: var(--muted); margin-top: 0.35rem; }
+    .export-bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 0.85rem 1.25rem;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem 1rem;
+      z-index: 50;
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.35);
+    }
+    .export-bar button {
+      font: inherit;
+      font-weight: 600;
+      padding: 0.55rem 1rem;
+      border-radius: 8px;
+      border: 1px solid var(--accent);
+      background: rgba(61, 156, 249, 0.2);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .export-bar button:hover { background: rgba(61, 156, 249, 0.35); }
+    .export-bar span { color: var(--muted); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Master Test viewer</h1>
+    <p>Import <code>test_script_results.txt</code> (actual run) and optionally <code>test_script_success_results.txt</code> (golden). The master test uses <strong>8 steps</strong>. Double-click <strong>Actual</strong> cells: ledger row/column edits sync across steps; money cells keep a fixed <strong>$</strong> and only the number is editable. Export → new tab.</p>
+  </header>
+  <div class="toolbar">
+    <div class="field">
+      <label for="fileActual">Actual results</label>
+      <input id="fileActual" type="file" accept=".txt,text/plain" />
+    </div>
+    <div class="field">
+      <label for="fileGolden">Success / golden (optional)</label>
+      <input id="fileGolden" type="file" accept=".txt,text/plain" />
+    </div>
+  </div>
+  <main id="root"></main>
+
+  <footer class="export-bar">
+    <button type="button" id="btnExportCustom">Export custom_results.txt (new tab)</button>
+    <span id="exportHint">Load an actual results file first.</span>
+  </footer>
+
+  <script>
+    function normalizeLines(s) {
+      return String(s || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    }
+
+    function splitSteps(text) {
+      const t = normalizeLines(text).trim();
+      if (!t) return [];
+      const chunks = t.split(/\n\n\n+/);
+      return chunks.map((c) => c.trim()).filter(Boolean);
+    }
+
+    function parseStepBlock(block) {
+      const m = /^Step\s+(\d+):/m.exec(block);
+      const stepNum = m ? parseInt(m[1], 10) : 0;
+      let desc = '';
+      const di = block.indexOf('Description:');
+      const pi = block.indexOf('Payments/Charges Table Shows:');
+      const ai = block.indexOf('Amount Breakdown Shows:');
+      const bi = block.indexOf('Bill PDF Preview Shows:');
+      if (di !== -1 && pi !== -1) {
+        desc = block
+          .slice(di + 'Description:'.length, pi)
+          .replace(/^\s+/, '')
+          .trim();
+      }
+      let ledgerRaw = '';
+      if (pi !== -1) {
+        const end = ai !== -1 ? ai : bi !== -1 ? bi : block.length;
+        ledgerRaw = block.slice(pi + 'Payments/Charges Table Shows:'.length, end).trim();
+      }
+      let amountRaw = '';
+      if (ai !== -1) {
+        const end = bi !== -1 ? bi : block.length;
+        amountRaw = block.slice(ai + 'Amount Breakdown Shows:'.length, end).trim();
+      }
+      let pdfRaw = '';
+      if (bi !== -1) {
+        pdfRaw = block.slice(bi + 'Bill PDF Preview Shows:'.length).trim();
+      }
+      return { stepNum, desc, ledgerRaw, amountRaw, pdfRaw };
+    }
+
+    function parseVerticalLedger(raw) {
+      const nonEmpty = normalizeLines(raw).split('\n');
+      const cleaned = [];
+      for (const line of nonEmpty) {
+        const t = line.trim();
+        if (t !== '') cleaned.push(t);
+      }
+      if (cleaned.length === 0) return { headers: [], rows: [] };
+      let startData = -1;
+      for (let i = 0; i < cleaned.length; i++) {
+        if (/^\d{1,2}\/\d{1,2}\/\d{4}/.test(cleaned[i])) {
+          startData = i;
+          break;
+        }
+      }
+      if (startData <= 0) {
+        return { headers: cleaned, rows: [] };
+      }
+      const headers = cleaned.slice(0, startData);
+      const n = startData;
+      const rows = [];
+      for (let i = startData; i + n <= cleaned.length; i += n) {
+        rows.push(cleaned.slice(i, i + n));
+      }
+      return { headers, rows };
+    }
+
+    function parseVerticalKeyValues(raw, expectedKeys) {
+      const lines = normalizeLines(raw).split('\n').map((l) => l.trim()).filter((l) => l !== '');
+      if (lines.length < expectedKeys.length * 2) {
+        const half = Math.floor(lines.length / 2);
+        const keys = lines.slice(0, half);
+        const vals = lines.slice(half);
+        const out = [];
+        for (let i = 0; i < Math.max(keys.length, vals.length); i++) {
+          out.push({ key: keys[i] || '', val: vals[i] || '' });
+        }
+        return out;
+      }
+      const keys = lines.slice(0, expectedKeys.length);
+      const vals = lines.slice(expectedKeys.length, expectedKeys.length * 2);
+      const out = [];
+      for (let i = 0; i < expectedKeys.length; i++) {
+        out.push({ key: keys[i] || expectedKeys[i], val: vals[i] != null ? vals[i] : '' });
+      }
+      return out;
+    }
+
+    const AMOUNT_BREAKDOWN_KEYS = [
+      'Sewer Charge',
+      'Tax Charge',
+      'Past Due',
+      'Late Fee',
+      'Credit',
+      'Total amount due'
+    ];
+
+    /** Amount breakdown: labels through "Total amount due" (or legacy labels), then one value per label. */
+    function parseAmountBreakdownVertical(raw) {
+      const lines = normalizeLines(raw)
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l !== '');
+      let idx = lines.lastIndexOf('Total amount due');
+      if (idx < 0) idx = lines.lastIndexOf('Total Due');
+      if (idx < 0) {
+        return parseVerticalKeyValues(raw, AMOUNT_BREAKDOWN_KEYS);
+      }
+      const keys = lines.slice(0, idx + 1);
+      const vals = lines.slice(idx + 1, idx + 1 + keys.length);
+      const out = [];
+      for (let i = 0; i < keys.length; i++) {
+        out.push({ key: keys[i], val: vals[i] != null ? vals[i] : '' });
+      }
+      return out;
+    }
+
+    const PDF_KEYS = ['Current_due', 'Previous_amount', 'Late_fee', 'Credit', 'Total_amount'];
+
+    /** Parse Bill PDF preview block; inserts Credit $0 when missing (legacy 4-field exports). */
+    function parsePdfPreviewVertical(raw) {
+      const lines = normalizeLines(raw)
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l !== '');
+      if (lines.indexOf('Credit') !== -1) {
+        return parseVerticalKeyValues(raw, PDF_KEYS);
+      }
+      const legacy = ['Current_due', 'Previous_amount', 'Late_fee', 'Total_amount'];
+      const isLegacy =
+        lines.length >= legacy.length * 2 &&
+        legacy.every(function (k, i) {
+          return lines[i] === k;
+        });
+      if (isLegacy) {
+        const vals = lines.slice(legacy.length, legacy.length * 2);
+        return [
+          { key: 'Current_due', val: vals[0] != null ? vals[0] : '$0' },
+          { key: 'Previous_amount', val: vals[1] != null ? vals[1] : '$0' },
+          { key: 'Late_fee', val: vals[2] != null ? vals[2] : '$0' },
+          { key: 'Credit', val: '$0' },
+          { key: 'Total_amount', val: vals[3] != null ? vals[3] : '$0' }
+        ];
+      }
+      const parsed = parseVerticalKeyValues(raw, PDF_KEYS);
+      const hasCredit = parsed.some(function (p) {
+        return p.key === 'Credit';
+      });
+      if (!hasCredit) {
+        const out = [];
+        for (let i = 0; i < parsed.length; i++) {
+          out.push(parsed[i]);
+          if (parsed[i].key === 'Late_fee') {
+            out.push({ key: 'Credit', val: '$0' });
+          }
+        }
+        if (out.length) return out;
+      }
+      return parsed;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function cellText(el) {
+      return (el.textContent || '').replace(/\u00a0/g, ' ').trim();
+    }
+
+    /** Plain ledger/PDF-style money only (no suffix text like "(credit)"). */
+    function isEditableMoneyValue(s) {
+      return /^\$[-\d.,]+$/.test(String(s || '').trim());
+    }
+
+    function stripLeadingDollar(s) {
+      const t = String(s || '').trim();
+      if (t.charAt(0) !== '$') return t;
+      return t.slice(1).trim();
+    }
+
+    /** Build stored cell value from numeric part user typed (always leading $). */
+    function moneyValueFromNumericPart(partRaw) {
+      let p = String(partRaw || '')
+        .trim()
+        .replace(/,/g, '')
+        .replace(/[^\d.-]/g, '');
+      if (p === '' || p === '-') p = '0';
+      if (!/^-?\d*\.?\d*$/.test(p)) p = '0';
+      if (p === '.' || p === '-.') p = '0';
+      return '$' + p;
+    }
+
+    function parseDocument(text) {
+      return splitSteps(text).map(parseStepBlock).sort((a, b) => a.stepNum - b.stepNum);
+    }
+
+    /** Live editable copy of the actual import (keyed by step number). */
+    const editableByStep = new Map();
+    let stepOrder = [];
+
+    function deepCloneLedger(lh) {
+      return {
+        headers: lh.headers.map((h) => String(h)),
+        rows: lh.rows.map((r) => r.map((c) => String(c)))
+      };
+    }
+
+    function rebuildEditableState(stepsA) {
+      editableByStep.clear();
+      stepOrder = stepsA.map((s) => s.stepNum);
+      stepsA.forEach(function (s) {
+        const lh = parseVerticalLedger(s.ledgerRaw);
+        const amountA = parseAmountBreakdownVertical(s.amountRaw);
+        const pdfRawTrim = (s.pdfRaw || '').trim();
+        const pdfA = pdfRawTrim ? parseVerticalKeyValues(s.pdfRaw, PDF_KEYS) : null;
+        editableByStep.set(s.stepNum, {
+          desc: s.desc,
+          ledger: deepCloneLedger(lh),
+          amount: amountA.map(function (p) {
+            return { key: p.key, val: p.val };
+          }),
+          pdf: pdfA ? pdfA.map(function (p) {
+            return { key: p.key, val: p.val };
+          }) : null,
+          hasPdf: !!pdfRawTrim
+        });
+      });
+    }
+
+    function ledgerToVertical(ledger) {
+      const lines = ledger.headers.slice();
+      for (let i = 0; i < ledger.rows.length; i++) {
+        for (let j = 0; j < ledger.rows[i].length; j++) {
+          lines.push(ledger.rows[i][j]);
+        }
+      }
+      return lines.join('\n');
+    }
+
+    function pairsToVertical(pairs) {
+      const keys = pairs.map(function (p) {
+        return p.key;
+      });
+      const vals = pairs.map(function (p) {
+        return p.val;
+      });
+      return keys.concat(vals).join('\n');
+    }
+
+    function serializeStep(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d) return '';
+      let body =
+        'Step ' +
+        stepNum +
+        ':\n\n' +
+        'Description: \n' +
+        d.desc +
+        '\n\n' +
+        'Payments/Charges Table Shows:\n\n' +
+        ledgerToVertical(d.ledger) +
+        '\n\n' +
+        'Amount Breakdown Shows:\n\n' +
+        pairsToVertical(d.amount);
+      if (d.hasPdf && d.pdf && d.pdf.length) {
+        body += '\n\nBill PDF Preview Shows:\n\n' + pairsToVertical(d.pdf);
+      }
+      return body;
+    }
+
+    function buildExportText() {
+      if (!stepOrder.length) return '';
+      return stepOrder.map(serializeStep).join('\n\n\n') + '\n';
+    }
+
+    function renderLedgerTable(headers, rows, stepNum, role) {
+      const editable = role === 'actual';
+      const thead = '<tr>' + headers.map((h) => '<th>' + escapeHtml(h) + '</th>').join('') + '</tr>';
+      const tbody = rows
+        .map(function (r, ri) {
+          return (
+            '<tr>' +
+            r
+              .map(function (c, ci) {
+                if (editable && isEditableMoneyValue(c)) {
+                  const num = escapeHtml(stripLeadingDollar(c));
+                  return (
+                    '<td class="mt-money-td" data-money-wrap="1">' +
+                    '<span class="mt-currency-prefix">$</span>' +
+                    '<span class="mt-money-value" data-editable="1" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">' +
+                    num +
+                    '</span></td>'
+                  );
+                }
+                if (editable) {
+                  return (
+                    '<td data-editable="1" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">' +
+                    escapeHtml(c) +
+                    '</td>'
+                  );
+                }
+                return '<td>' + escapeHtml(c) + '</td>';
+              })
+              .join('') +
+            '</tr>'
+          );
+        })
+        .join('');
+      return '<table class="data" data-role="' + role + '"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table>';
+    }
+
+    function renderKV(pairs, stepNum, section, editable) {
+      if (!editable) {
+        return (
+          '<div class="kv">' +
+          pairs
+            .map(function (p) {
+              return '<div>' + escapeHtml(p.key) + '</div><div>' + escapeHtml(p.val) + '</div>';
+            })
+            .join('') +
+          '</div>'
+        );
+      }
+      return (
+        '<div class="kv">' +
+        pairs
+          .map(function (p, i) {
+            if (editable && isEditableMoneyValue(p.val)) {
+              const num = escapeHtml(stripLeadingDollar(p.val));
+              return (
+                '<div>' +
+                escapeHtml(p.key) +
+                '</div><div class="kv-money-wrap" data-money-wrap="1">' +
+                '<span class="mt-currency-prefix">$</span>' +
+                '<span class="kv-val mt-money-value" data-editable="1" data-section="' +
+                section +
+                '" data-step="' +
+                stepNum +
+                '" data-kv="' +
+                i +
+                '">' +
+                num +
+                '</span></div>'
+              );
+            }
+            return (
+              '<div>' +
+              escapeHtml(p.key) +
+              '</div><div class="kv-val" data-editable="1" data-section="' +
+              section +
+              '" data-step="' +
+              stepNum +
+              '" data-kv="' +
+              i +
+              '">' +
+              escapeHtml(p.val) +
+              '</div>'
+            );
+          })
+          .join('') +
+        '</div>'
+      );
+    }
+
+    function renderStepCard(step, goldenStep) {
+      const live = editableByStep.get(step.stepNum);
+      if (!live) return '';
+      const lh = live.ledger;
+      const gh = goldenStep ? parseVerticalLedger(goldenStep.ledgerRaw) : null;
+      const amountA = live.amount;
+      const amountG = goldenStep ? parseAmountBreakdownVertical(goldenStep.amountRaw) : null;
+      const pdfA = live.pdf || [];
+      const pdfG = goldenStep && goldenStep.pdfRaw ? parsePdfPreviewVertical(goldenStep.pdfRaw) : null;
+
+      let html = '<section class="step-card" data-step-num="' + step.stepNum + '"><h2>Step ' + step.stepNum + '</h2>';
+      html += '<div class="step-desc">' + escapeHtml(live.desc) + '</div>';
+
+      html += '<div class="section"><h3>Payments / Charges</h3>';
+      if (goldenStep) {
+        html += '<div class="compare-grid">';
+        html += '<div><strong>Actual</strong> <span class="hint-edit">Double-click a cell to edit</span>' + renderLedgerTable(lh.headers, lh.rows, step.stepNum, 'actual') + '</div>';
+        html += '<div><strong>Golden</strong>' + renderLedgerTable(gh.headers, gh.rows, step.stepNum, 'golden') + '</div>';
+        html += '</div>';
+      } else {
+        html += '<p class="hint-edit">Double-click a cell below to edit.</p>' + renderLedgerTable(lh.headers, lh.rows, step.stepNum, 'actual');
+      }
+      html += '</div>';
+
+      html += '<div class="section"><h3>Amount breakdown</h3>';
+      if (goldenStep) {
+        html += '<div class="compare-grid">';
+        html += '<div><strong>Actual</strong>' + renderKV(amountA, step.stepNum, 'amount', true) + '</div>';
+        html += '<div><strong>Golden</strong>' + renderKV(amountG, step.stepNum, 'amount', false) + '</div></div>';
+      } else {
+        html += renderKV(amountA, step.stepNum, 'amount', true);
+      }
+      html += '</div>';
+
+      if (live.hasPdf && live.pdf) {
+        html += '<div class="section"><h3>Bill PDF preview</h3>';
+        if (goldenStep && goldenStep.pdfRaw) {
+          html += '<div class="compare-grid">';
+          html += '<div><strong>Actual</strong>' + renderKV(pdfA, step.stepNum, 'pdf', true) + '</div>';
+          html += '<div><strong>Golden</strong>' + renderKV(pdfG, step.stepNum, 'pdf', false) + '</div></div>';
+        } else {
+          html += renderKV(pdfA, step.stepNum, 'pdf', true);
+        }
+        html += '</div>';
+      }
+
+      html += '</section>';
+      return html;
+    }
+
+    function propagateLedgerCellToAllSteps(row, col, text) {
+      stepOrder.forEach(function (sn) {
+        const d = editableByStep.get(sn);
+        if (!d || !d.ledger || !Array.isArray(d.ledger.rows)) return;
+        const r = d.ledger.rows[row];
+        if (!r || col < 0 || col >= r.length) return;
+        r[col] = text;
+      });
+    }
+
+    function syncLedgerCellsInDom(row, col, fullText) {
+      const root = document.getElementById('root');
+      if (!root) return;
+      const selSpan =
+        'span.mt-money-value[data-editable="1"][data-section="ledger"][data-row="' +
+        row +
+        '"][data-col="' +
+        col +
+        '"]';
+      const spans = root.querySelectorAll(selSpan);
+      if (spans.length) {
+        spans.forEach(function (el) {
+          if (el.getAttribute('contenteditable') === 'true') return;
+          el.textContent = stripLeadingDollar(fullText);
+        });
+        return;
+      }
+      const selTd =
+        'td[data-editable="1"][data-section="ledger"][data-row="' + row + '"][data-col="' + col + '"]';
+      root.querySelectorAll(selTd).forEach(function (el) {
+        if (el.getAttribute('contenteditable') === 'true') return;
+        el.textContent = fullText;
+      });
+    }
+
+    function applyKvEdit(stepNum, section, index, text) {
+      const d = editableByStep.get(stepNum);
+      if (!d) return;
+      const list = section === 'pdf' ? d.pdf : d.amount;
+      if (!list || !list[index]) return;
+      list[index].val = text;
+    }
+
+    function bindEditHandlers(root) {
+      root.addEventListener('dblclick', function (e) {
+        let t = e.target;
+        if (t && t.closest) {
+          const mw = t.closest('td[data-money-wrap], .kv-money-wrap');
+          if (mw && !(t.getAttribute && t.getAttribute('data-editable') === '1')) {
+            const inner = mw.querySelector('.mt-money-value[data-editable="1"]');
+            if (inner) t = inner;
+          }
+        }
+        if (!t || !t.getAttribute) return;
+        if (t.getAttribute('data-editable') !== '1') return;
+        if (t.getAttribute('contenteditable') === 'true') return;
+        t.setAttribute('contenteditable', 'true');
+        t.focus();
+        try {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(t);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        } catch (err) {
+          /* ignore */
+        }
+      });
+
+      root.addEventListener(
+        'blur',
+        function (e) {
+          const t = e.target;
+          if (!t || !t.getAttribute || t.getAttribute('data-editable') !== '1') return;
+          if (t.getAttribute('contenteditable') !== 'true') return;
+          const textRaw = cellText(t);
+          const isMoneyCell = t.classList && t.classList.contains('mt-money-value');
+          const stored = isMoneyCell ? moneyValueFromNumericPart(textRaw) : textRaw;
+          if (isMoneyCell) {
+            t.textContent = stripLeadingDollar(stored);
+          } else {
+            t.textContent = stored;
+          }
+          t.removeAttribute('contenteditable');
+          const step = parseInt(t.getAttribute('data-step'), 10);
+          const section = t.getAttribute('data-section');
+          if (section === 'ledger') {
+            const row = parseInt(t.getAttribute('data-row'), 10);
+            const col = parseInt(t.getAttribute('data-col'), 10);
+            propagateLedgerCellToAllSteps(row, col, stored);
+            syncLedgerCellsInDom(row, col, stored);
+          } else if (section === 'amount' || section === 'pdf') {
+            const ki = parseInt(t.getAttribute('data-kv'), 10);
+            applyKvEdit(step, section, ki, stored);
+          }
+        },
+        true
+      );
+
+      root.addEventListener('keydown', function (e) {
+        const t = e.target;
+        if (!t || !t.getAttribute || t.getAttribute('data-editable') !== '1') return;
+        if (t.getAttribute('contenteditable') !== 'true') return;
+        if (t.classList.contains('mt-money-value') && e.key === '$') {
+          e.preventDefault();
+          return;
+        }
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          t.blur();
+        }
+      });
+    }
+
+    function renderAll(actualText, goldenText) {
+      const root = document.getElementById('root');
+      const hint = document.getElementById('exportHint');
+      try {
+        const stepsA = parseDocument(actualText);
+        const stepsG = goldenText ? parseDocument(goldenText) : [];
+        const byNum = {};
+        stepsG.forEach(function (s) {
+          byNum[s.stepNum] = s;
+        });
+        if (!stepsA.length) {
+          rebuildEditableState([]);
+          root.innerHTML = '<p class="err">No steps found. Expected blocks starting with <code>Step 1:</code> separated by blank lines.</p>';
+          if (hint) hint.textContent = 'Load an actual results file first.';
+          return;
+        }
+        rebuildEditableState(stepsA);
+        root.innerHTML = stepsA.map(function (s) {
+          return renderStepCard(s, byNum[s.stepNum] || null);
+        }).join('');
+        bindEditHandlers(root);
+        if (hint) hint.textContent = 'Ledger: same row/column syncs across steps. Money: $ is fixed, edit digits only. Export → new tab.';
+      } catch (err) {
+        root.innerHTML = '<p class="err">' + escapeHtml(err.message || String(err)) + '</p>';
+        if (hint) hint.textContent = 'Fix the file and reload.';
+      }
+    }
+
+    function readFile(file) {
+      return new Promise(function (resolve, reject) {
+        const r = new FileReader();
+        r.onload = function () {
+          resolve(String(r.result || ''));
+        };
+        r.onerror = function () {
+          reject(r.error);
+        };
+        r.readAsText(file, 'utf-8');
+      });
+    }
+
+    let actualText = '';
+    let goldenText = '';
+
+    document.getElementById('fileActual').addEventListener('change', async function (e) {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      actualText = await readFile(f);
+      renderAll(actualText, goldenText);
+    });
+    document.getElementById('fileGolden').addEventListener('change', async function (e) {
+      const f = e.target.files && e.target.files[0];
+      goldenText = f ? await readFile(f) : '';
+      renderAll(actualText, goldenText);
+    });
+
+    document.getElementById('btnExportCustom').addEventListener('click', function () {
+      const text = buildExportText();
+      if (!text.trim()) {
+        alert('Load an actual results file first, then try export again.');
+        return;
+      }
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const w = window.open(url, '_blank', 'noopener,noreferrer');
+      if (w) {
+        try {
+          w.document.title = 'custom_results.txt';
+        } catch (e1) {
+          /* cross-origin or blocked */
+        }
+      }
+      setTimeout(function () {
+        URL.revokeObjectURL(url);
+      }, 60000);
+    });
+  </script>
+</body>
+</html>

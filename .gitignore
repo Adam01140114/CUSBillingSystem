@@ -4,5 +4,5 @@ firebaseAdminKey.json
 /public/example.html
 /public/example2.html 
 /public/dev-scenario.json
-# Local Firebase login for tools/run-billing-scenario-local.mjs (never commit)
+# Local Firebase login for Test Scripts/test_script1.mjs / test_script2.mjs (never commit)
 tools/billing-test.local.json
