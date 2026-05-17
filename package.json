@@ -15,6 +15,7 @@
     "test_script1": "node \"Test Scripts/test_script1.mjs\"",
     "test_script2": "node \"Test Scripts/test_script2.mjs\"",
     "test:master:susan": "node \"Master Test/susan_master_test_script.mjs\"",
+    "test:master:susan:offline": "node tools/run-master-test-offline.mjs",
     "format:validation-report": "node tools/format-validation-report.mjs"
   },
   "dependencies": {

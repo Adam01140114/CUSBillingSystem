@@ -56,7 +56,12 @@
       max-width: 280px;
       font-size: 0.85rem;
     }
-    main { padding: 1rem 1.5rem 1rem; max-width: 1200px; margin: 0 auto; }
+    main {
+      padding: 1rem clamp(1rem, 2vw, 2rem);
+      max-width: none;
+      width: 100%;
+      margin: 0 auto;
+    }
     .step-card {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -90,23 +95,49 @@
       letter-spacing: 0.05em;
       color: var(--accent);
     }
+    .mt-ledger-table-scroll {
+      max-height: min(70vh, 560px);
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-top: 0.35rem;
+    }
     table.data {
-      width: 100%;
-      border-collapse: collapse;
+      width: max-content;
+      min-width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
       font-size: 0.85rem;
     }
-    table.data th, table.data td {
+    table.data th,
+    table.data td {
       border: 1px solid var(--border);
-      padding: 0.45rem 0.6rem;
+      padding: 0.5rem 0.85rem;
       text-align: left;
+      white-space: nowrap;
+      vertical-align: top;
     }
     table.data thead th {
-      background: rgba(255,255,255,0.04);
+      position: sticky;
+      top: 0;
+      z-index: 4;
+      background: #1e2a3b;
       color: var(--muted);
       font-weight: 600;
       font-size: 0.72rem;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+      box-shadow: 0 1px 0 var(--border);
+    }
+    table.data thead th:last-child {
+      z-index: 5;
     }
     table.data tbody tr:nth-child(even) { background: rgba(0,0,0,0.15); }
+    table.data tbody tr.mt-ledger-status-row td {
+      background: rgba(61, 156, 249, 0.1);
+      border-top: 2px solid var(--accent);
+      font-weight: 600;
+    }
     table.data td[data-editable="1"] {
       cursor: cell;
       user-select: text;
@@ -136,6 +167,23 @@
       background: rgba(61, 156, 249, 0.08);
       border-radius: 2px;
     }
+    span.mt-na-value[data-editable="1"] {
+      cursor: text;
+      min-width: 2ch;
+      display: inline-block;
+      color: var(--warn);
+      font-weight: 600;
+    }
+    span.mt-na-value[data-editable="1"]:hover {
+      background: rgba(251, 191, 36, 0.12);
+      border-radius: 2px;
+    }
+    span.mt-na-value[contenteditable="true"] {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+      border-radius: 2px;
+      background: rgba(61, 156, 249, 0.12);
+    }
     span.mt-money-value[contenteditable="true"] {
       outline: 2px solid var(--accent);
       outline-offset: 1px;
@@ -164,10 +212,10 @@
     }
     .compare-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 1.25rem;
     }
-    @media (max-width: 900px) {
+    @media (max-width: 1100px) {
       .compare-grid { grid-template-columns: 1fr; }
     }
     .diff-flag {
@@ -181,6 +229,41 @@
     }
     .err { color: #f87171; font-size: 0.9rem; padding: 1rem; }
     .hint-edit { font-size: 0.75rem; color: var(--muted); margin-top: 0.35rem; }
+    .mt-section-h3 {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .mt-test-status {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.25rem;
+      height: 1.25rem;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .mt-test-ok {
+      color: #052e16;
+      background: var(--ok);
+    }
+    .mt-test-fail {
+      color: #450a0a;
+      background: #f87171;
+    }
+    .mt-test-warn {
+      color: #78350f;
+      background: rgba(251, 191, 36, 0.45);
+      border: 1px solid var(--warn);
+    }
+    .mt-test-status-cell {
+      text-align: center;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
     .export-bar {
       position: fixed;
       left: 0;
@@ -260,12 +343,122 @@
       padding: 0.2rem 0.55rem;
       cursor: pointer;
     }
+    .mt-past-due-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .mt-past-due-actions button {
+      font: inherit;
+      font-size: 0.8rem;
+      padding: 0.35rem 0.7rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: rgba(61, 156, 249, 0.15);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .mt-past-due-actions button:hover:not(:disabled) {
+      background: rgba(61, 156, 249, 0.28);
+    }
+    .mt-past-due-actions button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .mt-past-due-actions button.mt-btn-flash-ok {
+      border-color: var(--ok);
+      background: rgba(52, 211, 153, 0.35);
+    }
+    .mt-past-due-feedback {
+      font-size: 0.8rem;
+      padding: 0.35rem 0.65rem;
+      border-radius: 6px;
+      align-self: center;
+      flex: 1 1 100%;
+      min-height: 1.25rem;
+    }
+    .mt-past-due-feedback.ok {
+      background: rgba(52, 211, 153, 0.18);
+      color: var(--ok);
+    }
+    .mt-past-due-feedback.err {
+      background: rgba(248, 113, 113, 0.18);
+      color: #f87171;
+    }
+    .mt-past-due-feedback.hidden {
+      display: none;
+    }
+    .mt-clipboard-toast {
+      position: fixed;
+      bottom: 4.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10050;
+      padding: 0.55rem 1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .mt-clipboard-toast.ok {
+      background: #065f46;
+      color: #ecfdf5;
+      border: 1px solid var(--ok);
+    }
+    .mt-clipboard-toast.err {
+      background: #7f1d1d;
+      color: #fef2f2;
+      border: 1px solid #f87171;
+    }
+    .mt-clipboard-toast.hidden {
+      opacity: 0;
+    }
+    td.mt-past-due-selected {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    .mt-past-due-cell-status {
+      display: inline-flex;
+      vertical-align: middle;
+      margin-right: 0.2rem;
+    }
+    .mt-money-td .mt-past-due-cell-wrap {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.15rem;
+    }
+    .mt-customer-info {
+      background: rgba(61, 156, 249, 0.08);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 1rem;
+    }
+    .mt-customer-info h3 {
+      margin: 0 0 0.5rem;
+      font-size: 0.95rem;
+      color: var(--accent);
+    }
+    .mt-customer-info .kv {
+      max-width: none;
+    }
+    .mt-ledger-warn-cell {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>Master Test viewer</h1>
-    <p>Import <code>test_script_results.txt</code> (actual run) and optionally <code>test_script_success_results.txt</code> (golden). The master test uses <strong>9 steps</strong>. Double-click <strong>Actual</strong> cells to edit; use <strong>Past Due Details</strong> on ledger Past Due cells for a draggable popup. Export → new tab.</p>
+    <p>Import <code>test_script_results.txt</code> (actual run) and optionally <code>test_script_success_results.txt</code> (golden). The master test uses <strong>9 steps</strong>. Double-click <strong>Actual</strong> cells to edit (including <strong>N/A</strong>); use <strong>Past Due Details</strong> on ledger Past Due cells for a draggable popup. Export → new tab.</p>
   </header>
   <div class="toolbar">
     <div class="field">
@@ -283,15 +476,25 @@
     <div class="mt-modal-panel" id="pastDueModalPanel">
       <div class="mt-modal-handle" id="pastDueModalHandle">
         <div>
-          <h4>Past Due details</h4>
+          <h4 class="mt-section-h3">
+            <span id="pastDueModalStatus" class="mt-test-status mt-test-ok" title="Past due line components" aria-label="Pass">✓</span>
+            Past Due details
+          </h4>
           <p class="mt-past-due-label" id="pastDueModalLabel"></p>
         </div>
         <button type="button" class="mt-modal-close" id="pastDueModalClose">Close</button>
       </div>
-      <p class="hint-edit" style="margin:0 0 0.5rem">Double-click a value to edit ($ stays fixed).</p>
+      <div class="mt-past-due-actions">
+        <button type="button" id="pastDueModalCopy">Copy configuration</button>
+        <button type="button" id="pastDueModalPaste" disabled>Paste configuration</button>
+        <span id="pastDueModalFeedback" class="mt-past-due-feedback hidden" role="status" aria-live="polite"></span>
+      </div>
+      <p class="hint-edit" style="margin:0 0 0.5rem">Double-click a value to edit ($ stays fixed). Modal: Copy/Paste configuration moves all breakdown fields. Ledger: click a Past Due cell, then Ctrl+C / Ctrl+V (Cmd on Mac) to copy the column value. Changing Past due amount, Late Fees, Tax Codes, PUC Surcharge, Sewer Charge, or Credit recalculates Total (Past Due line) and syncs the ledger Past Due column. ✓ when components sum to Total (Past Due line).</p>
       <div class="kv" id="pastDueModalKv"></div>
     </div>
   </div>
+
+  <div id="mtClipboardToast" class="mt-clipboard-toast hidden" role="status" aria-live="polite"></div>
 
   <footer class="export-bar">
     <button type="button" id="btnExportCustom">Export custom_results.txt (new tab)</button>
@@ -312,6 +515,7 @@
 
     const PAST_DUE_DETAIL_KEYS = [
       'Past due amount',
+      'Late Fees',
       'Tax Codes',
       'PUC Surcharge',
       'Sewer Charge',
@@ -319,9 +523,20 @@
       'Total (Past Due line)'
     ];
 
+    /** Component lines that sum to Total (Past Due line) when edited in the popup. */
+    const PAST_DUE_COMPONENT_SUM_KEYS = [
+      'Past due amount',
+      'Late Fees',
+      'Tax Codes',
+      'PUC Surcharge',
+      'Sewer Charge',
+      'Credit'
+    ];
+
     function normalizePastDueDetailKey(k) {
       const s = String(k || '').trim();
       if (s === 'Puc surcharge') return 'PUC Surcharge';
+      if (/^late\s*fees?$/i.test(s)) return 'Late Fees';
       return s;
     }
 
@@ -417,29 +632,51 @@
         .join('\n\n');
     }
 
+    function isLedgerDateCell(value) {
+      return /^\d{1,2}\/\d{1,2}\/\d{4}/.test(String(value || '').trim());
+    }
+
     function parseVerticalLedger(raw) {
       const nonEmpty = normalizeLines(raw).split('\n');
       const cleaned = [];
       for (const line of nonEmpty) {
-        const t = line.trim();
-        if (t !== '') cleaned.push(t);
+        cleaned.push(String(line).trim());
       }
       if (cleaned.length === 0) return { headers: [], rows: [] };
       let startData = -1;
       for (let i = 0; i < cleaned.length; i++) {
-        if (/^\d{1,2}\/\d{1,2}\/\d{4}/.test(cleaned[i])) {
+        if (isLedgerDateCell(cleaned[i])) {
           startData = i;
           break;
         }
       }
       if (startData <= 0) {
-        return { headers: cleaned, rows: [] };
+        return { headers: cleaned.filter(function (l) {
+          return l !== '';
+        }), rows: [] };
       }
-      const headers = cleaned.slice(0, startData);
-      const n = startData;
+      const headers = cleaned.slice(0, startData).filter(function (l) {
+        return l !== '' && l !== ':';
+      });
+      const n = headers.length;
+      const dataLines = cleaned.slice(startData);
       const rows = [];
-      for (let i = startData; i + n <= cleaned.length; i += n) {
-        rows.push(cleaned.slice(i, i + n));
+      let current = [];
+      for (let i = 0; i < dataLines.length; i++) {
+        const line = dataLines[i];
+        if (isLedgerDateCell(line) && current.length) {
+          while (current.length < n) current.push('');
+          rows.push(current.slice(0, n));
+          current = [line];
+        } else if (isLedgerDateCell(line)) {
+          current = [line];
+        } else {
+          current.push(line);
+        }
+      }
+      if (current.length) {
+        while (current.length < n) current.push('');
+        rows.push(current.slice(0, n));
       }
       return { headers, rows };
     }
@@ -563,8 +800,13 @@
       return /^-?\d{1,3}(,\d{3})*(\.\d+)?$/.test(t) || /^-?\d+(\.\d+)?$/.test(t);
     }
 
-    /** Stored ledger cell text (matches import: 0, 178.49, or $178.49). */
+    function isLedgerNaValue(s) {
+      return /^n\/?a$/i.test(String(s == null ? '' : s).trim());
+    }
+
+    /** Stored ledger cell text (matches import: 0, 178.49, $178.49, or N/A). */
     function ledgerCellStoredMoney(text) {
+      if (isLedgerNaValue(text)) return 'N/A';
       const m = moneyValueFromNumericPart(
         isEditableMoneyValue(text) ? stripLeadingDollar(text) : text
       );
@@ -572,6 +814,14 @@
       if (isNaN(n) || Math.abs(n) < 0.005) return '0';
       if (Math.abs(n - Math.round(n)) < 0.005) return String(Math.round(n));
       return n.toFixed(2);
+    }
+
+    function ledgerCellStoredValue(text) {
+      if (isLedgerNaValue(text)) return 'N/A';
+      if (looksLikeMoneyValue(text) || isEditableMoneyValue(text)) {
+        return ledgerCellStoredMoney(text);
+      }
+      return String(text == null ? '' : text).trim();
     }
 
     function stripLeadingDollar(s) {
@@ -699,6 +949,266 @@
       );
     }
 
+    function mtLog(tag, payload) {
+      try {
+        if (payload !== undefined) {
+          console.log('[MasterTestViewer][' + tag + ']', payload);
+        } else {
+          console.log('[MasterTestViewer][' + tag + ']');
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
+    let mtClipboardToastTimer = null;
+
+    function showClipboardToast(message, ok) {
+      const el = document.getElementById('mtClipboardToast');
+      if (!el) return;
+      el.textContent = message;
+      el.classList.remove('hidden', 'ok', 'err');
+      el.classList.add(ok ? 'ok' : 'err');
+      el.style.opacity = '1';
+      if (mtClipboardToastTimer) clearTimeout(mtClipboardToastTimer);
+      mtClipboardToastTimer = setTimeout(function () {
+        el.classList.add('hidden');
+        el.style.opacity = '0';
+      }, 2600);
+      mtLog(ok ? 'toast:ok' : 'toast:err', message);
+    }
+
+    function showPastDueModalFeedback(message, ok) {
+      const el = document.getElementById('pastDueModalFeedback');
+      if (!el) {
+        showClipboardToast(message, ok);
+        return;
+      }
+      el.textContent = message;
+      el.classList.remove('hidden', 'ok', 'err');
+      el.classList.add(ok ? 'ok' : 'err');
+      mtLog(ok ? 'modalFeedback:ok' : 'modalFeedback:err', message);
+    }
+
+    function buildPastDueLabelForLedgerRow(stepNum, rowIndex) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.rows[rowIndex]) return '';
+      const row = d.ledger.rows[rowIndex];
+      const headers = d.ledger.headers;
+      const dateCol = findLedgerColByHeaderPatterns(headers, [/^date\s*&\s*time$/i, /^date$/i]);
+      const typeCol = findLedgerColByHeaderPatterns(headers, [/^type$/i]);
+      const subCol = findLedgerColByHeaderPatterns(headers, [/^subtype$/i]);
+      const parts = [];
+      if (dateCol >= 0) parts.push(String(row[dateCol] || '').trim());
+      if (typeCol >= 0) parts.push(String(row[typeCol] || '').trim());
+      if (subCol >= 0) parts.push(String(row[subCol] || '').trim());
+      return parts.filter(Boolean).join(' · ');
+    }
+
+    function ensurePastDueEntryForRow(stepNum, rowIndex) {
+      let entry = getPastDueEntryForRow(stepNum, rowIndex);
+      if (entry) return entry;
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.rows[rowIndex]) return null;
+      if (!Array.isArray(d.pastDue)) d.pastDue = [];
+      const col = findPastDueColIndex(d.ledger.headers);
+      const totalVal =
+        col >= 0 ? ledgerCellStoredValue(d.ledger.rows[rowIndex][col]) : '$0';
+      entry = {
+        rowIndex: rowIndex,
+        label: buildPastDueLabelForLedgerRow(stepNum, rowIndex),
+        pairs: PAST_DUE_DETAIL_KEYS.map(function (k) {
+          return {
+            key: k,
+            val: k === 'Total (Past Due line)' ? totalVal : '$0'
+          };
+        })
+      };
+      d.pastDue.push(entry);
+      mtLog('ensurePastDueEntryForRow:created', {
+        stepNum: stepNum,
+        rowIndex: rowIndex,
+        label: entry.label
+      });
+      return entry;
+    }
+
+    function pastDueLabelToFingerprint(label) {
+      const t = String(label || '').trim();
+      if (!t) return '';
+      if (t.indexOf('·') >= 0) {
+        const parts = t.split('·').map(function (s) {
+          return s.trim();
+        });
+        if (parts.length >= 3) {
+          return (
+            normalizeLedgerDateForFingerprint(parts[0]) +
+            '\u0001' +
+            normalizeFingerprintText(parts[1]) +
+            '\u0001' +
+            normalizeFingerprintText(parts[2])
+          );
+        }
+        return parts.map(normalizeFingerprintText).join('\u0001');
+      }
+      return normalizeFingerprintText(t);
+    }
+
+    function normalizeFingerprintText(value) {
+      return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+    }
+
+    /** Canonical date/time for row matching (handles date-only vs full datetime). */
+    function normalizeLedgerDateForFingerprint(raw) {
+      let s = normalizeFingerprintText(raw);
+      if (!s) return '';
+      s = s.replace(/\ba\.?\s*m\.?\b/g, 'am').replace(/\bp\.?\s*m\.?\b/g, 'pm');
+      const m = s.match(/^(\d{1,2}\/\d{1,2}\/\d{4})(?:\s+(\d{1,2}):(\d{2})\s*(am|pm))?/);
+      if (!m) return s;
+      const date = m[1];
+      if (!m[2]) return date;
+      let hh = parseInt(m[2], 10);
+      const mm = m[3];
+      const ap = m[4];
+      if (ap === 'pm' && hh < 12) hh += 12;
+      if (ap === 'am' && hh === 12) hh = 0;
+      return date + ' ' + String(hh).padStart(2, '0') + ':' + mm + ' am';
+    }
+
+    function ledgerRowFingerprint(row, headers) {
+      const dateCol = findLedgerColByHeaderPatterns(headers, [/^date\s*&\s*time$/i, /^date$/i]);
+      const typeCol = findLedgerColByHeaderPatterns(headers, [/^type$/i]);
+      const subCol = findLedgerColByHeaderPatterns(headers, [/^subtype$/i]);
+      const parts = [];
+      if (dateCol >= 0) parts.push(normalizeLedgerDateForFingerprint(row[dateCol]));
+      if (typeCol >= 0) parts.push(normalizeFingerprintText(row[typeCol]));
+      if (subCol >= 0) parts.push(normalizeFingerprintText(row[subCol]));
+      return parts.join('\u0001');
+    }
+
+    function getLedgerRowFingerprint(stepNum, rowIndex) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.rows[rowIndex]) return '';
+      return ledgerRowFingerprint(d.ledger.rows[rowIndex], d.ledger.headers);
+    }
+
+    function findAllLedgerRowIndicesByFingerprint(stepNum, fingerprint) {
+      if (!fingerprint) return [];
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger) return [];
+      const headers = d.ledger.headers;
+      const out = [];
+      for (let i = 0; i < d.ledger.rows.length; i++) {
+        if (ledgerRowFingerprint(d.ledger.rows[i], headers) === fingerprint) out.push(i);
+      }
+      return out;
+    }
+
+    /** Which occurrence of this fingerprint is rowIndex (0 = first Status Update, 1 = second, …). */
+    function getLedgerRowMatchOrdinal(stepNum, rowIndex) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.rows[rowIndex]) return 0;
+      const fp = ledgerRowFingerprint(d.ledger.rows[rowIndex], d.ledger.headers);
+      let ordinal = 0;
+      for (let i = 0; i < rowIndex; i++) {
+        if (ledgerRowFingerprint(d.ledger.rows[i], d.ledger.headers) === fp) ordinal++;
+      }
+      return ordinal;
+    }
+
+    function findLedgerRowIndexByFingerprint(stepNum, fingerprint, ordinal) {
+      const matches = findAllLedgerRowIndicesByFingerprint(stepNum, fingerprint);
+      if (!matches.length) return -1;
+      const ord = ordinal == null || isNaN(ordinal) ? 0 : ordinal;
+      if (matches[ord] != null) return matches[ord];
+      return matches[matches.length - 1];
+    }
+
+    /** Fingerprint + ordinal first; same row index if cumulative ledger rows align. */
+    function findLedgerRowIndexForSync(targetStepNum, fingerprint, ordinal, sourceRowIndex) {
+      const ri = findLedgerRowIndexByFingerprint(targetStepNum, fingerprint, ordinal);
+      if (ri >= 0) return ri;
+      const d = editableByStep.get(targetStepNum);
+      if (!d || !d.ledger || sourceRowIndex == null || isNaN(sourceRowIndex)) return -1;
+      if (sourceRowIndex >= 0 && sourceRowIndex < d.ledger.rows.length) return sourceRowIndex;
+      return -1;
+    }
+
+    function resolveLedgerColumnIndex(targetStepNum, sourceStepNum, sourceCol) {
+      const src = editableByStep.get(sourceStepNum);
+      const tgt = editableByStep.get(targetStepNum);
+      if (!src || !tgt || !src.ledger || !tgt.ledger || sourceCol < 0) return -1;
+      const header = String(src.ledger.headers[sourceCol] || '').trim();
+      if (!header) return sourceCol;
+      const lower = header.toLowerCase();
+      for (let i = 0; i < tgt.ledger.headers.length; i++) {
+        if (String(tgt.ledger.headers[i] || '').trim().toLowerCase() === lower) return i;
+      }
+      return sourceCol < tgt.ledger.headers.length ? sourceCol : -1;
+    }
+
+    function getPastDueEntryForFingerprint(stepNum, fingerprint, ordinal) {
+      if (!fingerprint) return null;
+      const ri = findLedgerRowIndexByFingerprint(stepNum, fingerprint, ordinal);
+      if (ri >= 0) {
+        const byRow = getPastDueEntryForRow(stepNum, ri);
+        if (byRow) return byRow;
+      }
+      const d = editableByStep.get(stepNum);
+      if (!d || !Array.isArray(d.pastDue)) return null;
+      const matches = d.pastDue.filter(function (e) {
+        return pastDueLabelToFingerprint(e.label) === fingerprint;
+      });
+      if (!matches.length) return null;
+      const ord = ordinal == null || isNaN(ordinal) ? 0 : ordinal;
+      if (matches[ord]) return matches[ord];
+      return matches[matches.length - 1];
+    }
+
+    /** Same logical ledger row (date + type + subtype) across every step. */
+    function propagateLedgerCellToAllSteps(sourceStepNum, sourceRow, col, text) {
+      const fp = getLedgerRowFingerprint(sourceStepNum, sourceRow);
+      if (!fp || col < 0) return fp;
+      const ordinal = getLedgerRowMatchOrdinal(sourceStepNum, sourceRow);
+      const ledgerStored = ledgerCellStoredValue(text);
+      stepOrder.forEach(function (sn) {
+        const ri = findLedgerRowIndexForSync(sn, fp, ordinal, sourceRow);
+        if (ri < 0) return;
+        const targetCol = resolveLedgerColumnIndex(sn, sourceStepNum, col);
+        if (targetCol < 0) return;
+        const tgtHeaders =
+          editableByStep.get(sn) && editableByStep.get(sn).ledger
+            ? editableByStep.get(sn).ledger.headers
+            : ledgerHeadersFromAnyStep();
+        const pastDueCol = findPastDueColIndex(tgtHeaders);
+        applyLedgerCellEdit(sn, ri, targetCol, ledgerStored);
+        syncLedgerCellsInDom(sn, ri, targetCol, ledgerStored, {
+          pastDueCol: targetCol === pastDueCol
+        });
+        if (targetCol === pastDueCol) {
+          syncPastDueTotalLineOnly(sn, ri, text);
+        }
+      });
+      return fp;
+    }
+
+    function refreshValidationForFingerprint(fingerprint) {
+      if (!fingerprint) return;
+      stepOrder.forEach(function (sn) {
+        findAllLedgerRowIndicesByFingerprint(sn, fingerprint).forEach(function (ri) {
+          refreshLedgerRowAndDependents(sn, ri);
+        });
+        refreshLedgerPastDueCellStatusInDom(sn);
+        refreshLedgerBalanceAfterCellStatusInDom(sn);
+        refreshLedgerAmountChargedCellStatusInDom(sn);
+        refreshSectionValidationInDom(sn);
+      });
+      refreshPastDueModalValidationInDom();
+    }
+
     function ledgerHeadersFromAnyStep() {
       for (let i = 0; i < stepOrder.length; i++) {
         const d = editableByStep.get(stepOrder[i]);
@@ -718,6 +1228,1083 @@
         }
       }
       return -1;
+    }
+
+    const MONEY_EPS = 0.02;
+
+    function parseMoneyNumber(val) {
+      if (val == null || val === '') return 0;
+      if (/^n\/?a$/i.test(String(val).trim())) return 0;
+      const raw = isEditableMoneyValue(val) ? stripLeadingDollar(val) : String(val);
+      const n = parseFloat(String(raw).replace(/,/g, '').replace(/[^0-9.-]/g, ''));
+      if (isNaN(n)) return 0;
+      return Math.round(n * 100) / 100;
+    }
+
+    function isLedgerStatusUpdateRow(row, headers) {
+      const typeCol = findLedgerColByHeaderPatterns(headers, [/^type$/i]);
+      const subCol = findLedgerColByHeaderPatterns(headers, [/^subtype$/i]);
+      if (typeCol >= 0 && /^status\s*update$/i.test(String(row[typeCol] || '').trim())) return true;
+      if (subCol >= 0 && /^current\s*status$/i.test(String(row[subCol] || '').trim())) return true;
+      return false;
+    }
+
+    function isLedgerChargeRow(row, headers) {
+      const typeCol = findLedgerColByHeaderPatterns(headers, [/^type$/i]);
+      if (typeCol < 0) return false;
+      return /^charge$/i.test(String(row[typeCol] || '').trim());
+    }
+
+    function isLedgerPaymentRow(row, headers) {
+      const typeCol = findLedgerColByHeaderPatterns(headers, [/^type$/i]);
+      if (typeCol < 0) return false;
+      return /^payment$/i.test(String(row[typeCol] || '').trim());
+    }
+
+    function isLedgerFreshStartPaymentRow(row, headers) {
+      if (!isLedgerPaymentRow(row, headers)) return false;
+      const subCol = findLedgerColByHeaderPatterns(headers, [/^subtype$/i]);
+      if (subCol < 0) return false;
+      return /fresh\s*start/i.test(String(row[subCol] || '').trim());
+    }
+
+    function isLedgerBilledCustomerRow(row, headers) {
+      const subCol = findLedgerColByHeaderPatterns(headers, [/^subtype$/i]);
+      if (subCol < 0) return false;
+      return /billed\s*customer/i.test(String(row[subCol] || '').trim());
+    }
+
+    function isLedgerLateFeeRow(row, headers) {
+      const subCol = findLedgerColByHeaderPatterns(headers, [/^subtype$/i]);
+      if (subCol < 0) return false;
+      return /late\s*fee/i.test(String(row[subCol] || '').trim());
+    }
+
+    function isLedgerPastDueAnchorRow(row, headers) {
+      if (isLedgerStatusUpdateRow(row, headers)) return false;
+      return isLedgerPaymentRow(row, headers) || isLedgerBilledCustomerRow(row, headers);
+    }
+
+    /** Index of nearest Charge · Billed Customer row strictly above rowIndex, or -1. */
+    function findNearestBilledCustomerChargeIndexAbove(rows, headers, rowIndex) {
+      if (!rows || rowIndex <= 0) return -1;
+      for (let j = rowIndex - 1; j >= 0; j--) {
+        if (isLedgerChargeRow(rows[j], headers) && isLedgerBilledCustomerRow(rows[j], headers)) {
+          return j;
+        }
+      }
+      return -1;
+    }
+
+    /**
+     * Billed Customer Past Due:
+     * Prior bill Balance After − payments between + late-fee Amount Charged rows between
+     * − Late Fee column on this bill row (fees between already appear on the new bill separately).
+     * Fresh cycle (Status Update $0 above): Past Due $0.
+     */
+    function expectedPastDueForBilledCustomerRow(rows, headers, rowIndex) {
+      if (isFreshCycleBilledCustomerRow(rows, headers, rowIndex)) {
+        return 0;
+      }
+      const c = ledgerMoneyCols(headers);
+      const anchorIdx = findNearestBilledCustomerChargeIndexAbove(rows, headers, rowIndex);
+      if (anchorIdx < 0) return 0;
+      const anchorBalance = ledgerCellMoney(rows[anchorIdx], c.balanceAfter);
+      const paymentsBetween = sumPaymentsBetweenRows(rows, headers, anchorIdx, rowIndex);
+      const lateFeesBetween = sumLateFeesBetweenRows(rows, headers, anchorIdx, rowIndex);
+      const lateOnBillRow =
+        c.lateFee >= 0 ? ledgerCellMoney(rows[rowIndex], c.lateFee) : 0;
+      return Math.round(
+        (anchorBalance - paymentsBetween + lateFeesBetween - lateOnBillRow) * 100
+      ) / 100;
+    }
+
+    function getDefaultCycleTotalForStep(stepNum) {
+      const ch =
+        computeCustomerDefaultCharges(stepNum) ||
+        (stepNum !== 1 ? computeCustomerDefaultCharges(1) : null);
+      return ch && typeof ch.total === 'number' ? ch.total : null;
+    }
+
+    function sumPaymentsBetweenRows(rows, headers, fromExclusive, toExclusive) {
+      let sum = 0;
+      for (let j = fromExclusive + 1; j < toExclusive; j++) {
+        if (!isLedgerPaymentRow(rows[j], headers)) continue;
+        sum += ledgerAmountPaidForEquation(rows[j], headers);
+      }
+      return Math.round(sum * 100) / 100;
+    }
+
+    /**
+     * Late-fee increment applied on a Charge · Late Fee row for roll-forward math.
+     * Prefer Amount Charged (this cycle's $5 fee); Late Fee column can show cumulative owed ($10).
+     */
+    function ledgerLateFeeIncrementForRollForward(row, headers) {
+      const c = ledgerMoneyCols(headers);
+      if (c.amountCharged >= 0) {
+        const raw = String(row[c.amountCharged] || '').trim();
+        if (!/^n\/?a$/i.test(raw)) {
+          return ledgerCellMoney(row, c.amountCharged);
+        }
+      }
+      if (c.lateFee >= 0) {
+        return ledgerCellMoney(row, c.lateFee);
+      }
+      return 0;
+    }
+
+    /** Sum late-fee increments on Charge · Late Fee rows strictly between two row indices. */
+    function sumLateFeesBetweenRows(rows, headers, fromExclusive, toExclusive) {
+      let sum = 0;
+      for (let j = fromExclusive + 1; j < toExclusive; j++) {
+        if (!isLedgerChargeRow(rows[j], headers) || !isLedgerLateFeeRow(rows[j], headers)) continue;
+        sum += ledgerLateFeeIncrementForRollForward(rows[j], headers);
+      }
+      return Math.round(sum * 100) / 100;
+    }
+
+    function billedCustomerAmountChargedForBalance(stepNum, rows, headers, rowIndex) {
+      const c = ledgerMoneyCols(headers);
+      const fallback = getDefaultCycleTotalForStep(stepNum);
+      if (c.amountCharged < 0) return fallback != null ? fallback : 0;
+      const raw = String(rows[rowIndex][c.amountCharged] || '').trim();
+      if (/^n\/?a$/i.test(raw)) return fallback != null ? fallback : 0;
+      return ledgerCellMoney(rows[rowIndex], c.amountCharged);
+    }
+
+    /** Ledger Balance After immediately before the first Billed Customer bill (usually $0 after Fresh start). */
+    function ledgerBalanceBeforeFirstBilledCustomer(rows, headers, rowIndex) {
+      const c = ledgerMoneyCols(headers);
+      if (!rows || rowIndex <= 0 || c.balanceAfter < 0) return 0;
+      for (let j = rowIndex - 1; j >= 0; j--) {
+        if (isLedgerPaymentRow(rows[j], headers) || isLedgerStatusUpdateRow(rows[j], headers)) {
+          return ledgerCellMoney(rows[j], c.balanceAfter);
+        }
+      }
+      return 0;
+    }
+
+    /**
+     * Billed Customer Balance After:
+     * First bill: Balance After on row above (e.g. $0 after Fresh start) + late fees + Amount Charged.
+     * Later bills: prior Billed Customer Balance After − payments between + late fees + Amount Charged.
+     */
+    function isFreshCycleBilledCustomerRow(rows, headers, rowIndex) {
+      if (!rows || rowIndex <= 0) return false;
+      const rowAbove = rows[rowIndex - 1];
+      if (!isLedgerStatusUpdateRow(rowAbove, headers)) return false;
+      const c = ledgerMoneyCols(headers);
+      return moneyNearlyEqual(ledgerCellMoney(rowAbove, c.balanceAfter), 0);
+    }
+
+    function expectedBalanceAfterForBilledCustomerRow(stepNum, rows, headers, rowIndex) {
+      const anchorIdx = findNearestBilledCustomerChargeIndexAbove(rows, headers, rowIndex);
+      const amountCharged = billedCustomerAmountChargedForBalance(
+        stepNum,
+        rows,
+        headers,
+        rowIndex
+      );
+      if (isFreshCycleBilledCustomerRow(rows, headers, rowIndex)) {
+        const c = ledgerMoneyCols(headers);
+        const lateOnRow = c.lateFee >= 0 ? ledgerCellMoney(rows[rowIndex], c.lateFee) : 0;
+        return Math.round((amountCharged + lateOnRow) * 100) / 100;
+      }
+      if (anchorIdx < 0) {
+        const priorBal = ledgerBalanceBeforeFirstBilledCustomer(rows, headers, rowIndex);
+        const lateFeesBetween = sumLateFeesBetweenRows(rows, headers, -1, rowIndex);
+        return Math.round((priorBal + lateFeesBetween + amountCharged) * 100) / 100;
+      }
+      const c = ledgerMoneyCols(headers);
+      const priorBal = ledgerCellMoney(rows[anchorIdx], c.balanceAfter);
+      const paymentsBetween = sumPaymentsBetweenRows(rows, headers, anchorIdx, rowIndex);
+      const lateFeesBetween = sumLateFeesBetweenRows(rows, headers, anchorIdx, rowIndex);
+      return Math.round(
+        (priorBal - paymentsBetween + lateFeesBetween + amountCharged) * 100
+      ) / 100;
+    }
+
+    function getBilledCustomerAmountChargedValidationMeta(stepNum, rows, headers, rowIndex) {
+      if (!rows || rowIndex < 0 || rowIndex >= rows.length) return null;
+      if (
+        !isLedgerChargeRow(rows[rowIndex], headers) ||
+        !isLedgerBilledCustomerRow(rows[rowIndex], headers)
+      ) {
+        return null;
+      }
+      const c = ledgerMoneyCols(headers);
+      if (c.amountCharged < 0) return null;
+      const defaultTotal = getDefaultCycleTotalForStep(stepNum);
+      if (defaultTotal == null) return null;
+      const raw = String(rows[rowIndex][c.amountCharged] || '').trim();
+      if (/^n\/?a$/i.test(raw)) {
+        return {
+          ok: false,
+          titleOk: 'Amount Charged = Default total (Sewer + Tax)',
+          titleFail:
+            'Amount Charged is N/A on Billed Customer row (expected Default total $' +
+            defaultTotal.toFixed(2) +
+            ')'
+        };
+      }
+      const actual = ledgerCellMoney(rows[rowIndex], c.amountCharged);
+      const expected = Math.round(defaultTotal * 100) / 100;
+      const ok = moneyNearlyEqual(actual, expected);
+      return {
+        ok: ok,
+        titleOk: 'Amount Charged = Default total (Sewer + Tax) $' + expected.toFixed(2),
+        titleFail:
+          'Amount Charged should equal Default total (Sewer + Tax): expected $' +
+          expected.toFixed(2) +
+          ', got $' +
+          actual.toFixed(2)
+      };
+    }
+
+    function getBilledCustomerBalanceAfterValidationMeta(stepNum, rows, headers, rowIndex) {
+      if (!rows || rowIndex < 0 || rowIndex >= rows.length) return null;
+      if (
+        !isLedgerChargeRow(rows[rowIndex], headers) ||
+        !isLedgerBilledCustomerRow(rows[rowIndex], headers)
+      ) {
+        return null;
+      }
+      const c = ledgerMoneyCols(headers);
+      if (c.balanceAfter < 0) return null;
+      const expected = expectedBalanceAfterForBilledCustomerRow(stepNum, rows, headers, rowIndex);
+      const actual = ledgerCellMoney(rows[rowIndex], c.balanceAfter);
+      const ok = moneyNearlyEqual(actual, expected);
+      const anchorIdx = findNearestBilledCustomerChargeIndexAbove(rows, headers, rowIndex);
+      const amountCharged = billedCustomerAmountChargedForBalance(
+        stepNum,
+        rows,
+        headers,
+        rowIndex
+      );
+      let ruleDesc;
+      if (isFreshCycleBilledCustomerRow(rows, headers, rowIndex)) {
+        const c = ledgerMoneyCols(headers);
+        const lateOnRow = c.lateFee >= 0 ? ledgerCellMoney(rows[rowIndex], c.lateFee) : 0;
+        ruleDesc =
+          'Amount Charged ($' +
+          amountCharged.toFixed(2) +
+          ')' +
+          (lateOnRow > MONEY_EPS ? ' + Late Fee on row ($' + lateOnRow.toFixed(2) + ')' : '') +
+          ' [fresh cycle after account paid to $0]';
+      } else if (anchorIdx < 0) {
+        const priorBal = ledgerBalanceBeforeFirstBilledCustomer(rows, headers, rowIndex);
+        const lateFeesBetween = sumLateFeesBetweenRows(rows, headers, -1, rowIndex);
+        ruleDesc =
+          'Balance After above ($' +
+          priorBal.toFixed(2) +
+          ') + late fees ($' +
+          lateFeesBetween.toFixed(2) +
+          ') + Amount Charged ($' +
+          amountCharged.toFixed(2) +
+          ') [first bill]';
+      } else {
+        const priorBal = ledgerCellMoney(rows[anchorIdx], c.balanceAfter);
+        const paymentsBetween = sumPaymentsBetweenRows(rows, headers, anchorIdx, rowIndex);
+        const lateFeesBetween = sumLateFeesBetweenRows(rows, headers, anchorIdx, rowIndex);
+        ruleDesc =
+          'Prior Billed Customer Balance After ($' +
+          priorBal.toFixed(2) +
+          ') − payments ($' +
+          paymentsBetween.toFixed(2) +
+          ') + late fees ($' +
+          lateFeesBetween.toFixed(2) +
+          ') + Amount Charged ($' +
+          amountCharged.toFixed(2) +
+          ')';
+      }
+      return {
+        ok: ok,
+        titleOk: 'Balance After = ' + ruleDesc,
+        titleFail:
+          'Balance After should equal ' +
+          ruleDesc +
+          ': expected $' +
+          expected.toFixed(2) +
+          ', got $' +
+          actual.toFixed(2)
+      };
+    }
+
+    function getPastDueCellValidationMeta(rows, headers, rowIndex) {
+      if (!rows || rowIndex < 0 || rowIndex >= rows.length) return null;
+      const c = ledgerMoneyCols(headers);
+      if (c.pastDue < 0) return null;
+      const pastDueVal = ledgerCellMoney(rows[rowIndex], c.pastDue);
+
+      if (isLedgerBilledCustomerRow(rows[rowIndex], headers)) {
+        const expected = expectedPastDueForBilledCustomerRow(rows, headers, rowIndex);
+        const ok = moneyNearlyEqual(pastDueVal, expected);
+        const anchorIdx = findNearestBilledCustomerChargeIndexAbove(rows, headers, rowIndex);
+        let ruleDesc;
+        if (isFreshCycleBilledCustomerRow(rows, headers, rowIndex)) {
+          ruleDesc = 'Fresh cycle bill after account paid to $0 (expected Past Due $0)';
+        } else if (anchorIdx < 0) {
+          ruleDesc = 'No prior Billed Customer bill (expected Past Due $0)';
+        } else {
+          const priorBal = ledgerCellMoney(rows[anchorIdx], c.balanceAfter);
+          const paymentsBetween = sumPaymentsBetweenRows(rows, headers, anchorIdx, rowIndex);
+          const lateFeesBetween = sumLateFeesBetweenRows(rows, headers, anchorIdx, rowIndex);
+          const lateOnBillRow =
+            c.lateFee >= 0 ? ledgerCellMoney(rows[rowIndex], c.lateFee) : 0;
+          ruleDesc =
+            'Prior bill Balance After ($' +
+            priorBal.toFixed(2) +
+            ') − payments ($' +
+            paymentsBetween.toFixed(2) +
+            ') + late fee charges between ($' +
+            lateFeesBetween.toFixed(2) +
+            ') − Late Fee on this row ($' +
+            lateOnBillRow.toFixed(2) +
+            ')';
+        }
+        return {
+          ok: ok,
+          titleOk: 'Past Due matches ' + ruleDesc,
+          titleFail:
+            'Past Due should equal ' +
+            ruleDesc +
+            ': expected $' +
+            expected.toFixed(2) +
+            ', got $' +
+            pastDueVal.toFixed(2)
+        };
+      }
+
+      if (isLedgerFreshStartPaymentRow(rows[rowIndex], headers)) {
+        const ok = moneyNearlyEqual(pastDueVal, 0);
+        return {
+          ok: ok,
+          titleOk: 'Fresh start payment Past Due is $0 (account cleared)',
+          titleFail:
+            'Fresh start payment Past Due should be $0 (account cleared), got $' +
+            pastDueVal.toFixed(2)
+        };
+      }
+
+      if (isLedgerPaymentRow(rows[rowIndex], headers) || isLedgerLateFeeRow(rows[rowIndex], headers)) {
+        const expected =
+          rowIndex > 0 ? ledgerCellMoney(rows[rowIndex - 1], c.pastDue) : pastDueVal;
+        const ok = moneyNearlyEqual(pastDueVal, expected);
+        const rowLabel = isLedgerPaymentRow(rows[rowIndex], headers) ? 'Payment' : 'Late Fee';
+        return {
+          ok: ok,
+          titleOk: rowLabel + ' Past Due equals Past Due on the row directly above',
+          titleFail: rowLabel + ' Past Due does not match Past Due on the row directly above'
+        };
+      }
+
+      if (isLedgerStatusUpdateRow(rows[rowIndex], headers) && rowIndex >= 1) {
+        const above = rows[rowIndex - 1];
+        if (isLedgerChargeRow(above, headers) && isLedgerBilledCustomerRow(above, headers)) {
+          const expected = ledgerCellMoney(above, c.pastDue);
+          const ok = moneyNearlyEqual(pastDueVal, expected);
+          return {
+            ok: ok,
+            titleOk: 'Past Due matches Billed Customer row directly above',
+            titleFail:
+              'Past Due should equal Billed Customer Past Due on the row above (expected $' +
+              expected.toFixed(2) +
+              ', got $' +
+              pastDueVal.toFixed(2) +
+              ')'
+          };
+        }
+      }
+
+      return null;
+    }
+
+    function validateLedgerPastDueCell(rows, headers, rowIndex) {
+      const meta = getPastDueCellValidationMeta(rows, headers, rowIndex);
+      if (!meta) return null;
+      return meta.ok;
+    }
+
+    function ledgerAmountPaidForEquation(row, headers) {
+      const c = ledgerMoneyCols(headers);
+      if (c.amountPaid < 0) return 0;
+      const raw = String(row[c.amountPaid] || '').trim();
+      if (/^n\/?a$/i.test(raw)) return 0;
+      if (isLedgerChargeRow(row, headers) || isLedgerStatusUpdateRow(row, headers)) return 0;
+      return ledgerCellMoney(row, c.amountPaid);
+    }
+
+    function moneyNearlyEqual(a, b, eps) {
+      eps = eps == null ? MONEY_EPS : eps;
+      return Math.abs(a - b) <= eps;
+    }
+
+    function ledgerMoneyCols(headers) {
+      return {
+        sewer: findLedgerColByHeaderPatterns(headers, [/^sewer$/i]),
+        pastDue: findLedgerColByHeaderPatterns(headers, [/^past\s*due$/i]),
+        tax: findLedgerColByHeaderPatterns(headers, [/^tax\s*codes?$/i]),
+        puc: findLedgerColByHeaderPatterns(headers, [/^puc\s*surcharge$/i]),
+        lateFee: findLedgerColByHeaderPatterns(headers, [/^late\s*fee$/i]),
+        credit: findLedgerColByHeaderPatterns(headers, [/^credit$/i]),
+        amountCharged: findLedgerColByHeaderPatterns(headers, [/^amount\s*charged$/i]),
+        amountPaid: findLedgerColByHeaderPatterns(headers, [/^amount\s*paid$/i]),
+        balanceAfter: findLedgerColByHeaderPatterns(headers, [/^balance\s*after$/i])
+      };
+    }
+
+    function ledgerCellMoney(row, col) {
+      if (!row || col < 0 || col >= row.length) return 0;
+      return parseMoneyNumber(row[col]);
+    }
+
+    /** Sewer + Past Due + Tax + PUC + Late Fee − Credit = Balance After (Payment rows skipped). */
+    function validateLedgerRowBalance(row, headers) {
+      const c = ledgerMoneyCols(headers);
+      if (isLedgerPaymentRow(row, headers)) return true;
+      const lhs =
+        Math.round(
+          (ledgerCellMoney(row, c.sewer) +
+            ledgerCellMoney(row, c.pastDue) +
+            ledgerCellMoney(row, c.tax) +
+            ledgerCellMoney(row, c.puc) +
+            ledgerCellMoney(row, c.lateFee) -
+            ledgerCellMoney(row, c.credit)) *
+            100
+        ) / 100;
+      return moneyNearlyEqual(lhs, ledgerCellMoney(row, c.balanceAfter));
+    }
+
+    function kvMoneyByKey(pairs, keyPatterns) {
+      if (!pairs || !pairs.length) return 0;
+      for (let i = 0; i < pairs.length; i++) {
+        const k = String(pairs[i].key || '').trim();
+        for (let j = 0; j < keyPatterns.length; j++) {
+          if (keyPatterns[j].test(k)) return parseMoneyNumber(pairs[i].val);
+        }
+      }
+      return 0;
+    }
+
+    function validateAmountBreakdownPairs(pairs) {
+      if (!pairs || !pairs.length) return true;
+      const sewer = kvMoneyByKey(pairs, [/^sewer\s*charge$/i]);
+      const tax = kvMoneyByKey(pairs, [/^tax\s*charge$/i, /^tax\s*codes?$/i]);
+      const pastDue = kvMoneyByKey(pairs, [/^past\s*due$/i]);
+      const late = kvMoneyByKey(pairs, [/^late\s*fee$/i]);
+      const credit = kvMoneyByKey(pairs, [/^credit$/i]);
+      const total = kvMoneyByKey(pairs, [/^total\s*amount\s*due$/i, /^total\s*due$/i]);
+      const lhs = Math.round((sewer + tax + pastDue + late - credit) * 100) / 100;
+      return moneyNearlyEqual(lhs, total);
+    }
+
+    function findStatusUpdateRowIndex(rows, headers) {
+      if (!rows) return -1;
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (isLedgerStatusUpdateRow(rows[i], headers)) return i;
+      }
+      return -1;
+    }
+
+    function getStatusUpdateBalanceAfter(rows, headers) {
+      const idx = findStatusUpdateRowIndex(rows, headers);
+      if (idx < 0) return null;
+      const c = ledgerMoneyCols(headers);
+      return ledgerCellMoney(rows[idx], c.balanceAfter);
+    }
+
+    function validateAmountBreakdownVsStatusUpdate(amountPairs, rows, headers) {
+      const statusBal = getStatusUpdateBalanceAfter(rows, headers);
+      if (statusBal == null) return true;
+      const totalDue = kvMoneyByKey(amountPairs, [/^total\s*amount\s*due$/i, /^total\s*due$/i]);
+      return moneyNearlyEqual(totalDue, statusBal);
+    }
+
+    function validateAmountBreakdownSection(amountPairs, rows, headers) {
+      return (
+        validateAmountBreakdownPairs(amountPairs) &&
+        validateAmountBreakdownVsStatusUpdate(amountPairs, rows, headers)
+      );
+    }
+
+    function ledgerCellsMatchForMirror(rowA, rowB, col) {
+      if (col < 0) return true;
+      const rawA = String(rowA[col] || '').trim();
+      const rawB = String(rowB[col] || '').trim();
+      if (/^n\/?a$/i.test(rawA) && /^n\/?a$/i.test(rawB)) return true;
+      return moneyNearlyEqual(parseMoneyNumber(rawA), parseMoneyNumber(rawB));
+    }
+
+    function validateStatusUpdateMatchesChargeAbove(rows, headers, rowIndex) {
+      if (!rows || rowIndex < 0 || rowIndex >= rows.length) return null;
+      if (!isLedgerStatusUpdateRow(rows[rowIndex], headers)) return null;
+      if (rowIndex < 1) return true;
+      const above = rows[rowIndex - 1];
+      if (!isLedgerChargeRow(above, headers) || !isLedgerBilledCustomerRow(above, headers)) {
+        return true;
+      }
+      const c = ledgerMoneyCols(headers);
+      const cols = [c.sewer, c.pastDue, c.tax, c.puc, c.lateFee, c.credit, c.balanceAfter, c.amountPaid];
+      for (let i = 0; i < cols.length; i++) {
+        if (!ledgerCellsMatchForMirror(rows[rowIndex], above, cols[i])) return false;
+      }
+      return true;
+    }
+
+    function computeCustomerDefaultCharges(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger) return null;
+      const headers = d.ledger.headers;
+      const rows = d.ledger.rows;
+      const c = ledgerMoneyCols(headers);
+      for (let i = 0; i < rows.length; i++) {
+        if (isLedgerStatusUpdateRow(rows[i], headers)) continue;
+        const sewer = ledgerCellMoney(rows[i], c.sewer);
+        const tax = ledgerCellMoney(rows[i], c.tax);
+        const puc = ledgerCellMoney(rows[i], c.puc);
+        if (sewer > 0 || tax > 0 || puc > 0) {
+          const taxCombined = Math.round((tax + puc) * 100) / 100;
+          const total = Math.round((sewer + taxCombined) * 100) / 100;
+          return { sewer: sewer, taxCodes: tax, puc: puc, taxCombined: taxCombined, total: total };
+        }
+      }
+      const amount = d.amount;
+      if (amount && amount.length) {
+        const sewer = kvMoneyByKey(amount, [/^sewer\s*charge$/i]);
+        const tax = kvMoneyByKey(amount, [/^tax\s*charge$/i]);
+        if (sewer > 0 || tax > 0) {
+          return {
+            sewer: sewer,
+            taxCodes: tax,
+            puc: 0,
+            taxCombined: tax,
+            total: Math.round((sewer + tax) * 100) / 100
+          };
+        }
+      }
+      return null;
+    }
+
+    function formatUsd(n) {
+      const x = Math.round(parseFloat(n) * 100) / 100;
+      if (isNaN(x)) return '$0.00';
+      return '$' + x.toFixed(2);
+    }
+
+    function renderCustomerInfoBanner(stepNum) {
+      if (stepNum !== 1) return '';
+      const ch = computeCustomerDefaultCharges(1);
+      if (!ch) {
+        return (
+          '<div class="mt-customer-info"><h3>Customer · default cycle charges</h3>' +
+          '<p class="hint-edit" style="margin:0">No base sewer/tax amounts found in Step 1 yet.</p></div>'
+        );
+      }
+      return (
+        '<div class="mt-customer-info"><h3>Customer · default cycle charges</h3>' +
+        '<p class="hint-edit" style="margin:0 0 0.5rem">Base bill (no past due, late fee, or credit): sewer plus tax charges only.</p>' +
+        '<div class="kv">' +
+        '<div>Sewer charge</div><div>' +
+        formatUsd(ch.sewer) +
+        '</div>' +
+        '<div>Tax Codes</div><div>' +
+        formatUsd(ch.taxCodes) +
+        '</div>' +
+        '<div>PUC Surcharge</div><div>' +
+        formatUsd(ch.puc) +
+        '</div>' +
+        '<div>Tax charge (Tax Codes + PUC)</div><div><strong>' +
+        formatUsd(ch.taxCombined) +
+        '</strong></div>' +
+        '<div>Default total (Sewer + Tax)</div><div><strong>' +
+        formatUsd(ch.total) +
+        '</strong></div></div></div>'
+      );
+    }
+
+    function validatePdfPreviewPairs(pairs) {
+      if (!pairs || !pairs.length) return true;
+      const cur = kvMoneyByKey(pairs, [/^current[_\s-]*due$/i]);
+      const prev = kvMoneyByKey(pairs, [/^previous[_\s-]*amount$/i]);
+      const late = kvMoneyByKey(pairs, [/^late[_\s-]*fee$/i]);
+      const credit = kvMoneyByKey(pairs, [/^credit$/i]);
+      const total = kvMoneyByKey(pairs, [/^total[_\s-]*amount$/i]);
+      const lhs = Math.round((cur + prev + late - credit) * 100) / 100;
+      return moneyNearlyEqual(lhs, total);
+    }
+
+    function validatePastDueEntryPairs(pairs) {
+      if (!pairs || !pairs.length) return true;
+      const pastDueAmt = kvMoneyByKey(pairs, [/^past\s*due\s*amount$/i]);
+      const lateFees = kvMoneyByKey(pairs, [/^late\s*fees?$/i]);
+      const tax = kvMoneyByKey(pairs, [/^tax\s*codes?$/i]);
+      const puc = kvMoneyByKey(pairs, [/^puc\s*surcharge$/i]);
+      const sewer = kvMoneyByKey(pairs, [/^sewer\s*charge$/i]);
+      const credit = kvMoneyByKey(pairs, [/^credit$/i]);
+      const total = kvMoneyByKey(pairs, [/^total\s*\(past\s*due\s*line\)$/i]);
+      const lhs = Math.round((pastDueAmt + lateFees + tax + puc + sewer - credit) * 100) / 100;
+      return moneyNearlyEqual(lhs, total);
+    }
+
+    /** Payment/Late Fee rows: Total (Past Due line) in modal must match ledger Past Due column. */
+    function validatePastDueEntryTotalMatchesLedger(pairs, ledgerPastDue) {
+      if (!pairs || !pairs.length) return true;
+      const total = kvMoneyByKey(pairs, [/^total\s*\(past\s*due\s*line\)$/i]);
+      return moneyNearlyEqual(total, ledgerPastDue);
+    }
+
+    const PAST_DUE_DETAILS_OK_TITLE =
+      'Past due amount + Late Fees + Tax Codes + PUC + Sewer − Credit = Total (Past Due line)';
+    const PAST_DUE_DETAILS_FAIL_TITLE =
+      'Past due line components do not sum to Total (Past Due line)';
+
+    /** Ledger Past Due column icon: modal breakdown + row-type rules (Billed Customer, Payment, Late Fee, Status Update). */
+    function getPastDueCellDisplayStatus(stepNum, rows, headers, rowIndex) {
+      const entry = getPastDueEntryForRow(stepNum, rowIndex);
+      const ledgerMeta = getPastDueCellValidationMeta(rows, headers, rowIndex);
+      const c = ledgerMoneyCols(headers);
+      const ledgerPastDue = c.pastDue >= 0 ? ledgerCellMoney(rows[rowIndex], c.pastDue) : 0;
+      const isPaymentOrLate =
+        isLedgerPaymentRow(rows[rowIndex], headers) ||
+        isLedgerLateFeeRow(rows[rowIndex], headers);
+
+      if (entry && entry.pairs) {
+        if (isPaymentOrLate) {
+          const totalOk = validatePastDueEntryTotalMatchesLedger(entry.pairs, ledgerPastDue);
+          if (!totalOk) {
+            return {
+              ok: false,
+              titleOk: 'Past Due Details Total (Past Due line) matches ledger Past Due column',
+              titleFail:
+                'Past Due Details Total (Past Due line) must match ledger Past Due column ($' +
+                ledgerPastDue.toFixed(2) +
+                ')'
+            };
+          }
+        } else {
+          const detailsOk = validatePastDueEntryPairs(entry.pairs);
+          if (!detailsOk) {
+            return { ok: false, titleOk: PAST_DUE_DETAILS_OK_TITLE, titleFail: PAST_DUE_DETAILS_FAIL_TITLE };
+          }
+        }
+        if (ledgerMeta) return ledgerMeta;
+        return { ok: true, titleOk: PAST_DUE_DETAILS_OK_TITLE, titleFail: PAST_DUE_DETAILS_FAIL_TITLE };
+      }
+
+      return ledgerMeta;
+    }
+
+    function getPaymentRowBalanceAfterValidationMeta(rows, headers, rowIndex) {
+      if (!rows || rowIndex < 0 || rowIndex >= rows.length) return null;
+      if (!isLedgerPaymentRow(rows[rowIndex], headers)) return null;
+      const c = ledgerMoneyCols(headers);
+      if (c.balanceAfter < 0) return null;
+      const actual = ledgerCellMoney(rows[rowIndex], c.balanceAfter);
+      if (isLedgerFreshStartPaymentRow(rows[rowIndex], headers)) {
+        const ok = moneyNearlyEqual(actual, 0);
+        return {
+          ok: ok,
+          titleOk: 'Fresh start payment Balance After is $0 (account cleared)',
+          titleFail:
+            'Fresh start payment Balance After should be $0 (account cleared), got $' +
+            actual.toFixed(2)
+        };
+      }
+      const paid = ledgerAmountPaidForEquation(rows[rowIndex], headers);
+      let expected = null;
+      let ruleDesc = '';
+      if (rowIndex > 0) {
+        const aboveBal = ledgerCellMoney(rows[rowIndex - 1], c.balanceAfter);
+        expected = Math.round((aboveBal - paid) * 100) / 100;
+        ruleDesc =
+          'Balance After on row above ($' +
+          aboveBal.toFixed(2) +
+          ') − Amount Paid ($' +
+          paid.toFixed(2) +
+          ')';
+      }
+      if (
+        rowIndex + 1 < rows.length &&
+        isLedgerStatusUpdateRow(rows[rowIndex + 1], headers)
+      ) {
+        const belowBal = ledgerCellMoney(rows[rowIndex + 1], c.balanceAfter);
+        if (expected == null) {
+          expected = belowBal;
+          ruleDesc = 'Status Update Balance After on row below ($' + belowBal.toFixed(2) + ')';
+        } else if (moneyNearlyEqual(actual, belowBal)) {
+          return {
+            ok: true,
+            titleOk:
+              'Balance After matches Status Update row below ($' + belowBal.toFixed(2) + ')',
+            titleFail: ''
+          };
+        }
+      }
+      if (expected == null) return null;
+      const ok = moneyNearlyEqual(actual, expected);
+      return {
+        ok: ok,
+        titleOk: 'Balance After = ' + ruleDesc,
+        titleFail:
+          'Balance After should equal ' + ruleDesc + ': expected $' + expected.toFixed(2) + ', got $' + actual.toFixed(2)
+      };
+    }
+
+    function updateTestStatusIcon(el, ok, titleOk, titleFail) {
+      if (!el) return;
+      el.className = 'mt-test-status ' + (ok ? 'mt-test-ok' : 'mt-test-fail');
+      el.textContent = ok ? '✓' : '✗';
+      el.setAttribute('title', ok ? titleOk : titleFail);
+      el.setAttribute('aria-label', ok ? 'Pass' : 'Fail');
+    }
+
+    function renderTestStatusIcon(ok, titleOk, titleFail) {
+      const passTitle = titleOk || 'Pass';
+      const failTitle = titleFail || 'Fail';
+      if (ok) {
+        return (
+          '<span class="mt-test-status mt-test-ok" title="' +
+          escapeHtml(passTitle) +
+          '" aria-label="Pass">✓</span>'
+        );
+      }
+      return (
+        '<span class="mt-test-status mt-test-fail" title="' +
+        escapeHtml(failTitle) +
+        '" aria-label="Fail">✗</span>'
+      );
+    }
+
+    function renderWarnIcon(title) {
+      return (
+        '<span class="mt-test-status mt-test-warn" title="' +
+        escapeHtml(title) +
+        '" aria-label="Warning">⚠</span>'
+      );
+    }
+
+    function renderSectionH3(title, ok, sectionKind, stepNum, showWarn, warnTitle) {
+      let icons = renderTestStatusIcon(ok);
+      if (showWarn) {
+        icons += renderWarnIcon(
+          warnTitle || 'Total amount due does not match Status Update Balance After'
+        );
+      }
+      return (
+        '<h3 class="mt-section-h3" data-section-kind="' +
+        sectionKind +
+        '" data-step="' +
+        stepNum +
+        '">' +
+        icons +
+        escapeHtml(title) +
+        '</h3>'
+      );
+    }
+
+    function buildLedgerRowOverallStatus(stepNum, rows, headers, rowIndex) {
+      const rowBalOk = validateLedgerRowBalance(rows[rowIndex], headers);
+      const pdStatus = getPastDueCellDisplayStatus(stepNum, rows, headers, rowIndex);
+      const pastDueOk = !pdStatus || pdStatus.ok;
+      const amountChargedMeta = getBilledCustomerAmountChargedValidationMeta(
+        stepNum,
+        rows,
+        headers,
+        rowIndex
+      );
+      const amountChargedRuleOk = !amountChargedMeta || amountChargedMeta.ok;
+      const balAfterMeta =
+        getBilledCustomerBalanceAfterValidationMeta(stepNum, rows, headers, rowIndex) ||
+        getPaymentRowBalanceAfterValidationMeta(rows, headers, rowIndex);
+      const balanceAfterRuleOk = !balAfterMeta || balAfterMeta.ok;
+      const ok = rowBalOk && pastDueOk && amountChargedRuleOk && balanceAfterRuleOk;
+      const eqTitleOk =
+        'Sewer + Past Due + Tax Codes + PUC + Late Fee − Credit = Balance After';
+      const eqTitleFail =
+        'Column sum does not equal Balance After (Sewer + Past Due + Tax + PUC + Late − Credit ≠ Balance After)';
+      let titleOk = eqTitleOk;
+      let titleFail = eqTitleFail;
+      if (amountChargedMeta) {
+        if (amountChargedRuleOk) {
+          titleOk = amountChargedMeta.titleOk + '; ' + titleOk;
+        } else {
+          titleFail = amountChargedMeta.titleFail;
+        }
+      }
+      if (balAfterMeta) {
+        if (balanceAfterRuleOk) {
+          titleOk = balAfterMeta.titleOk + '; ' + titleOk;
+        } else if (amountChargedRuleOk) {
+          titleFail = balAfterMeta.titleFail;
+        }
+      }
+      if (pdStatus) {
+        const prefix =
+          (amountChargedMeta && amountChargedRuleOk ? amountChargedMeta.titleOk + '; ' : '') +
+          (balAfterMeta && balanceAfterRuleOk ? balAfterMeta.titleOk + '; ' : '');
+        titleOk = pastDueOk ? prefix + pdStatus.titleOk + '; ' + eqTitleOk : prefix + eqTitleOk;
+        if (!pastDueOk) {
+          titleFail = !rowBalOk
+            ? eqTitleFail + '; ' + pdStatus.titleFail
+            : !amountChargedRuleOk && amountChargedMeta
+              ? amountChargedMeta.titleFail + '; ' + pdStatus.titleFail
+              : !balanceAfterRuleOk && balAfterMeta
+                ? balAfterMeta.titleFail + '; ' + pdStatus.titleFail
+                : pdStatus.titleFail;
+        } else if (!rowBalOk) {
+          titleFail = eqTitleFail + '; ' + pdStatus.titleOk;
+        } else if (!amountChargedRuleOk && amountChargedMeta) {
+          titleFail = amountChargedMeta.titleFail + '; ' + pdStatus.titleOk;
+        } else if (!balanceAfterRuleOk && balAfterMeta) {
+          titleFail = balAfterMeta.titleFail + '; ' + pdStatus.titleOk;
+        }
+      } else if (!rowBalOk) {
+        if (amountChargedRuleOk && balanceAfterRuleOk) titleFail = eqTitleFail;
+      }
+      return {
+        ok: ok,
+        rowBalOk: rowBalOk,
+        pastDueOk: pastDueOk,
+        amountChargedRuleOk: amountChargedRuleOk,
+        balanceAfterRuleOk: balanceAfterRuleOk,
+        titleOk: titleOk,
+        titleFail: titleFail
+      };
+    }
+
+    function buildLedgerTestStatusCellHtml(stepNum, rows, headers, rowIndex) {
+      const status = buildLedgerRowOverallStatus(stepNum, rows, headers, rowIndex);
+      let html = renderTestStatusIcon(status.ok, status.titleOk, status.titleFail);
+      const suMatch = validateStatusUpdateMatchesChargeAbove(rows, headers, rowIndex);
+      if (suMatch === false) {
+        html +=
+          '<span class="mt-ledger-warn-cell" data-status-update-warn="1" data-step="' +
+          stepNum +
+          '" data-row="' +
+          rowIndex +
+          '">' +
+          renderWarnIcon('Status Update row does not match Charge · Billed Customer row above') +
+          '</span>';
+      } else if (isLedgerStatusUpdateRow(rows[rowIndex], headers)) {
+        html +=
+          '<span data-status-update-warn="1" data-step="' +
+          stepNum +
+          '" data-row="' +
+          rowIndex +
+          '" style="display:none"></span>';
+      }
+      return html;
+    }
+
+    function refreshLedgerTestStatusInDom(stepNum, rowIndex) {
+      const root = document.getElementById('root');
+      if (!root || stepNum == null || isNaN(stepNum)) return;
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.headers || !d.ledger.rows[rowIndex]) return;
+      const rows = d.ledger.rows;
+      const headers = d.ledger.headers;
+      const html = buildLedgerTestStatusCellHtml(stepNum, rows, headers, rowIndex);
+      root.querySelectorAll(
+        'td.mt-test-status-cell[data-step="' +
+          stepNum +
+          '"][data-row="' +
+          rowIndex +
+          '"]'
+      ).forEach(function (td) {
+        td.innerHTML = html;
+      });
+    }
+
+    function refreshLedgerRowAndDependents(stepNum, rowIndex) {
+      refreshLedgerTestStatusInDom(stepNum, rowIndex);
+      refreshLedgerBalanceAfterCellStatusInDom(stepNum, rowIndex);
+      refreshLedgerAmountChargedCellStatusInDom(stepNum, rowIndex);
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger) return;
+      const headers = d.ledger.headers;
+      const rows = d.ledger.rows;
+      if (
+        rowIndex + 1 < rows.length &&
+        isLedgerStatusUpdateRow(rows[rowIndex + 1], headers)
+      ) {
+        refreshLedgerTestStatusInDom(stepNum, rowIndex + 1);
+      }
+      if (
+        isLedgerStatusUpdateRow(rows[rowIndex], headers) &&
+        rowIndex + 1 < rows.length &&
+        isLedgerBilledCustomerRow(rows[rowIndex + 1], headers)
+      ) {
+        refreshLedgerTestStatusInDom(stepNum, rowIndex + 1);
+        refreshLedgerBalanceAfterCellStatusInDom(stepNum, rowIndex + 1);
+      }
+      if (
+        isLedgerChargeRow(rows[rowIndex], headers) &&
+        isLedgerBilledCustomerRow(rows[rowIndex], headers) &&
+        rowIndex + 1 < rows.length &&
+        isLedgerStatusUpdateRow(rows[rowIndex + 1], headers)
+      ) {
+        refreshLedgerTestStatusInDom(stepNum, rowIndex + 1);
+        refreshLedgerPastDueCellStatusInDom(stepNum);
+      }
+    }
+
+    function refreshSectionValidationInDom(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d) return;
+      const card = document.querySelector('.step-card[data-step-num="' + stepNum + '"]');
+      if (!card) return;
+      const amountH = card.querySelector('h3.mt-section-h3[data-section-kind="amount"]');
+      if (amountH && d.amount && d.ledger) {
+        const internalOk = validateAmountBreakdownPairs(d.amount);
+        const statusOk = validateAmountBreakdownVsStatusUpdate(
+          d.amount,
+          d.ledger.rows,
+          d.ledger.headers
+        );
+        const ok = internalOk && statusOk;
+        const statusIcon = amountH.querySelector('.mt-test-status:not(.mt-test-warn)');
+        if (statusIcon) {
+          statusIcon.className = 'mt-test-status ' + (ok ? 'mt-test-ok' : 'mt-test-fail');
+          statusIcon.textContent = ok ? '✓' : '✗';
+          let title;
+          if (!internalOk) {
+            title = 'Amount breakdown components do not sum to Total amount due';
+          } else if (!statusOk) {
+            title =
+              'Total amount due does not match last Status Update Balance After';
+          } else {
+            title = 'Amount breakdown balances and matches Status Update Balance After';
+          }
+          statusIcon.setAttribute('title', title);
+          statusIcon.setAttribute('aria-label', ok ? 'Pass' : 'Fail');
+        }
+        amountH.querySelectorAll('.mt-test-warn').forEach(function (w) {
+          w.remove();
+        });
+      }
+      const pdfH = card.querySelector('h3.mt-section-h3[data-section-kind="pdf"]');
+      if (pdfH && d.pdf) {
+        const okPdf = validatePdfPreviewPairs(d.pdf);
+        const iconPdf = pdfH.querySelector('.mt-test-status');
+        if (iconPdf) {
+          iconPdf.className = 'mt-test-status ' + (okPdf ? 'mt-test-ok' : 'mt-test-fail');
+          iconPdf.textContent = okPdf ? '✓' : '✗';
+          iconPdf.setAttribute('title', okPdf ? 'Equation balances' : 'Equation does not balance');
+          iconPdf.setAttribute('aria-label', okPdf ? 'Pass' : 'Fail');
+        }
+      }
+    }
+
+    function refreshStepValidationInDom(stepNum) {
+      refreshSectionValidationInDom(stepNum);
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.rows) return;
+      for (let ri = 0; ri < d.ledger.rows.length; ri++) {
+        refreshLedgerTestStatusInDom(stepNum, ri);
+      }
+      refreshLedgerPastDueCellStatusInDom(stepNum);
+      refreshLedgerBalanceAfterCellStatusInDom(stepNum);
+      refreshLedgerAmountChargedCellStatusInDom(stepNum);
+    }
+
+    function refreshLedgerAmountChargedCellStatusInDom(stepNum, onlyRowIndex) {
+      const root = document.getElementById('root');
+      const d = editableByStep.get(stepNum);
+      if (!root || !d || !d.ledger) return;
+      const headers = d.ledger.headers;
+      const rows = d.ledger.rows;
+      const c = ledgerMoneyCols(headers);
+      if (c.amountCharged < 0) return;
+      const rowStart = onlyRowIndex != null && !isNaN(onlyRowIndex) ? onlyRowIndex : 0;
+      const rowEnd =
+        onlyRowIndex != null && !isNaN(onlyRowIndex) ? onlyRowIndex + 1 : rows.length;
+      for (let ri = rowStart; ri < rowEnd; ri++) {
+        const el = root.querySelector(
+          'span[data-amount-charged-status="1"][data-step="' + stepNum + '"][data-row="' + ri + '"]'
+        );
+        if (!el) continue;
+        const meta = getBilledCustomerAmountChargedValidationMeta(stepNum, rows, headers, ri);
+        if (meta === null) {
+          el.innerHTML = '';
+          continue;
+        }
+        el.innerHTML = renderTestStatusIcon(meta.ok);
+        const icon = el.querySelector('.mt-test-status');
+        if (icon) {
+          updateTestStatusIcon(icon, meta.ok, meta.titleOk, meta.titleFail);
+        }
+      }
+    }
+
+    function refreshLedgerBalanceAfterCellStatusInDom(stepNum, onlyRowIndex) {
+      const root = document.getElementById('root');
+      const d = editableByStep.get(stepNum);
+      if (!root || !d || !d.ledger) return;
+      const headers = d.ledger.headers;
+      const rows = d.ledger.rows;
+      const c = ledgerMoneyCols(headers);
+      if (c.balanceAfter < 0) return;
+      const rowStart = onlyRowIndex != null && !isNaN(onlyRowIndex) ? onlyRowIndex : 0;
+      const rowEnd =
+        onlyRowIndex != null && !isNaN(onlyRowIndex) ? onlyRowIndex + 1 : rows.length;
+      for (let ri = rowStart; ri < rowEnd; ri++) {
+        const el = root.querySelector(
+          'span[data-balance-after-status="1"][data-step="' + stepNum + '"][data-row="' + ri + '"]'
+        );
+        if (!el) continue;
+        const meta =
+          getBilledCustomerBalanceAfterValidationMeta(stepNum, rows, headers, ri) ||
+          getPaymentRowBalanceAfterValidationMeta(rows, headers, ri);
+        if (meta === null) {
+          el.innerHTML = '';
+          continue;
+        }
+        el.innerHTML = renderTestStatusIcon(meta.ok);
+        const icon = el.querySelector('.mt-test-status');
+        if (icon) {
+          updateTestStatusIcon(icon, meta.ok, meta.titleOk, meta.titleFail);
+        }
+      }
+    }
+
+    function refreshPastDueModalValidationInDom() {
+      const ctx = pastDueModalCtx;
+      if (!ctx) return;
+      const statusEl = document.getElementById('pastDueModalStatus');
+      const d = editableByStep.get(ctx.stepNum);
+      const entry = d && d.pastDue ? d.pastDue[ctx.entryIndex] : null;
+      if (entry && entry.pairs) {
+        updateTestStatusIcon(
+          statusEl,
+          validatePastDueEntryPairs(entry.pairs),
+          PAST_DUE_DETAILS_OK_TITLE,
+          PAST_DUE_DETAILS_FAIL_TITLE
+        );
+      }
+    }
+
+    function refreshLedgerPastDueCellStatusInDom(stepNum) {
+      const root = document.getElementById('root');
+      const d = editableByStep.get(stepNum);
+      if (!root || !d || !d.ledger) return;
+      const headers = d.ledger.headers;
+      const rows = d.ledger.rows;
+      for (let ri = 0; ri < rows.length; ri++) {
+        const el = root.querySelector(
+          'span[data-past-due-status="1"][data-step="' + stepNum + '"][data-row="' + ri + '"]'
+        );
+        if (!el) continue;
+        const meta = getPastDueCellDisplayStatus(stepNum, rows, headers, ri);
+        if (meta === null) {
+          el.innerHTML = '';
+          continue;
+        }
+        el.innerHTML = renderTestStatusIcon(meta.ok);
+        const icon = el.querySelector('.mt-test-status');
+        if (icon) {
+          updateTestStatusIcon(icon, meta.ok, meta.titleOk, meta.titleFail);
+        }
+      }
     }
 
     function pastDuePairKeyToLedgerCol(pairKey, headers) {
@@ -742,14 +2329,42 @@
 
     function renderLedgerTable(headers, rows, stepNum, role) {
       const editable = role === 'actual';
+      const showTestStatus = editable;
       const pastDueCol = findPastDueColIndex(headers);
-      const thead = '<tr>' + headers.map((h) => '<th>' + escapeHtml(h) + '</th>').join('') + '</tr>';
+      const balanceAfterCol = findLedgerColByHeaderPatterns(headers, [/^balance\s*after$/i]);
+      const amountChargedCol = findLedgerColByHeaderPatterns(headers, [/^amount\s*charged$/i]);
+      let thead =
+        '<tr>' + headers.map((h) => '<th>' + escapeHtml(h) + '</th>').join('');
+      if (showTestStatus) thead += '<th>Test Status</th>';
+      thead += '</tr>';
       const tbody = rows
         .map(function (r, ri) {
-          return (
-            '<tr>' +
+          const statusRow = isLedgerStatusUpdateRow(r, headers);
+          let rowHtml =
+            '<tr' + (statusRow ? ' class="mt-ledger-status-row"' : '') + '>' +
             r
               .map(function (c, ci) {
+                if (editable && isLedgerNaValue(c)) {
+                  return (
+                    '<td class="mt-money-td mt-na-td" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">' +
+                    '<span class="mt-money-value mt-na-value" data-editable="1" data-na="1" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">N/A</span></td>'
+                  );
+                }
+                if (isLedgerNaValue(c)) {
+                  return '<td>' + escapeHtml(c) + '</td>';
+                }
                 if (editable && pastDueCol >= 0 && ci === pastDueCol) {
                   const num = escapeHtml(
                     stripLeadingDollar(
@@ -764,6 +2379,18 @@
                       ri +
                       '">Past Due Details</button>'
                     : '';
+                  let pdCellStatus = '';
+                  const pdStatus = getPastDueCellDisplayStatus(stepNum, rows, headers, ri);
+                  if (pdStatus !== null) {
+                    pdCellStatus =
+                      '<span class="mt-past-due-cell-status" data-past-due-status="1" data-step="' +
+                      stepNum +
+                      '" data-row="' +
+                      ri +
+                      '">' +
+                      renderTestStatusIcon(pdStatus.ok) +
+                      '</span>';
+                  }
                   return (
                     '<td class="mt-money-td" data-money-wrap="1" data-section="ledger" data-step="' +
                     stepNum +
@@ -772,6 +2399,8 @@
                     '" data-col="' +
                     ci +
                     '">' +
+                    '<span class="mt-past-due-cell-wrap">' +
+                    pdCellStatus +
                     '<span class="mt-currency-prefix">$</span>' +
                     '<span class="mt-money-value" data-editable="1" data-section="ledger" data-step="' +
                     stepNum +
@@ -781,9 +2410,132 @@
                     ci +
                     '">' +
                     num +
-                    '</span>' +
+                    '</span></span>' +
                     btn +
                     '</td>'
+                  );
+                }
+                if (
+                  editable &&
+                  balanceAfterCol >= 0 &&
+                  ci === balanceAfterCol &&
+                  (isLedgerBilledCustomerRow(r, headers) || isLedgerPaymentRow(r, headers))
+                ) {
+                  const num = escapeHtml(
+                    stripLeadingDollar(
+                      looksLikeMoneyValue(c) ? moneyValueFromNumericPart(c) : String(c || '0')
+                    )
+                  );
+                  let balStatus = '';
+                  const balMeta =
+                    getBilledCustomerBalanceAfterValidationMeta(
+                      stepNum,
+                      rows,
+                      headers,
+                      ri
+                    ) || getPaymentRowBalanceAfterValidationMeta(rows, headers, ri);
+                  if (balMeta !== null) {
+                    balStatus =
+                      '<span class="mt-past-due-cell-status" data-balance-after-status="1" data-step="' +
+                      stepNum +
+                      '" data-row="' +
+                      ri +
+                      '">' +
+                      renderTestStatusIcon(balMeta.ok) +
+                      '</span>';
+                  }
+                  return (
+                    '<td class="mt-money-td" data-money-wrap="1" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">' +
+                    '<span class="mt-past-due-cell-wrap">' +
+                    balStatus +
+                    '<span class="mt-currency-prefix">$</span>' +
+                    '<span class="mt-money-value" data-editable="1" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">' +
+                    num +
+                    '</span></span></td>'
+                  );
+                }
+                if (
+                  editable &&
+                  amountChargedCol >= 0 &&
+                  ci === amountChargedCol &&
+                  isLedgerChargeRow(r, headers) &&
+                  isLedgerBilledCustomerRow(r, headers)
+                ) {
+                  const num = escapeHtml(
+                    stripLeadingDollar(
+                      looksLikeMoneyValue(c) ? moneyValueFromNumericPart(c) : String(c || '0')
+                    )
+                  );
+                  let chargedStatus = '';
+                  const chargedMeta = getBilledCustomerAmountChargedValidationMeta(
+                    stepNum,
+                    rows,
+                    headers,
+                    ri
+                  );
+                  if (chargedMeta !== null) {
+                    chargedStatus =
+                      '<span class="mt-past-due-cell-status" data-amount-charged-status="1" data-step="' +
+                      stepNum +
+                      '" data-row="' +
+                      ri +
+                      '">' +
+                      renderTestStatusIcon(chargedMeta.ok) +
+                      '</span>';
+                  }
+                  const chargedNa = isLedgerNaValue(c);
+                  if (chargedNa) {
+                    return (
+                      '<td class="mt-money-td mt-na-td" data-section="ledger" data-step="' +
+                      stepNum +
+                      '" data-row="' +
+                      ri +
+                      '" data-col="' +
+                      ci +
+                      '">' +
+                      '<span class="mt-past-due-cell-wrap">' +
+                      chargedStatus +
+                      '<span class="mt-money-value mt-na-value" data-editable="1" data-na="1" data-section="ledger" data-step="' +
+                      stepNum +
+                      '" data-row="' +
+                      ri +
+                      '" data-col="' +
+                      ci +
+                      '">N/A</span></span></td>'
+                    );
+                  }
+                  return (
+                    '<td class="mt-money-td" data-money-wrap="1" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">' +
+                    '<span class="mt-past-due-cell-wrap">' +
+                    chargedStatus +
+                    '<span class="mt-currency-prefix">$</span>' +
+                    '<span class="mt-money-value" data-editable="1" data-section="ledger" data-step="' +
+                    stepNum +
+                    '" data-row="' +
+                    ri +
+                    '" data-col="' +
+                    ci +
+                    '">' +
+                    num +
+                    '</span></span></td>'
                   );
                 }
                 if (editable && isEditableMoneyValue(c)) {
@@ -817,12 +2569,31 @@
                 }
                 return '<td>' + escapeHtml(c) + '</td>';
               })
-              .join('') +
-            '</tr>'
-          );
+              .join('');
+          if (showTestStatus) {
+            rowHtml +=
+              '<td class="mt-test-status-cell" data-test-status="ledger" data-step="' +
+              stepNum +
+              '" data-row="' +
+              ri +
+              '">' +
+              buildLedgerTestStatusCellHtml(stepNum, rows, headers, ri) +
+              '</td>';
+          }
+          rowHtml += '</tr>';
+          return rowHtml;
         })
         .join('');
-      return '<table class="data" data-role="' + role + '"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table>';
+      return (
+        '<div class="mt-ledger-table-scroll">' +
+        '<table class="data" data-role="' +
+        role +
+        '"><thead>' +
+        thead +
+        '</thead><tbody>' +
+        tbody +
+        '</tbody></table></div>'
+      );
     }
 
     function pairValueIsMoneyLike(val) {
@@ -834,6 +2605,19 @@
     function resolveEditableTarget(target) {
       let t = target;
       if (t && t.closest) {
+        if (!(t.getAttribute && t.getAttribute('data-editable') === '1')) {
+          const naInner = t.closest('.mt-na-value[data-editable="1"]');
+          if (naInner) t = naInner;
+        }
+        if (!(t.getAttribute && t.getAttribute('data-editable') === '1')) {
+          const tdEd = t.closest('td[data-editable="1"]');
+          if (
+            tdEd &&
+            !tdEd.querySelector('.mt-money-value[data-editable="1"]:not(.mt-na-value)')
+          ) {
+            t = tdEd;
+          }
+        }
         const mw = t.closest('td[data-money-wrap], .kv-money-wrap');
         if (mw && !(t.getAttribute && t.getAttribute('data-editable') === '1')) {
           const inner = mw.querySelector('.mt-money-value[data-editable="1"]');
@@ -863,38 +2647,68 @@
       if (!t || !t.getAttribute || t.getAttribute('data-editable') !== '1') return;
       if (t.getAttribute('contenteditable') !== 'true') return;
       const textRaw = cellText(t);
-      const isMoneyCell = t.classList && t.classList.contains('mt-money-value');
-      const stored = isMoneyCell ? moneyValueFromNumericPart(textRaw) : textRaw;
-      if (isMoneyCell) {
+      const isNaCell = t.getAttribute('data-na') === '1' || isLedgerNaValue(textRaw);
+      const isMoneyCell =
+        !isNaCell && t.classList && t.classList.contains('mt-money-value');
+      const step = parseInt(t.getAttribute('data-step'), 10);
+      const section = t.getAttribute('data-section');
+      let stored = textRaw;
+      if (section === 'ledger') {
+        stored = ledgerCellStoredValue(textRaw);
+      } else if (isMoneyCell) {
+        stored = moneyValueFromNumericPart(textRaw);
+      }
+      if (isLedgerNaValue(stored)) {
+        t.textContent = 'N/A';
+        t.setAttribute('data-na', '1');
+      } else if (isMoneyCell) {
+        t.removeAttribute('data-na');
         t.textContent = stripLeadingDollar(stored);
       } else {
+        t.removeAttribute('data-na');
         t.textContent = stored;
       }
       t.removeAttribute('contenteditable');
-      const step = parseInt(t.getAttribute('data-step'), 10);
-      const section = t.getAttribute('data-section');
       if (section === 'ledger') {
         const row = parseInt(t.getAttribute('data-row'), 10);
         const col = parseInt(t.getAttribute('data-col'), 10);
-        const ledgerStored = ledgerCellStoredMoney(stored);
-        const pastDueCol = findPastDueColIndex(ledgerHeadersFromAnyStep());
-        propagateLedgerCellToAllSteps(row, col, ledgerStored);
-        syncLedgerCellsInDom(row, col, ledgerStored, { pastDueCol: col === pastDueCol });
-        if (col === pastDueCol) {
-          syncPastDueTotalLineOnly(row, stored);
-        }
+        const fp = propagateLedgerCellToAllSteps(step, row, col, stored);
+        refreshValidationForFingerprint(fp);
       } else if (section === 'pastdue-modal' && pastDueModalCtx) {
         const ki = parseInt(t.getAttribute('data-kv'), 10);
-        propagatePastDuePairEdit(pastDueModalCtx.rowIndex, ki, stored);
+        propagatePastDuePairEdit(pastDueModalCtx.stepNum, pastDueModalCtx.rowIndex, ki, stored);
       } else if (section === 'amount' || section === 'pdf' || section.indexOf('pastdue-') === 0) {
         const ki = parseInt(t.getAttribute('data-kv'), 10);
         applyKvEdit(step, section, ki, stored);
+        if (section === 'amount' || section === 'pdf') {
+          refreshSectionValidationInDom(step);
+        }
+      }
+    }
+
+    function rememberLedgerFocusFromEvent(e) {
+      const t = resolveEditableTarget(e.target);
+      if (!t || t.getAttribute('data-section') !== 'ledger') return;
+      const stepNum = parseInt(t.getAttribute('data-step'), 10);
+      const row = parseInt(t.getAttribute('data-row'), 10);
+      const col = parseInt(t.getAttribute('data-col'), 10);
+      if (isNaN(stepNum) || isNaN(row) || isNaN(col)) return;
+      const headers = ledgerHeadersFromAnyStep();
+      const pastDueCol = findPastDueColIndex(headers);
+      ledgerFocusCell = { stepNum: stepNum, row: row, col: col };
+      if (col === pastDueCol) {
+        document.querySelectorAll('td.mt-past-due-selected').forEach(function (td) {
+          td.classList.remove('mt-past-due-selected');
+        });
+        highlightLedgerPastDueCell(stepNum, row, true);
+        mtLog('ledgerFocus:pastDue', ledgerFocusCell);
       }
     }
 
     function attachEditableListeners(container) {
       if (!container || container.dataset.editableBound === '1') return;
       container.dataset.editableBound = '1';
+      container.addEventListener('click', rememberLedgerFocusFromEvent);
       container.addEventListener('dblclick', function (e) {
         activateEditableCell(resolveEditableTarget(e.target));
       });
@@ -918,6 +2732,11 @@
           t.blur();
         }
       });
+    }
+
+    if (!document.documentElement.dataset.mtClipboardKeysBound) {
+      document.documentElement.dataset.mtClipboardKeysBound = '1';
+      document.addEventListener('keydown', handleLedgerClipboardShortcut);
     }
 
     function renderKV(pairs, stepNum, section, editable) {
@@ -988,7 +2807,11 @@
       const pdfA = live.pdf || [];
       const pdfG = goldenStep && goldenStep.pdfRaw ? parsePdfPreviewVertical(goldenStep.pdfRaw) : null;
 
-      let html = '<section class="step-card" data-step-num="' + step.stepNum + '"><h2>Step ' + step.stepNum + '</h2>';
+      let html = '<section class="step-card" data-step-num="' + step.stepNum + '">';
+      if (step.stepNum === 1) {
+        html += renderCustomerInfoBanner(1);
+      }
+      html += '<h2>Step ' + step.stepNum + '</h2>';
       html += '<div class="step-desc">' + escapeHtml(live.desc) + '</div>';
 
       html += '<div class="section"><h3>Payments / Charges</h3>';
@@ -998,11 +2821,16 @@
         html += '<div><strong>Golden</strong>' + renderLedgerTable(gh.headers, gh.rows, step.stepNum, 'golden') + '</div>';
         html += '</div>';
       } else {
-        html += '<p class="hint-edit">Double-click a cell below to edit.</p>' + renderLedgerTable(lh.headers, lh.rows, step.stepNum, 'actual');
+        html +=
+          '<p class="hint-edit">Double-click a cell below to edit. Click a <strong>Past Due</strong> cell, then <strong>Ctrl+C</strong> / <strong>Ctrl+V</strong> (Cmd on Mac) to copy/paste the value or full breakdown (see console: <code>[MasterTestViewer]</code>). Past Due Details modal: <strong>Copy configuration</strong> / <strong>Paste configuration</strong>. Ledger edits for the same date/type/subtype row sync across <strong>all steps</strong> (earlier and later).</p>' +
+          renderLedgerTable(lh.headers, lh.rows, step.stepNum, 'actual');
       }
       html += '</div>';
 
-      html += '<div class="section"><h3>Amount breakdown</h3>';
+      const amountOk = validateAmountBreakdownSection(amountA, lh.rows, lh.headers);
+      html +=
+        '<div class="section">' +
+        renderSectionH3('Amount breakdown', amountOk, 'amount', step.stepNum);
       if (goldenStep) {
         html += '<div class="compare-grid">';
         html += '<div><strong>Actual</strong>' + renderKV(amountA, step.stepNum, 'amount', true) + '</div>';
@@ -1013,7 +2841,9 @@
       html += '</div>';
 
       if (live.hasPdf && live.pdf) {
-        html += '<div class="section"><h3>Bill PDF preview</h3>';
+        html +=
+          '<div class="section">' +
+          renderSectionH3('Bill PDF preview', validatePdfPreviewPairs(pdfA), 'pdf', step.stepNum);
         if (goldenStep && goldenStep.pdfRaw) {
           html += '<div class="compare-grid">';
           html += '<div><strong>Actual</strong>' + renderKV(pdfA, step.stepNum, 'pdf', true) + '</div>';
@@ -1028,26 +2858,58 @@
       return html;
     }
 
-    function propagateLedgerCellToAllSteps(row, col, text) {
-      stepOrder.forEach(function (sn) {
-        const d = editableByStep.get(sn);
-        if (!d || !d.ledger || !Array.isArray(d.ledger.rows)) return;
-        const r = d.ledger.rows[row];
-        if (!r || col < 0 || col >= r.length) return;
-        r[col] = text;
-      });
+    /** Update one ledger cell in one step (use propagateLedgerCellToAllSteps to mirror every step). */
+    function applyLedgerCellEdit(stepNum, row, col, text) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !Array.isArray(d.ledger.rows)) return;
+      const r = d.ledger.rows[row];
+      if (!r || col < 0 || col >= r.length) return;
+      r[col] = text;
     }
 
-    function syncLedgerCellsInDom(row, col, fullText, opts) {
+    function syncLedgerCellsInDom(stepNum, row, col, fullText, opts) {
       opts = opts || {};
       const root = document.getElementById('root');
-      if (!root) return;
+      if (!root || stepNum == null || isNaN(stepNum)) return;
+      const storedValue = ledgerCellStoredValue(fullText);
+      if (isLedgerNaValue(storedValue)) {
+        const selNa =
+          'span.mt-na-value[data-editable="1"][data-section="ledger"][data-step="' +
+          stepNum +
+          '"][data-row="' +
+          row +
+          '"][data-col="' +
+          col +
+          '"]';
+        root.querySelectorAll(selNa).forEach(function (el) {
+          if (el.getAttribute('contenteditable') === 'true') return;
+          el.textContent = 'N/A';
+        });
+        root
+          .querySelectorAll(
+            'td[data-editable="1"][data-section="ledger"][data-step="' +
+              stepNum +
+              '"][data-row="' +
+              row +
+              '"][data-col="' +
+              col +
+              '"]'
+          )
+          .forEach(function (td) {
+            if (td.getAttribute('contenteditable') === 'true') return;
+            if (td.querySelector('.mt-money-value[data-editable="1"]')) return;
+            td.textContent = 'N/A';
+          });
+        return;
+      }
       const displayNum = stripLeadingDollar(
         moneyValueFromNumericPart(isEditableMoneyValue(fullText) ? stripLeadingDollar(fullText) : fullText)
       );
-      const storedDisplay = ledgerCellStoredMoney(fullText);
+      const storedDisplay = storedValue;
       const selSpan =
-        'span.mt-money-value[data-editable="1"][data-section="ledger"][data-row="' +
+        'span.mt-money-value[data-editable="1"][data-section="ledger"][data-step="' +
+        stepNum +
+        '"][data-row="' +
         row +
         '"][data-col="' +
         col +
@@ -1062,16 +2924,46 @@
       }
       if (!opts.pastDueCol) {
         const selTd =
-          'td[data-editable="1"][data-section="ledger"][data-row="' + row + '"][data-col="' + col + '"]';
+          'td[data-editable="1"][data-section="ledger"][data-step="' +
+          stepNum +
+          '"][data-row="' +
+          row +
+          '"][data-col="' +
+          col +
+          '"]';
         root.querySelectorAll(selTd).forEach(function (el) {
           if (el.getAttribute('contenteditable') === 'true') return;
           if (el.querySelector('.mt-past-due-btn')) return;
+          if (el.querySelector('.mt-na-value')) {
+            el.className = 'mt-money-td';
+            el.innerHTML =
+              '<span class="mt-currency-prefix">$</span>' +
+              '<span class="mt-money-value" data-editable="1" data-section="ledger" data-step="' +
+              stepNum +
+              '" data-row="' +
+              row +
+              '" data-col="' +
+              col +
+              '">' +
+              escapeHtml(displayNum) +
+              '</span>';
+            return;
+          }
           el.textContent = storedDisplay;
         });
         return;
       }
-      root.querySelectorAll('td[data-section="ledger"][data-row="' + row + '"][data-col="' + col + '"]').forEach(
-        function (td) {
+      root
+        .querySelectorAll(
+          'td[data-section="ledger"][data-step="' +
+            stepNum +
+            '"][data-row="' +
+            row +
+            '"][data-col="' +
+            col +
+            '"]'
+        )
+        .forEach(function (td) {
           if (td.querySelector('span.mt-money-value[data-editable="1"]')) return;
           const step = td.getAttribute('data-step');
           const btn =
@@ -1098,39 +2990,395 @@
       );
     }
 
-    /** Sync exported Total (Past Due line) from ledger column — never overwrite Past due amount bucket. */
-    function syncPastDueTotalLineOnly(rowIndex, text) {
-      const money = moneyValueFromNumericPart(
-        isEditableMoneyValue(text) ? stripLeadingDollar(text) : text
+    function parsePastDuePairMoney(val) {
+      const raw = isEditableMoneyValue(val) ? stripLeadingDollar(val) : String(val || '');
+      const n = parseFloat(String(raw).replace(/,/g, '').replace(/[^0-9.-]/g, ''));
+      if (isNaN(n)) return 0;
+      return Math.round(n * 100) / 100;
+    }
+
+    function findPastDuePairIndexByKey(entry, key) {
+      if (!entry || !entry.pairs) return -1;
+      for (let i = 0; i < entry.pairs.length; i++) {
+        if (entry.pairs[i].key === key) return i;
+      }
+      return -1;
+    }
+
+    function sumPastDueComponentsFromEntry(entry) {
+      if (!entry || !entry.pairs) return 0;
+      let sum = 0;
+      PAST_DUE_COMPONENT_SUM_KEYS.forEach(function (k) {
+        const p = entry.pairs.find(function (x) {
+          return x.key === k;
+        });
+        if (!p) return;
+        const val = parsePastDuePairMoney(p.val);
+        if (k === 'Credit') sum -= val;
+        else sum += val;
+      });
+      return Math.round(sum * 100) / 100;
+    }
+
+    /** Recompute Total (Past Due line) from component buckets for one ledger row in one step. */
+    function recalcPastDueLineTotalForRow(stepNum, rowIndex) {
+      const sample = getPastDueEntryForRow(stepNum, rowIndex);
+      if (!sample) return null;
+      const totalNum = sumPastDueComponentsFromEntry(sample);
+      const formatted = ledgerCellStoredMoney(String(totalNum));
+      const entry = getPastDueEntryForRow(stepNum, rowIndex);
+      if (entry && entry.pairs) {
+        const ti = findPastDuePairIndexByKey(entry, 'Total (Past Due line)');
+        if (ti >= 0) entry.pairs[ti].val = formatted;
+      }
+      syncPastDueTotalLineOnly(stepNum, rowIndex, formatted);
+      return {
+        totalNum: totalNum,
+        formatted: formatted,
+        totalPairIndex: findPastDuePairIndexByKey(sample, 'Total (Past Due line)')
+      };
+    }
+
+    /** Sync Total (Past Due line) to modal entry and ledger Past Due column (not Past due amount bucket). */
+    function syncPastDueTotalLineOnly(stepNum, rowIndex, text) {
+      const ledgerStored = ledgerCellStoredMoney(
+        isEditableMoneyValue(text) ? stripLeadingDollar(text) : String(text || '')
       );
-      stepOrder.forEach(function (sn) {
-        const entry = getPastDueEntryForRow(sn, rowIndex);
-        if (!entry || !entry.pairs) return;
+      const entry = getPastDueEntryForRow(stepNum, rowIndex);
+      if (entry && entry.pairs) {
         entry.pairs.forEach(function (p) {
           if (p.key === 'Total (Past Due line)') {
-            p.val = money;
+            p.val = ledgerStored;
           }
+        });
+      }
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.rows[rowIndex]) return;
+      const col = findPastDueColIndex(d.ledger.headers);
+      if (col >= 0) {
+        d.ledger.rows[rowIndex][col] = ledgerStored;
+        syncLedgerCellsInDom(stepNum, rowIndex, col, ledgerStored, { pastDueCol: true });
+      }
+    }
+
+    function pastDueModalPairStoredMoney(text) {
+      return ledgerCellStoredMoney(
+        isEditableMoneyValue(text) ? stripLeadingDollar(text) : String(text || '')
+      );
+    }
+
+    function syncPastDuePairToLedger(stepNum, rowIndex, pairKey, val) {
+      if (pairKey === 'Past due amount') return;
+      const headers = ledgerHeadersFromAnyStep();
+      const col = pastDuePairKeyToLedgerCol(pairKey, headers);
+      if (col < 0) return;
+      const ledgerStored = ledgerCellStoredValue(val);
+      applyLedgerCellEdit(stepNum, rowIndex, col, ledgerStored);
+      syncLedgerCellsInDom(stepNum, rowIndex, col, ledgerStored, {
+        pastDueCol: col === findPastDueColIndex(headers)
+      });
+    }
+
+    function syncPastDueEntryToLedgerRow(stepNum, rowIndex) {
+      const fp = getLedgerRowFingerprint(stepNum, rowIndex);
+      if (!fp) return;
+      const ordinal = getLedgerRowMatchOrdinal(stepNum, rowIndex);
+      stepOrder.forEach(function (sn) {
+        const ri = findLedgerRowIndexForSync(sn, fp, ordinal, rowIndex);
+        const entry = getPastDueEntryForFingerprint(sn, fp, ordinal);
+        if (!entry || !entry.pairs || ri < 0) return;
+        entry.pairs.forEach(function (p) {
+          syncPastDuePairToLedger(sn, ri, p.key, p.val);
         });
       });
     }
 
-    function refreshLedgerPastDueRowInDom(rowIndex) {
+    function refreshLedgerPastDueRowInDom(stepNum, rowIndex) {
       const headers = ledgerHeadersFromAnyStep();
       const col = findPastDueColIndex(headers);
-      if (col < 0) return;
-      for (let i = 0; i < stepOrder.length; i++) {
-        const d = editableByStep.get(stepOrder[i]);
-        if (!d || !d.ledger.rows[rowIndex]) continue;
-        syncLedgerCellsInDom(rowIndex, col, d.ledger.rows[rowIndex][col], { pastDueCol: true });
-      }
+      if (col < 0 || stepNum == null || isNaN(stepNum)) return;
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger.rows[rowIndex]) return;
+      syncLedgerCellsInDom(stepNum, rowIndex, col, d.ledger.rows[rowIndex][col], { pastDueCol: true });
     }
 
     let pastDueModalCtx = null;
+    let pastDueClipboard = null;
+    /** Last ledger cell clicked (for Ctrl+C / Ctrl+V on Past Due column). */
+    let ledgerFocusCell = null;
+
+    function flashPastDueButton(btnId, ok) {
+      const btn = document.getElementById(btnId);
+      if (!btn) return;
+      btn.classList.remove('mt-btn-flash-ok');
+      void btn.offsetWidth;
+      if (ok) btn.classList.add('mt-btn-flash-ok');
+      setTimeout(function () {
+        btn.classList.remove('mt-btn-flash-ok');
+      }, 900);
+    }
+
+    function highlightLedgerPastDueCell(stepNum, rowIndex, on) {
+      const root = document.getElementById('root');
+      if (!root) return;
+      const col = findPastDueColIndex(ledgerHeadersFromAnyStep());
+      if (col < 0) return;
+      root
+        .querySelectorAll(
+          'td[data-section="ledger"][data-step="' +
+            stepNum +
+            '"][data-row="' +
+            rowIndex +
+            '"][data-col="' +
+            col +
+            '"]'
+        )
+        .forEach(function (td) {
+          if (on) td.classList.add('mt-past-due-selected');
+          else td.classList.remove('mt-past-due-selected');
+        });
+    }
+
+    function copyPastDueConfiguration() {
+      const ctx = pastDueModalCtx;
+      mtLog('copyConfiguration:start', { ctx: ctx });
+      if (!ctx) {
+        showPastDueModalFeedback('Open Past Due Details on a row first.', false);
+        return;
+      }
+      const entry = ensurePastDueEntryForRow(ctx.stepNum, ctx.rowIndex);
+      if (!entry || !entry.pairs) {
+        showPastDueModalFeedback('No past-due breakdown found for this row.', false);
+        mtLog('copyConfiguration:fail', { reason: 'no entry' });
+        return;
+      }
+      const fp = getLedgerRowFingerprint(ctx.stepNum, ctx.rowIndex);
+      pastDueClipboard = {
+        pairs: entry.pairs.map(function (p) {
+          return { key: p.key, val: String(p.val) };
+        }),
+        sourceFingerprint: fp,
+        sourceLabel: entry.label || ''
+      };
+      const pasteBtn = document.getElementById('pastDueModalPaste');
+      if (pasteBtn) pasteBtn.disabled = false;
+      flashPastDueButton('pastDueModalCopy', true);
+      const msg =
+        'Copied ' +
+        pastDueClipboard.pairs.length +
+        ' fields from “' +
+        (entry.label || 'row') +
+        '”. Open another row and Paste configuration.';
+      showPastDueModalFeedback(msg, true);
+      showClipboardToast('Past due configuration copied', true);
+      mtLog('copyConfiguration:ok', pastDueClipboard);
+    }
+
+    function pastePastDueConfiguration() {
+      const ctx = pastDueModalCtx;
+      mtLog('pasteConfiguration:start', {
+        ctx: ctx,
+        clipboard: pastDueClipboard
+      });
+      if (!ctx) {
+        showPastDueModalFeedback('Open Past Due Details on the target row first.', false);
+        return;
+      }
+      if (!pastDueClipboard || !pastDueClipboard.pairs || !pastDueClipboard.pairs.length) {
+        showPastDueModalFeedback('Nothing copied yet — use Copy configuration first.', false);
+        return;
+      }
+      const fp = getLedgerRowFingerprint(ctx.stepNum, ctx.rowIndex);
+      if (!fp) {
+        showPastDueModalFeedback('Could not identify this ledger row.', false);
+        return;
+      }
+      const ordinal = getLedgerRowMatchOrdinal(ctx.stepNum, ctx.rowIndex);
+      let pastedCount = 0;
+      const skipped = [];
+      stepOrder.forEach(function (sn) {
+        const ri = findLedgerRowIndexForSync(sn, fp, ordinal, ctx.rowIndex);
+        if (ri < 0) {
+          skipped.push({ step: sn, reason: 'ledger row not in step' });
+          return;
+        }
+        const entry = ensurePastDueEntryForRow(sn, ri);
+        if (!entry || !entry.pairs) {
+          skipped.push({ step: sn, reason: 'could not create past-due entry' });
+          return;
+        }
+        pastDueClipboard.pairs.forEach(function (src) {
+          entry.pairs.forEach(function (p) {
+            if (p.key === src.key) p.val = src.val;
+          });
+        });
+        recalcPastDueLineTotalForRow(sn, ri);
+        syncPastDueEntryToLedgerRow(sn, ri);
+        refreshLedgerPastDueRowInDom(sn, ri);
+        refreshLedgerRowAndDependents(sn, ri);
+        pastedCount++;
+      });
+      const modalEntry = getPastDueEntryForFingerprint(ctx.stepNum, fp);
+      if (modalEntry) {
+        document.getElementById('pastDueModalKv').innerHTML = renderKV(
+          modalEntry.pairs,
+          ctx.stepNum,
+          'pastdue-modal',
+          true
+        );
+      }
+      refreshValidationForFingerprint(fp);
+      flashPastDueButton('pastDueModalPaste', pastedCount > 0);
+      if (pastedCount > 0) {
+        const msg =
+          'Pasted into ' +
+          pastedCount +
+          ' step(s) for “' +
+          (modalEntry && modalEntry.label ? modalEntry.label : 'target row') +
+          '”.';
+        showPastDueModalFeedback(msg, true);
+        showClipboardToast('Past due configuration pasted', true);
+        mtLog('pasteConfiguration:ok', { pastedCount: pastedCount, skipped: skipped });
+      } else {
+        showPastDueModalFeedback(
+          'Paste failed — target row not found in any loaded step.',
+          false
+        );
+        mtLog('pasteConfiguration:fail', { skipped: skipped, targetFingerprint: fp });
+      }
+    }
+
+    function copyLedgerPastDueFromCell(stepNum, rowIndex) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.rows[rowIndex]) {
+        showClipboardToast('Could not copy — invalid cell', false);
+        return;
+      }
+      const col = findPastDueColIndex(d.ledger.headers);
+      if (col < 0) {
+        showClipboardToast('Past Due column not found', false);
+        return;
+      }
+      const val = ledgerCellStoredValue(d.ledger.rows[rowIndex][col]);
+      const entry = getPastDueEntryForRow(stepNum, rowIndex);
+      const fp = getLedgerRowFingerprint(stepNum, rowIndex);
+      pastDueClipboard = {
+        pairs: entry
+          ? entry.pairs.map(function (p) {
+              return { key: p.key, val: String(p.val) };
+            })
+          : null,
+        sourceFingerprint: fp,
+        sourceLabel: entry ? entry.label : buildPastDueLabelForLedgerRow(stepNum, rowIndex),
+        ledgerValueOnly: val
+      };
+      const pasteBtn = document.getElementById('pastDueModalPaste');
+      if (pasteBtn) pasteBtn.disabled = !(pastDueClipboard.pairs && pastDueClipboard.pairs.length);
+      highlightLedgerPastDueCell(stepNum, rowIndex, true);
+      showClipboardToast('Copied Past Due: ' + stripLeadingDollar(val), true);
+      mtLog('copyLedgerPastDue:ok', {
+        stepNum: stepNum,
+        rowIndex: rowIndex,
+        value: val,
+        hasFullConfig: !!(pastDueClipboard.pairs && pastDueClipboard.pairs.length)
+      });
+    }
+
+    function pasteLedgerPastDueToCell(stepNum, rowIndex) {
+      mtLog('pasteLedgerPastDue:start', {
+        targetStep: stepNum,
+        targetRow: rowIndex,
+        clipboard: pastDueClipboard
+      });
+      if (!pastDueClipboard) {
+        showClipboardToast('Nothing copied — click a Past Due cell and Ctrl+C first', false);
+        return;
+      }
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.rows[rowIndex]) {
+        showClipboardToast('Could not paste — invalid target cell', false);
+        return;
+      }
+      const col = findPastDueColIndex(d.ledger.headers);
+      if (col < 0) {
+        showClipboardToast('Past Due column not found', false);
+        return;
+      }
+      const targetFp = getLedgerRowFingerprint(stepNum, rowIndex);
+      if (pastDueClipboard.pairs && pastDueClipboard.pairs.length) {
+        const entry = ensurePastDueEntryForRow(stepNum, rowIndex);
+        if (!entry) {
+          showClipboardToast('Could not create past-due entry for target row', false);
+          return;
+        }
+        pastDueClipboard.pairs.forEach(function (src) {
+          entry.pairs.forEach(function (p) {
+            if (p.key === src.key) p.val = src.val;
+          });
+        });
+        recalcPastDueLineTotalForRow(stepNum, rowIndex);
+        syncPastDueEntryToLedgerRow(stepNum, rowIndex);
+      } else if (pastDueClipboard.ledgerValueOnly != null) {
+        const stored = ledgerCellStoredValue(pastDueClipboard.ledgerValueOnly);
+        const fpPaste = propagateLedgerCellToAllSteps(stepNum, rowIndex, col, stored);
+        const ordinalPaste = getLedgerRowMatchOrdinal(stepNum, rowIndex);
+        stepOrder.forEach(function (sn) {
+          const ri = findLedgerRowIndexForSync(sn, fpPaste, ordinalPaste, rowIndex);
+          if (ri < 0) return;
+          const entry = ensurePastDueEntryForRow(sn, ri);
+          if (entry && entry.pairs) {
+            entry.pairs.forEach(function (p) {
+              if (p.key === 'Total (Past Due line)') p.val = stored;
+            });
+          }
+        });
+      }
+      refreshLedgerPastDueRowInDom(stepNum, rowIndex);
+      refreshLedgerRowAndDependents(stepNum, rowIndex);
+      refreshValidationForFingerprint(targetFp);
+      highlightLedgerPastDueCell(stepNum, rowIndex, true);
+      setTimeout(function () {
+        highlightLedgerPastDueCell(stepNum, rowIndex, false);
+      }, 1200);
+      showClipboardToast(
+        'Pasted into row ' +
+          (rowIndex + 1) +
+          ' (Step ' +
+          stepNum +
+          ')',
+        true
+      );
+      mtLog('pasteLedgerPastDue:ok', { stepNum: stepNum, rowIndex: rowIndex, targetFp: targetFp });
+    }
+
+    function handleLedgerClipboardShortcut(e) {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const editing =
+        e.target &&
+        e.target.getAttribute &&
+        e.target.getAttribute('contenteditable') === 'true';
+      if (editing) return;
+      if (!ledgerFocusCell) return;
+      const headers = ledgerHeadersFromAnyStep();
+      const pastDueCol = findPastDueColIndex(headers);
+      if (pastDueCol < 0 || ledgerFocusCell.col !== pastDueCol) return;
+      const key = String(e.key || '').toLowerCase();
+      if (key === 'c') {
+        e.preventDefault();
+        copyLedgerPastDueFromCell(ledgerFocusCell.stepNum, ledgerFocusCell.row);
+        return;
+      }
+      if (key === 'v') {
+        e.preventDefault();
+        pasteLedgerPastDueToCell(ledgerFocusCell.stepNum, ledgerFocusCell.row);
+      }
+    }
 
     function syncPastDueModalKvInDom(pairIndex, fullText) {
       const kvRoot = document.getElementById('pastDueModalKv');
       if (!kvRoot) return;
-      const display = isEditableMoneyValue(fullText) ? stripLeadingDollar(fullText) : fullText;
+      const display = looksLikeMoneyValue(fullText) ? stripLeadingDollar(fullText) : fullText;
       kvRoot.querySelectorAll(
         'span.mt-money-value[data-editable="1"][data-section="pastdue-modal"][data-kv="' + pairIndex + '"]'
       ).forEach(function (el) {
@@ -1141,50 +3389,142 @@
         '.kv-val[data-editable="1"][data-section="pastdue-modal"][data-kv="' + pairIndex + '"]'
       ).forEach(function (el) {
         if (el.getAttribute('contenteditable') === 'true') return;
+        if (el.classList.contains('mt-money-value')) return;
         el.textContent = fullText;
       });
     }
 
-    /** Same ledger row index across every step: past-due popup + matching ledger columns. */
-    function propagatePastDuePairEdit(rowIndex, pairIndex, text) {
-      if (rowIndex == null || isNaN(rowIndex) || pairIndex == null || isNaN(pairIndex)) return;
-      let pairKey = null;
-      for (let i = 0; i < stepOrder.length; i++) {
-        const entry = getPastDueEntryForRow(stepOrder[i], rowIndex);
-        if (entry && entry.pairs[pairIndex]) {
-          pairKey = entry.pairs[pairIndex].key;
-          break;
-        }
+    /** Past-due popup edit — same logical row (date · type · subtype) synced across all steps. */
+    function propagatePastDuePairEdit(stepNum, rowIndex, pairIndex, text) {
+      if (
+        stepNum == null ||
+        isNaN(stepNum) ||
+        rowIndex == null ||
+        isNaN(rowIndex) ||
+        pairIndex == null ||
+        isNaN(pairIndex)
+      ) {
+        return;
       }
+      const stored =
+        isEditableMoneyValue(text) || looksLikeMoneyValue(text)
+          ? pastDueModalPairStoredMoney(text)
+          : text;
+      const fp = getLedgerRowFingerprint(stepNum, rowIndex);
+      if (!fp) return;
+      const ordinal = getLedgerRowMatchOrdinal(stepNum, rowIndex);
+      const sourceEntry = getPastDueEntryForFingerprint(stepNum, fp, ordinal);
+      if (!sourceEntry || !sourceEntry.pairs) return;
+      let pairKey = null;
+      if (sourceEntry.pairs[pairIndex]) {
+        pairKey = sourceEntry.pairs[pairIndex].key;
+      }
+
+      let totalRecalc = null;
       stepOrder.forEach(function (sn) {
-        const d = editableByStep.get(sn);
-        if (!d || !Array.isArray(d.pastDue)) return;
-        const entry = d.pastDue.find(function (e) {
-          return e.rowIndex === rowIndex;
-        });
+        const ri = findLedgerRowIndexForSync(sn, fp, ordinal, rowIndex);
+        const entry = getPastDueEntryForFingerprint(sn, fp, ordinal);
         if (!entry || !entry.pairs) return;
-        if (entry.pairs[pairIndex]) {
-          entry.pairs[pairIndex].val = text;
-        }
         if (pairKey) {
           entry.pairs.forEach(function (p) {
-            if (p.key === pairKey) p.val = text;
+            if (p.key === pairKey) p.val = stored;
           });
+        } else if (entry.pairs[pairIndex]) {
+          entry.pairs[pairIndex].val = stored;
+        }
+        if (ri < 0) return;
+        if (pairKey && pairKey !== 'Total (Past Due line)') {
+          const rec = recalcPastDueLineTotalForRow(sn, ri);
+          if (sn === stepNum) totalRecalc = rec;
+        } else if (pairKey === 'Total (Past Due line)') {
+          syncPastDueTotalLineOnly(sn, ri, stored);
         }
       });
-      if (pairKey === 'Total (Past Due line)') {
-        syncPastDueTotalLineOnly(rowIndex, text);
-      }
+
       const headers = ledgerHeadersFromAnyStep();
       const col = pairKey ? pastDuePairKeyToLedgerCol(pairKey, headers) : -1;
       if (col >= 0) {
-        const ledgerStored = ledgerCellStoredMoney(text);
-        propagateLedgerCellToAllSteps(rowIndex, col, ledgerStored);
-        syncLedgerCellsInDom(rowIndex, col, ledgerStored, {
-          pastDueCol: col === findPastDueColIndex(headers)
-        });
+        propagateLedgerCellToAllSteps(stepNum, rowIndex, col, stored);
       }
-      syncPastDueModalKvInDom(pairIndex, text);
+      if (totalRecalc && totalRecalc.totalPairIndex >= 0) {
+        syncPastDueModalKvInDom(totalRecalc.totalPairIndex, totalRecalc.formatted);
+      } else {
+        syncPastDueModalKvInDom(pairIndex, stored);
+      }
+      refreshValidationForFingerprint(fp);
+    }
+
+    function findKvPairIndexByKey(list, keyPatterns) {
+      if (!list || !list.length) return -1;
+      for (let i = 0; i < list.length; i++) {
+        const k = String(list[i].key || '').trim();
+        for (let j = 0; j < keyPatterns.length; j++) {
+          if (keyPatterns[j].test(k)) return i;
+        }
+      }
+      return -1;
+    }
+
+    function kvPairIsComputedTotalKey(section, key) {
+      const k = String(key || '').trim();
+      if (section === 'amount') {
+        return /^total\s*amount\s*due$/i.test(k) || /^total\s*due$/i.test(k);
+      }
+      if (section === 'pdf') {
+        return /^total[_\s-]*amount$/i.test(k);
+      }
+      return false;
+    }
+
+    function syncKvMoneyInStepDom(stepNum, section, pairIndex, fullText) {
+      const card = document.querySelector('.step-card[data-step-num="' + stepNum + '"]');
+      if (!card || pairIndex == null || isNaN(pairIndex)) return;
+      const display = looksLikeMoneyValue(fullText) ? stripLeadingDollar(fullText) : fullText;
+      card.querySelectorAll(
+        'span.mt-money-value[data-editable="1"][data-section="' +
+          section +
+          '"][data-kv="' +
+          pairIndex +
+          '"]'
+      ).forEach(function (el) {
+        if (el.getAttribute('contenteditable') === 'true') return;
+        el.textContent = display;
+      });
+    }
+
+    /** Recompute Total amount due from Sewer + Tax + Past Due + Late Fee − Credit. */
+    function recalcAmountBreakdownTotal(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.amount) return null;
+      const sewer = kvMoneyByKey(d.amount, [/^sewer\s*charge$/i]);
+      const tax = kvMoneyByKey(d.amount, [/^tax\s*charge$/i, /^tax\s*codes?$/i]);
+      const pastDue = kvMoneyByKey(d.amount, [/^past\s*due$/i]);
+      const late = kvMoneyByKey(d.amount, [/^late\s*fee$/i]);
+      const credit = kvMoneyByKey(d.amount, [/^credit$/i]);
+      const totalNum = Math.round((sewer + tax + pastDue + late - credit) * 100) / 100;
+      const formatted = formatUsd(totalNum);
+      const ti = findKvPairIndexByKey(d.amount, [/^total\s*amount\s*due$/i, /^total\s*due$/i]);
+      if (ti < 0) return null;
+      d.amount[ti].val = formatted;
+      syncKvMoneyInStepDom(stepNum, 'amount', ti, formatted);
+      return { totalNum: totalNum, formatted: formatted, totalPairIndex: ti };
+    }
+
+    /** Recompute Total_amount from Current_due + Previous_amount + Late_fee − Credit. */
+    function recalcPdfPreviewTotal(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.pdf) return null;
+      const cur = kvMoneyByKey(d.pdf, [/^current[_\s-]*due$/i]);
+      const prev = kvMoneyByKey(d.pdf, [/^previous[_\s-]*amount$/i]);
+      const late = kvMoneyByKey(d.pdf, [/^late[_\s-]*fee$/i]);
+      const credit = kvMoneyByKey(d.pdf, [/^credit$/i]);
+      const totalNum = Math.round((cur + prev + late - credit) * 100) / 100;
+      const formatted = formatUsd(totalNum);
+      const ti = findKvPairIndexByKey(d.pdf, [/^total[_\s-]*amount$/i]);
+      if (ti < 0) return null;
+      d.pdf[ti].val = formatted;
+      syncKvMoneyInStepDom(stepNum, 'pdf', ti, formatted);
+      return { totalNum: totalNum, formatted: formatted, totalPairIndex: ti };
     }
 
     function applyKvEdit(stepNum, section, index, text) {
@@ -1193,12 +3533,22 @@
       if (section.indexOf('pastdue-') === 0) {
         const ei = parseInt(section.slice('pastdue-'.length), 10);
         const entry = d.pastDue && d.pastDue[ei];
-        if (entry) propagatePastDuePairEdit(entry.rowIndex, index, text);
+        if (entry) propagatePastDuePairEdit(stepNum, entry.rowIndex, index, text);
         return;
       }
       const list = section === 'pdf' ? d.pdf : d.amount;
       if (!list || !list[index]) return;
-      list[index].val = text;
+      const stored =
+        looksLikeMoneyValue(text) || isEditableMoneyValue(text)
+          ? moneyValueFromNumericPart(stripLeadingDollar(text))
+          : text;
+      list[index].val = stored;
+      const pairKey = list[index].key;
+      if (section === 'amount' && !kvPairIsComputedTotalKey('amount', pairKey)) {
+        recalcAmountBreakdownTotal(stepNum);
+      } else if (section === 'pdf' && !kvPairIsComputedTotalKey('pdf', pairKey)) {
+        recalcPdfPreviewTotal(stepNum);
+      }
     }
 
     function openPastDueModal(stepNum, rowIndex, entryIndex) {
@@ -1214,8 +3564,12 @@
       }
       if (!entry || ei == null || ei < 0) return;
       pastDueModalCtx = { stepNum: stepNum, entryIndex: ei, rowIndex: entry.rowIndex };
+      if (entry.rowIndex != null && !isNaN(entry.rowIndex)) {
+        recalcPastDueLineTotalForRow(stepNum, entry.rowIndex);
+      }
       document.getElementById('pastDueModalLabel').textContent = entry.label || '';
       document.getElementById('pastDueModalKv').innerHTML = renderKV(entry.pairs, stepNum, 'pastdue-modal', true);
+      refreshPastDueModalValidationInDom();
       const overlay = document.getElementById('pastDueModal');
       overlay.classList.remove('hidden');
       overlay.setAttribute('aria-hidden', 'false');
@@ -1231,8 +3585,13 @@
     function closePastDueModal() {
       const ctx = pastDueModalCtx;
       flushPastDueModalEdits();
-      if (ctx && ctx.rowIndex != null) {
-        refreshLedgerPastDueRowInDom(ctx.rowIndex);
+      if (ctx && ctx.rowIndex != null && ctx.stepNum != null) {
+        refreshLedgerPastDueRowInDom(ctx.stepNum, ctx.rowIndex);
+        refreshLedgerTestStatusInDom(ctx.stepNum, ctx.rowIndex);
+        refreshLedgerPastDueCellStatusInDom(ctx.stepNum);
+      }
+      if (ctx && ctx.stepNum != null) {
+        refreshSectionValidationInDom(ctx.stepNum);
       }
       const overlay = document.getElementById('pastDueModal');
       overlay.classList.add('hidden');
@@ -1247,6 +3606,8 @@
       if (!overlay || overlay.dataset.bound === '1') return;
       overlay.dataset.bound = '1';
       document.getElementById('pastDueModalClose').addEventListener('click', closePastDueModal);
+      document.getElementById('pastDueModalCopy').addEventListener('click', copyPastDueConfiguration);
+      document.getElementById('pastDueModalPaste').addEventListener('click', pastePastDueConfiguration);
       overlay.addEventListener('click', function (e) {
         if (e.target === overlay) closePastDueModal();
       });
@@ -1315,7 +3676,7 @@
         }).join('');
         bindEditHandlers(root);
         bindPastDueModal();
-        if (hint) hint.textContent = 'Ledger: same row/column syncs across steps. Money: $ is fixed, edit digits only. Export → new tab.';
+        if (hint) hint.textContent = 'Ledger: same event row syncs across all steps (edit on step 2 or step 9 — both directions). Money: $ is fixed. Export → new tab.';
       } catch (err) {
         root.innerHTML = '<p class="err">' + escapeHtml(err.message || String(err)) + '</p>';
         if (hint) hint.textContent = 'Fix the file and reload.';

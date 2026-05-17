@@ -1,18 +1,24 @@
 #!/usr/bin/env node
 /**
- * Headless run of Susan Young "Master Test" (window.runSusanMasterTest).
+ * LIVE Susan Young master test — real Firebase login, real Firestore, real POS/billing UI.
+ * Changes persist: after the run you can open the billing app and see Susan's updated ledger.
  *
- * Prerequisites: npm install, npx playwright install chromium, npm start (server on BASE_URL).
- * Credentials: FIREBASE_TEST_EMAIL + FIREBASE_TEST_PASSWORD (or tools/billing-test.local.json via susan_master_test_script.mjs).
+ * NOT the offline runner (tools/run-master-test-offline.mjs) — that uses fake injected data.
  *
- * Writes:
- *   MASTER_TEST_RESULTS   (default: Master Test/test_script_results.txt)
- *   MASTER_TEST_CONSOLE   (default: Master Test/test_script_console_logs.txt)
+ * Prerequisites:
+ *   npm start  (server on BASE_URL, default http://127.0.0.1:8000)
+ *   npx playwright install chromium
+ *   tools/billing-test.local.json  OR  FIREBASE_TEST_EMAIL + FIREBASE_TEST_PASSWORD
+ *
+ * Settings → Toggles (in Firestore, set in the app before running):
+ *   - Testing Drawer ON
+ *   - Skip POS initial register count ON
  *
  * Env:
- *   BASE_URL, TEST_ACCOUNT_NUMBER, MASTER_TEST_ADVANCE=instant|walk,
- *   MASTER_TEST_CHECK_AMOUNT (default 10)
- *   MASTER_TEST_CHECK_NUMBER (default MT-10)
+ *   BASE_URL, TEST_ACCOUNT_NUMBER (default CUS-3011000)
+ *   MASTER_TEST_ADVANCE=walk|instant  (default walk — overlay day-by-day)
+ *   MASTER_TEST_TIMEOUT_MS (default 900000 for walk)
+ *   HEADED=1  (show browser)
  */
 
 import fs from 'fs';
@@ -36,7 +42,7 @@ async function loadPlaywright() {
 
 function startWaitTicker(label, intervalMs) {
   const id = setInterval(() => {
-    console.error('[susan-master-test] …still waiting (' + label + ') — check login / server / Firestore.');
+    console.error('[master-test-live] …still waiting (' + label + ')');
   }, intervalMs);
   return () => clearInterval(id);
 }
@@ -48,12 +54,14 @@ async function main() {
   const password = process.env.FIREBASE_TEST_PASSWORD || process.env.DEV_TEST_PASSWORD;
   if (!email || !password) {
     console.error(
-      'Missing credentials. Set FIREBASE_TEST_EMAIL + FIREBASE_TEST_PASSWORD (or run via Master Test/susan_master_test_script.mjs with billing-test.local.json).'
+      '[master-test-live] Missing credentials.\n' +
+        '  tools/billing-test.local.json  OR  FIREBASE_TEST_EMAIL + FIREBASE_TEST_PASSWORD\n' +
+        '  Run: npm run test:master:susan'
     );
     process.exit(1);
   }
   if (String(password).trim() === 'your-password-here' || String(password).trim() === 'your-firebase-password-here') {
-    console.error('[susan-master-test] Replace placeholder password in tools/billing-test.local.json.');
+    console.error('[master-test-live] Replace placeholder password in tools/billing-test.local.json.');
     process.exit(1);
   }
 
@@ -70,13 +78,14 @@ async function main() {
   const headed = process.env.HEADED === '1' || process.env.HEADED === 'true';
 
   const scenario = {
-    /** walk = one simulated calendar day at a time (required for 60-day deposit trigger on 3/2, not 4/1). */
+    liveMode: true,
     advanceMode: process.env.MASTER_TEST_ADVANCE === 'instant' ? 'instant' : 'walk',
     accountNumber: (process.env.TEST_ACCOUNT_NUMBER || 'CUS-3011000').trim(),
     captureConsole: true,
     suppressAlerts: true,
     openResultsTab: false,
-    scopeDiagnosticConsole: true,
+    scopeDiagnosticConsole: process.env.MASTER_TEST_SCOPE_DIAG === '1',
+    walkStepDelayMs: 0,
     masterCheckAmount:
       process.env.MASTER_TEST_CHECK_AMOUNT != null && !isNaN(parseFloat(process.env.MASTER_TEST_CHECK_AMOUNT))
         ? parseFloat(process.env.MASTER_TEST_CHECK_AMOUNT)
@@ -84,28 +93,40 @@ async function main() {
     masterCheckNumber: process.env.MASTER_TEST_CHECK_NUMBER != null ? String(process.env.MASTER_TEST_CHECK_NUMBER) : 'MT-10'
   };
 
+  const masterTestTimeoutMs =
+    process.env.MASTER_TEST_TIMEOUT_MS != null && !isNaN(parseInt(process.env.MASTER_TEST_TIMEOUT_MS, 10))
+      ? parseInt(process.env.MASTER_TEST_TIMEOUT_MS, 10)
+      : scenario.advanceMode === 'walk'
+        ? 900000
+        : 180000;
+
   const browser = await chromium.launch({ headless: !headed });
   const page = await browser.newPage();
-  page.setDefaultTimeout(180000);
+  page.setDefaultTimeout(300000);
   let exitCode = 0;
+  let progressTimer = null;
+
+  page.on('console', (msg) => {
+    const text = msg.text();
+    if (
+      text.indexOf('[MasterTest]') !== -1 ||
+      msg.type() === 'error' ||
+      msg.type() === 'warning'
+    ) {
+      console.error('[browser:' + msg.type() + ']', text);
+    }
+  });
+
+  page.on('pageerror', (err) => {
+    console.error('[browser:pageerror]', err && err.message ? err.message : String(err));
+  });
 
   try {
-    page.on('console', (msg) => {
-      try {
-        const t = msg.type();
-        if (t === 'error' || t === 'warning') {
-          console.error('[browser ' + t + ']', msg.text());
-        }
-      } catch (e) {
-        /* ignore */
-      }
-    });
+    const url = `${baseUrl}/index.html?masterTestLive=${Date.now()}`;
+    console.error('[master-test-live] Opening', url, '(LIVE — Firestore + real billing UI)');
+    await page.goto(url, { waitUntil: 'load', timeout: 120000 });
 
-    const url = `${baseUrl}/index.html`;
-    console.error('[susan-master-test] Opening', url);
-    await page.goto(url, { waitUntil: 'load' });
-
-    let stopBootTick = startWaitTicker('bootstrap (auth or customers)', 12000);
+    let stopBootTick = startWaitTicker('login or customers', 15000);
     try {
       await page.waitForFunction(
         () => {
@@ -114,12 +135,12 @@ async function main() {
           const n = document.querySelectorAll('#customerTableBody tr').length;
           return modalShown || n > 0;
         },
-        { timeout: 120000 }
+        { timeout: 180000 }
       );
     } catch (e) {
       await page.screenshot({ path: shotPath, fullPage: true }).catch(() => {});
-      console.error('[susan-master-test] Screenshot:', shotPath);
-      throw new Error('Timed out waiting for login modal or customer rows. Is the server running?');
+      console.error('[master-test-live] Screenshot:', shotPath);
+      throw new Error('Timed out waiting for login modal or customer rows. Is npm start running?');
     } finally {
       stopBootTick();
     }
@@ -130,11 +151,11 @@ async function main() {
       .catch(() => false);
 
     if (authModalShown) {
-      console.error('[susan-master-test] Signing in …');
+      console.error('[master-test-live] Signing in to Firebase…');
       await page.locator('#firebaseEmail').fill(email);
       await page.locator('#firebasePassword').fill(password);
       await page.locator('#firebaseAuthSubmit').click();
-      stopBootTick = startWaitTicker('Firebase sign-in', 12000);
+      stopBootTick = startWaitTicker('Firebase sign-in', 15000);
       try {
         await page.waitForFunction(
           () => {
@@ -144,14 +165,14 @@ async function main() {
               err && !err.classList.contains('hidden') && String(err.textContent || '').trim().length > 0;
             return (m && m.classList.contains('hidden')) || errShown;
           },
-          { timeout: 120000 }
+          { timeout: 180000 }
         );
       } finally {
         stopBootTick();
       }
       const errVisible = await page
         .locator('#firebaseAuthError')
-        .evaluate((el) => el && !el.classList.contains('hidden') && String(el.textContent || '').trim().length > 0)
+        .evaluate((el) => el && !el.classList.contains('hidden') && String(err.textContent || '').trim().length > 0)
         .catch(() => false);
       if (errVisible) {
         const msg = await page.locator('#firebaseAuthError').innerText().catch(() => '');
@@ -160,65 +181,91 @@ async function main() {
       }
     }
 
-    stopBootTick = startWaitTicker('customer rows', 12000);
+    stopBootTick = startWaitTicker('customer table', 15000);
     try {
       await page.waitForFunction(
         () => document.querySelectorAll('#customerTableBody tr').length > 0,
-        { timeout: 120000 }
+        { timeout: 180000 }
       );
     } finally {
       stopBootTick();
     }
 
-    const drawerModal = page.locator('#drawerSelectionModal');
-    const drawerVisible = await drawerModal
-      .evaluate((el) => el && !el.classList.contains('hidden'))
-      .catch(() => false);
-    if (drawerVisible) {
-      console.error('[susan-master-test] Drawer modal open; picking first drawer …');
-      await page.evaluate(async () => {
-        const modal = document.getElementById('drawerSelectionModal');
-        if (!modal || modal.classList.contains('hidden')) return;
-        try {
-          if (
-            typeof drawers !== 'undefined' &&
-            Array.isArray(drawers) &&
-            drawers.length > 0 &&
-            typeof window.selectDrawer === 'function'
-          ) {
-            await window.selectDrawer(drawers[0]);
-          }
-        } catch (e) {
-          console.error('[susan-master-test] drawer', e);
-        }
-      });
-      await new Promise((r) => setTimeout(r, 800));
+    console.error('[master-test-live] Preparing live test (Firestore customer, toggles, test date)…');
+    const prep = await page.evaluate(async (cfgJson) => {
+      window.clearMasterTestOfflineMode();
+      if (typeof window.__developTestPrepareLiveMasterTest !== 'function') {
+        return { ok: false, error: 'prepareLiveMasterTest missing — reload index.html' };
+      }
+      return await window.__developTestPrepareLiveMasterTest(JSON.parse(cfgJson));
+    }, JSON.stringify(scenario));
+
+    console.error('[master-test-live] Live prep:', JSON.stringify(prep));
+    if (!prep || !prep.ok) {
+      throw new Error('Live prep failed: ' + (prep && prep.error ? prep.error : 'unknown'));
     }
 
-    console.error('[susan-master-test] Running window.runSusanMasterTest …');
-    const result = await page.evaluate(async (cfgJson) => {
-      if (typeof window.runSusanMasterTest !== 'function') {
-        return { ok: false, error: 'runSusanMasterTest is not defined', masterTestReport: '', consoleLines: [] };
+    console.error(
+      '[master-test-live] Running master test (liveMode=true, advanceMode=' +
+        scenario.advanceMode +
+        ', timeoutMs=' +
+        masterTestTimeoutMs +
+        ')…'
+    );
+
+    progressTimer = setInterval(async () => {
+      try {
+        const p = await page.evaluate(() => window.__MASTER_TEST_PROGRESS || null);
+        if (p) {
+          console.error(
+            '[master-test-live] progress — ' +
+              p.step +
+              (p.detail != null ? ' ' + JSON.stringify(p.detail) : '')
+          );
+        }
+      } catch (e) {
+        /* page busy */
       }
-      const cfg = JSON.parse(cfgJson);
-      return await window.runSusanMasterTest(cfg);
-    }, JSON.stringify(scenario));
+    }, 5000);
+
+    const result = await page.evaluate(
+      async ({ cfgJson, timeoutMs }) => {
+        window.clearMasterTestOfflineMode();
+        return await Promise.race([
+          window.runSusanMasterTest(JSON.parse(cfgJson)),
+          new Promise(function (_, reject) {
+            setTimeout(function () {
+              reject(new Error('runSusanMasterTest timeout (' + timeoutMs + 'ms)'));
+            }, timeoutMs);
+          })
+        ]);
+      },
+      { cfgJson: JSON.stringify(scenario), timeoutMs: masterTestTimeoutMs }
+    );
+
+    clearInterval(progressTimer);
+    progressTimer = null;
 
     const report = result && typeof result.masterTestReport === 'string' ? result.masterTestReport : '';
     fs.mkdirSync(path.dirname(outResults), { recursive: true });
-    const reportBody = report || JSON.stringify(result, null, 2);
-    fs.writeFileSync(outResults, reportBody.replace(/\n+$/, ''), 'utf8');
-    console.error('[susan-master-test] Wrote', outResults);
+    fs.writeFileSync(outResults, (report || JSON.stringify(result, null, 2)).replace(/\n+$/, ''), 'utf8');
+    console.error('[master-test-live] Wrote', outResults, '(' + (report ? report.length : 0) + ' chars)');
 
     const lines = result && Array.isArray(result.consoleLines) ? result.consoleLines : [];
     fs.writeFileSync(outConsole, lines.join('\n') + (lines.length ? '\n' : ''), 'utf8');
-    console.error('[susan-master-test] Wrote', outConsole, '(' + lines.length + ' lines)');
+    console.error('[master-test-live] Wrote', outConsole, '(' + lines.length + ' lines)');
 
     if (!result || !result.ok) {
-      console.error('[susan-master-test] Failed:', result && result.error ? result.error : '(no detail)');
+      console.error('[master-test-live] Failed:', result && result.error ? result.error : '(no detail)');
       exitCode = 2;
+    } else {
+      console.error(
+        '[master-test-live] SUCCESS — changes saved to Firestore. Open the billing app and look up',
+        scenario.accountNumber
+      );
     }
   } finally {
+    if (progressTimer) clearInterval(progressTimer);
     await browser.close().catch(() => {});
   }
 
@@ -226,6 +273,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error('[master-test-live] Fatal:', err);
   process.exit(1);
 });
