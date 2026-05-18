@@ -2837,31 +2837,42 @@
     }
 
     const LEDGER_CALC_STATUS_TITLE_OK =
-      'Sewer + Tax Codes + PUC Surcharge + Past Due + Late Fee − Credit − Amount Paid = Balance After';
+      'Sewer + Tax Codes + PUC + Past Due + Late Fee − Credit + Amount Charged − Amount Paid = Balance After';
     const LEDGER_CALC_STATUS_TITLE_FAIL =
-      'Column sum ≠ Balance After (Sewer + Tax Codes + PUC + Past Due + Late Fee − Credit − Amount Paid)';
+      'Column sum ≠ Balance After (Sewer + Tax + PUC + Past Due + Late Fee − Credit + Amount Charged − Amount Paid)';
 
-    /** Late Fee charge rows: Late Fee column only (never Amount Charged, which is incremental). */
-    function ledgerLateFeeForCalcEquation(row, headers) {
+    /** Calc Status column only: Sewer + Tax + PUC + Past Due + Late Fee − Credit + Amount Charged − Amount Paid = Balance After (N/A → 0). */
+    function validateLedgerRowCalcStatus(row, headers) {
       const c = ledgerMoneyCols(headers);
-      if (c.lateFee < 0) return 0;
-      return ledgerCellMoney(row, c.lateFee);
+      if (c.balanceAfter < 0) return null;
+      const balRaw = String(row[c.balanceAfter] ?? '').trim();
+      if (balRaw === '' || balRaw === '—') return null;
+      const lhs =
+        Math.round(
+          (ledgerCellMoney(row, c.sewer) +
+            ledgerCellMoney(row, c.tax) +
+            ledgerCellMoney(row, c.puc) +
+            ledgerCellMoney(row, c.pastDue) +
+            ledgerCellMoney(row, c.lateFee) -
+            ledgerCellMoney(row, c.credit) +
+            ledgerCellMoney(row, c.amountCharged) -
+            ledgerCellMoney(row, c.amountPaid)) *
+            100
+        ) / 100;
+      return moneyNearlyEqual(lhs, ledgerCellMoney(row, c.balanceAfter));
     }
 
-    /** Sewer + Tax + PUC + Past Due + Late Fee − Credit − Amount Paid = Balance After. */
+    /** Legacy row-balance check used by Test Status column (not Calc Status). */
     function validateLedgerRowBalance(row, headers) {
       const c = ledgerMoneyCols(headers);
       const paid = ledgerAmountPaidForEquation(row, headers);
-      const lateFee = isLedgerLateFeeRow(row, headers)
-        ? ledgerLateFeeForCalcEquation(row, headers)
-        : ledgerCellMoney(row, c.lateFee);
       const lhs =
         Math.round(
           (ledgerCellMoney(row, c.sewer) +
             ledgerCellMoney(row, c.pastDue) +
             ledgerCellMoney(row, c.tax) +
             ledgerCellMoney(row, c.puc) +
-            lateFee -
+            ledgerCellMoney(row, c.lateFee) -
             ledgerCellMoney(row, c.credit) -
             paid) *
             100
@@ -2878,14 +2889,23 @@
         );
       }
       const row = rows[displayRowIndex];
-      const ok = validateLedgerRowBalance(row, headers);
+      const calcOk = validateLedgerRowCalcStatus(row, headers);
+      if (calcOk === null) {
+        return (
+          '<td class="mt-calc-status-cell" data-calc-status="1" data-step="' +
+          stepNum +
+          '" data-row="' +
+          (storedRi >= 0 ? storedRi : '') +
+          '"><span class="text-slate-400" title="No Balance After on this row">—</span></td>'
+        );
+      }
       return (
         '<td class="mt-calc-status-cell" data-calc-status="1" data-step="' +
         stepNum +
         '" data-row="' +
         (storedRi >= 0 ? storedRi : '') +
         '">' +
-        renderTestStatusIcon(ok, LEDGER_CALC_STATUS_TITLE_OK, LEDGER_CALC_STATUS_TITLE_FAIL) +
+        renderTestStatusIcon(calcOk, LEDGER_CALC_STATUS_TITLE_OK, LEDGER_CALC_STATUS_TITLE_FAIL) +
         '</td>'
       );
     }
