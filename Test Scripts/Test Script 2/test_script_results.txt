@@ -1,8 +1,6 @@
 Step 1:
 
 Description: 
-Do a fresh start and then set the test date to 1/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -177,8 +175,6 @@ $178.49
 Step 2:
 
 Description: 
-Advance to future date: 2/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -473,8 +469,6 @@ $361.98
 Step 3:
 
 Description: 
-Advance to future date: 3/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -889,7 +883,6 @@ $545.47
 Step 4:
 
 Description: 
-Advance to future date: 3/2/26
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -1085,12 +1078,12 @@ Past Due
 Late Fee
 Credit
 Total amount due
-$168.36
-$10.13
-$178.49
-$5.00
 $0
-$361.98
+$0
+$0
+$0
+$0
+$0
 
 View Past Due Details Shows:
 
@@ -1350,12 +1343,9 @@ $0
 Step 5:
 
 Description: 
-Advance to future date: 4/1/26
-Have them pay $10
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
-Log what PDF Bill shows
 
 Payments/Charges Table Shows:
 
@@ -1869,24 +1859,10 @@ $0
 $0
 0
 
-Bill PDF Preview Shows:
-
-Current_due
-Previous_amount
-Late_fee
-Credit
-Total_amount
-$178.49
-$361.98
-$5.00
-$0
-$545.47
-
 
 Step 6:
 
 Description: 
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -2481,8 +2457,6 @@ $168.49
 Step 7:
 
 Description: 
-Advance to future date: 5/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details

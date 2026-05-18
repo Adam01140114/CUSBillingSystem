@@ -31414,6 +31414,35 @@
         let tax = 0;
         let depositZeroComposition = null;
         if (Math.abs(totalDue) < 0.005 && !accountCreditOnly) {
+          const holdZeroAfterFullDeposit =
+            typeof lastPaymentIsFullSecurityDepositAutoApply === 'function' &&
+            lastPaymentIsFullSecurityDepositAutoApply(customer) &&
+            typeof getAuthoritativeOpenBalanceAfterLastPaymentIfStillApplicable === 'function' &&
+            (function () {
+              const snap = getAuthoritativeOpenBalanceAfterLastPaymentIfStillApplicable(customer);
+              return snap != null && snap <= 0.005;
+            })();
+          if (holdZeroAfterFullDeposit) {
+            const clearedLate = lateFee;
+            pastDue = 0;
+            lateFee = 0;
+            credit = 0;
+            totalDue = 0;
+            sewer = 0;
+            tax = 0;
+            try {
+              if (typeof window.masterTestLog === 'function') {
+                window.masterTestLog('amountBreakdown:holdZeroAfterFullDeposit', {
+                  account: customer.accountNumber || customer.id,
+                  panelTotal: parseFloat(panel && panel.total) || 0,
+                  calcTotal: parseFloat(calc && calc.total) || 0,
+                  clearedLateFee: clearedLate
+                });
+              }
+            } catch (eHoldZeroLog) {
+              /* ignore */
+            }
+          } else {
           depositZeroComposition =
             typeof masterTestDepositZeroPanelBreakdown === 'function'
               ? masterTestDepositZeroPanelBreakdown(customer)
@@ -31459,6 +31488,7 @@
                 /* ignore */
               }
             }
+          }
           }
         }
         if (!depositZeroComposition) {
@@ -32119,30 +32149,6 @@
       }
 
       function developTestMasterTestStepDescription(stepDef) {
-        const lines = [];
-        if (
-          stepDef &&
-          stepDef.advanceDateEnabled &&
-          stepDef.advanceDate &&
-          !stepDef.freshStart
-        ) {
-          lines.push(
-            'Advance to future date: ' + developTestFormatAdvanceDateLabel(stepDef.advanceDate)
-          );
-        }
-        if (stepDef && stepDef.freshStart) {
-          lines.push('Do a fresh start and then set the test date to 1/1/26');
-        }
-        if (stepDef && stepDef.billThem) lines.push('Bill them');
-        if (stepDef && stepDef.payEnabled) {
-          const raw = stepDef.payAmount != null ? String(stepDef.payAmount).trim().replace(/[^0-9.]/g, '') : '';
-          const n = parseFloat(raw);
-          let amt = '$0';
-          if (!isNaN(n)) {
-            amt = Math.abs(n - Math.round(n)) < 0.005 ? '$' + String(Math.round(n)) : '$' + n.toFixed(2);
-          }
-          lines.push('Have them pay ' + amt);
-        }
         const caps =
           stepDef && Array.isArray(stepDef.dataCaptures) && stepDef.dataCaptures.length
             ? stepDef.dataCaptures
@@ -32151,6 +32157,7 @@
                 'Log what the amount breakdown shows',
                 'Log View Past Due Details'
               ];
+        const lines = [];
         caps.forEach(function (c) {
           if (c && lines.indexOf(c) === -1) lines.push(c);
         });

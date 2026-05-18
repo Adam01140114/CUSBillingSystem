@@ -1,7 +1,6 @@
 Step 1:
 
 Description: 
-Do a fresh start and then set the test date to 1/1/26
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -102,7 +101,6 @@ $0
 Step 2:
 
 Description: 
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -277,8 +275,6 @@ $178.49
 Step 3:
 
 Description: 
-Advance to future date: 2/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -573,8 +569,6 @@ $361.98
 Step 4:
 
 Description: 
-Advance to future date: 3/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -989,8 +983,6 @@ $545.47
 Step 5:
 
 Description: 
-Advance to future date: 3/2/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -1525,7 +1517,6 @@ $178.49
 Step 6:
 
 Description: 
-Advance to future date: 4/1/26
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -2106,7 +2097,6 @@ $0
 Step 7:
 
 Description: 
-Have them pay $10
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -2747,7 +2737,6 @@ $0
 Step 8:
 
 Description: 
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -3462,8 +3451,6 @@ $351.98
 Step 9:
 
 Description: 
-Advance to future date: 5/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details

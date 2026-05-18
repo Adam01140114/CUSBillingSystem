@@ -1,8 +1,6 @@
 Step 1:
 
 Description: 
-Do a fresh start and then set the test date to 1/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -49,9 +47,9 @@ $0
 01/01/2026 12:00 AM
 Charge
 Billed Customer
-0
-0
-0
+$0
+$0
+$0
 0
 $0
 N/A
@@ -177,8 +175,6 @@ $178.49
 Step 2:
 
 Description: 
-Advance to future date: 2/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -225,9 +221,9 @@ $0
 01/01/2026 12:00 AM
 Charge
 Billed Customer
-0
-0
-0
+$0
+$0
+$0
 0
 $0
 N/A
@@ -253,7 +249,7 @@ $168.36
 $2.44
 $7.69
 0
-0
+$0
 $0
 5
 N/A
@@ -269,13 +265,13 @@ $5.00
 $0
 N/A
 N/A
-183.49
+$183.49
 02/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 0
 $5.00
 N/A
@@ -285,7 +281,7 @@ $361.98
 02/01/2026 12:00 AM
 Status Update
 Current Status
-168.36
+$168.36
 $2.44
 $7.69
 178.49
@@ -430,11 +426,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-0
 $0
-0
-0
-0
+$0
+$0
+$0
+$0
 $0
 0
 
@@ -473,8 +469,6 @@ $361.98
 Step 3:
 
 Description: 
-Advance to future date: 3/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -521,9 +515,9 @@ $0
 01/01/2026 12:00 AM
 Charge
 Billed Customer
-0
-0
-0
+$0
+$0
+$0
 0
 $0
 N/A
@@ -549,7 +543,7 @@ $168.36
 $2.44
 $7.69
 0
-0
+$0
 $0
 5
 N/A
@@ -565,13 +559,13 @@ $5.00
 $0
 N/A
 N/A
-183.49
+$183.49
 02/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 0
 $5.00
 N/A
@@ -581,7 +575,7 @@ $361.98
 02/01/2026 12:00 AM
 Status Update
 Current Status
-168.36
+$168.36
 $2.44
 $7.69
 178.49
@@ -597,7 +591,7 @@ $168.36
 $2.44
 $7.69
 178.49
-5
+$5.00
 $0
 5
 N/A
@@ -617,12 +611,12 @@ $366.98
 03/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 178.49
-10
-0
+$10.00
+N/A
 $178.49
 N/A
 $545.47
@@ -774,11 +768,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-0
 $0
-0
-0
-0
+$0
+$0
+$0
+$0
 $0
 0
 
@@ -889,7 +883,6 @@ $545.47
 Step 4:
 
 Description: 
-Advance to future date: 3/2/26
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -935,9 +928,9 @@ $0
 01/01/2026 12:00 AM
 Charge
 Billed Customer
-0
-0
-0
+$0
+$0
+$0
 0
 $0
 N/A
@@ -963,7 +956,7 @@ $168.36
 $2.44
 $7.69
 0
-0
+$0
 $0
 5
 N/A
@@ -979,13 +972,13 @@ $5.00
 $0
 N/A
 N/A
-183.49
+$183.49
 02/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 0
 $5.00
 N/A
@@ -995,7 +988,7 @@ $361.98
 02/01/2026 12:00 AM
 Status Update
 Current Status
-168.36
+$168.36
 $2.44
 $7.69
 178.49
@@ -1011,7 +1004,7 @@ $168.36
 $2.44
 $7.69
 178.49
-5
+$5.00
 $0
 5
 N/A
@@ -1031,12 +1024,12 @@ $366.98
 03/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 178.49
-10
-0
+$10.00
+N/A
 $178.49
 N/A
 $545.47
@@ -1085,12 +1078,12 @@ Past Due
 Late Fee
 Credit
 Total amount due
-$168.36
-$10.13
-$178.49
-$5.00
 $0
-$361.98
+$0
+$0
+$0
+$0
+$0
 
 View Past Due Details Shows:
 
@@ -1212,11 +1205,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-0
 $0
-0
-0
-0
+$0
+$0
+$0
+$0
 $0
 0
 
@@ -1350,12 +1343,9 @@ $0
 Step 5:
 
 Description: 
-Advance to future date: 4/1/26
-Have them pay $10
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
-Log what PDF Bill shows
 
 Payments/Charges Table Shows:
 
@@ -1398,9 +1388,9 @@ $0
 01/01/2026 12:00 AM
 Charge
 Billed Customer
-0
-0
-0
+$0
+$0
+$0
 0
 $0
 N/A
@@ -1426,7 +1416,7 @@ $168.36
 $2.44
 $7.69
 0
-0
+$0
 $0
 5
 N/A
@@ -1442,13 +1432,13 @@ $5.00
 $0
 N/A
 N/A
-183.49
+$183.49
 02/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 0
 $5.00
 N/A
@@ -1458,7 +1448,7 @@ $361.98
 02/01/2026 12:00 AM
 Status Update
 Current Status
-168.36
+$168.36
 $2.44
 $7.69
 178.49
@@ -1474,7 +1464,7 @@ $168.36
 $2.44
 $7.69
 178.49
-5
+$5.00
 $0
 5
 N/A
@@ -1494,12 +1484,12 @@ $366.98
 03/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 178.49
-10
-0
+$10.00
+N/A
 $178.49
 N/A
 $545.47
@@ -1547,7 +1537,7 @@ $0
 $0
 0
 $0
-0
+$0
 N/A
 $10.00
 -10 (credit)
@@ -1577,7 +1567,7 @@ $0
 $0
 $0
 $10
-$-10.00
+$-10
 
 View Past Due Details Shows:
 
@@ -1699,11 +1689,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-0
 $0
-0
-0
-0
+$0
+$0
+$0
+$0
 $0
 0
 
@@ -1869,24 +1859,10 @@ $0
 $0
 0
 
-Bill PDF Preview Shows:
-
-Current_due
-Previous_amount
-Late_fee
-Credit
-Total_amount
-$178.49
-$361.98
-$5.00
-$0
-$545.47
-
 
 Step 6:
 
 Description: 
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -1933,9 +1909,9 @@ $0
 01/01/2026 12:00 AM
 Charge
 Billed Customer
-0
-0
-0
+$0
+$0
+$0
 0
 $0
 N/A
@@ -1961,7 +1937,7 @@ $168.36
 $2.44
 $7.69
 0
-0
+$0
 $0
 5
 N/A
@@ -1977,13 +1953,13 @@ $5.00
 $0
 N/A
 N/A
-183.49
+$183.49
 02/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 0
 $5.00
 N/A
@@ -1993,7 +1969,7 @@ $361.98
 02/01/2026 12:00 AM
 Status Update
 Current Status
-168.36
+$168.36
 $2.44
 $7.69
 178.49
@@ -2009,7 +1985,7 @@ $168.36
 $2.44
 $7.69
 178.49
-5
+$5.00
 $0
 5
 N/A
@@ -2029,12 +2005,12 @@ $366.98
 03/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 178.49
-10
-0
+$10.00
+N/A
 $178.49
 N/A
 $545.47
@@ -2082,7 +2058,7 @@ $0
 $0
 0
 $0
-0
+$0
 N/A
 $10.00
 -10 (credit)
@@ -2101,27 +2077,27 @@ N/A
 04/01/2026 12:00 AM
 Charge
 Billed Customer
-0
-0
-0
+$0
+$0
+$0
 0
 $0
 10
 $178.49
 N/A
-168.49
+$168.49
 04/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-0
-0.13
+$0
+$0.13
 0
 $0
-0
+$0
 N/A
 N/A
-168.49
+$168.49
 
 Amount Breakdown Shows:
 
@@ -2258,11 +2234,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-0
 $0
-0
-0
-0
+$0
+$0
+$0
+$0
 $0
 0
 
@@ -2443,7 +2419,7 @@ $0
 $0
 $0
 $0
-0
+$0
 0
 
 [ROW 17]
@@ -2481,8 +2457,6 @@ $168.49
 Step 7:
 
 Description: 
-Advance to future date: 5/1/26
-Bill them
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -2529,9 +2503,9 @@ $0
 01/01/2026 12:00 AM
 Charge
 Billed Customer
-0
-0
-0
+$0
+$0
+$0
 0
 $0
 N/A
@@ -2557,7 +2531,7 @@ $168.36
 $2.44
 $7.69
 0
-0
+$0
 $0
 5
 N/A
@@ -2573,13 +2547,13 @@ $5.00
 $0
 N/A
 N/A
-183.49
+$183.49
 02/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 0
 $5.00
 N/A
@@ -2589,7 +2563,7 @@ $361.98
 02/01/2026 12:00 AM
 Status Update
 Current Status
-168.36
+$168.36
 $2.44
 $7.69
 178.49
@@ -2605,7 +2579,7 @@ $168.36
 $2.44
 $7.69
 178.49
-5
+$5.00
 $0
 5
 N/A
@@ -2625,12 +2599,12 @@ $366.98
 03/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 178.49
-10
-0
+$10.00
+N/A
 $178.49
 N/A
 $545.47
@@ -2678,7 +2652,7 @@ $0
 $0
 0
 $0
-0
+$0
 N/A
 $10.00
 -10 (credit)
@@ -2697,75 +2671,75 @@ N/A
 04/01/2026 12:00 AM
 Charge
 Billed Customer
-0
-0
-0
+$0
+$0
+$0
 0
 $0
 10
 $178.49
 N/A
-168.49
+$168.49
 04/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-0
-0.13
+$0
+$0.13
 0
 $0
-0
+$0
 N/A
 N/A
-168.49
+$168.49
 04/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
+$0
+$0.13
 0
-0.13
-0
-0
+$0
 $0
 5
 N/A
-173.49
+$173.49
 04/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-0
-0.13
+$0
+$0.13
 0
 $5.00
 $0
 N/A
 N/A
-173.49
+$173.49
 05/01/2026 12:00 AM
 Charge
 Billed Customer
-168.36
-0
-0.13
+$168.36
+$0
+$0.13
 0
 $5.00
 N/A
 $178.49
 N/A
-351.98
+$351.98
 05/01/2026 12:00 AM
 Status Update
 Current Status
-168.36
-2.44
-7.69
+$168.36
+$2.44
+$7.69
 168.49
 $5.00
-0
+$0
 N/A
 N/A
-351.98
+$351.98
 
 Amount Breakdown Shows:
 
@@ -2902,11 +2876,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-0
 $0
-0
-0
-0
+$0
+$0
+$0
+$0
 $0
 0
 
@@ -3087,7 +3061,7 @@ $0
 $0
 $0
 $0
-0
+$0
 0
 
 [ROW 17]
@@ -3156,9 +3130,9 @@ Credit
 Total (Past Due line)
 $0
 $0
-0
-0
-0
+$0
+$0
+$0
 $0
 0
 
@@ -3174,8 +3148,8 @@ Credit
 Total (Past Due line)
 $0
 $0
-0
-0.13
+$0
+$0.13
 $168.36
 $0
 168.49

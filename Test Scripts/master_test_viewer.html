@@ -6679,17 +6679,13 @@
     }
 
     function buildStepDescriptionLines(stepDef) {
+      const caps =
+        stepDef && Array.isArray(stepDef.dataCaptures) && stepDef.dataCaptures.length
+          ? stepDef.dataCaptures
+          : DEFAULT_DATA_CAPTURES.slice();
       const lines = [];
-      if (stepDef.advanceDateEnabled && stepDef.advanceDate) {
-        lines.push('Advance to future date: ' + formatAdvanceDateForDescription(stepDef.advanceDate));
-      }
-      if (stepDef.freshStart) lines.push('Do a fresh start');
-      if (stepDef.billThem) lines.push('Bill them');
-      if (stepDef.payEnabled || (stepDef.payAmount != null && String(stepDef.payAmount).trim() !== '')) {
-        lines.push('Have them pay ' + formatPayAmountForDescription(stepDef.payAmount));
-      }
-      (stepDef.dataCaptures || []).forEach(function (cap) {
-        if (lines.indexOf(cap) === -1) lines.push(cap);
+      caps.forEach(function (cap) {
+        if (cap && lines.indexOf(cap) === -1) lines.push(cap);
       });
       return lines.join('\n');
     }
