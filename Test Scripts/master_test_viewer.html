@@ -520,6 +520,16 @@
       pointer-events: none;
     }
     .mt-past-due-label { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.5rem; }
+    .mt-past-due-entry-id { display: block; margin-bottom: 0.35rem; color: var(--text); }
+    .mt-past-due-entry-id code {
+      font-family: ui-monospace, monospace;
+      font-size: 0.88rem;
+      color: #93c5fd;
+      background: rgba(61, 156, 249, 0.12);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+    .mt-past-due-entry-meta { color: var(--muted); font-size: 0.8rem; }
     .mt-modal-overlay {
       position: fixed;
       inset: 0;
@@ -946,7 +956,7 @@
 <body>
   <header>
     <h1>Master Test viewer</h1>
-    <p>Use <strong>Create New Test</strong> or <strong>Import Test</strong> to add tests, <strong>Import Data</strong> to load results or billing <strong>Export Data</strong> JSON, and <strong>Run All Tests</strong> to run every test. Double-click a test title to edit steps; double-click cells to edit results.</p>
+    <p>Tests are stored on disk under <code>Test Scripts/Test Script N/</code> (not cookies or browser storage). Use <strong>Create New Test</strong> or <strong>Import Test</strong> to add tests, <strong>Import Data</strong> to load files, and <strong>Run All Tests</strong> to run every test. Requires <code>npm start</code>. Double-click a test title to edit steps; double-click cells to edit results.</p>
     <p id="masterTestApiBanner" class="hidden" style="margin:0.65rem 0 0;padding:0.55rem 0.75rem;border-radius:8px;border:1px solid rgba(251,191,36,0.45);background:rgba(251,191,36,0.12);color:#fde68a;font-size:0.85rem"></p>
   </header>
   <div class="header-actions">
@@ -1103,9 +1113,47 @@
       };
     }
 
+    function cssEscapeAttr(value) {
+      if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(String(value));
+      return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    }
+
+    function getTestPanelSection(testKey) {
+      const host = document.getElementById('customTestsContainer');
+      if (!host || !testKey) return null;
+      return host.querySelector(
+        'section.test1-panel[data-test-slug="' + cssEscapeAttr(testKey) + '"]'
+      );
+    }
+
     function getTestRootEl(testKey) {
+      const panel = getTestPanelSection(testKey);
+      if (panel) {
+        const root = panel.querySelector('.test1-root');
+        if (root) return root;
+      }
       const ids = getTestPanelIds(testKey);
       return document.getElementById(ids.root);
+    }
+
+    function getTestViewWrapEl(testKey) {
+      const panel = getTestPanelSection(testKey);
+      if (panel) {
+        const wrap = panel.querySelector('.test1-view-wrap');
+        if (wrap) return wrap;
+      }
+      const ids = getTestPanelIds(testKey);
+      return document.getElementById(ids.viewWrap);
+    }
+
+    function setTestViewWrapMode(testKey, isExpected, wrapEl) {
+      const wrap = wrapEl || getTestViewWrapEl(testKey);
+      if (!wrap) return;
+      wrap.dataset.viewMode = isExpected ? 'expected' : 'results';
+    }
+
+    function isExpectedViewWrap(wrapEl) {
+      return !!(wrapEl && wrapEl.dataset.viewMode === 'expected');
     }
 
     function getActiveRenderRoot() {
@@ -1212,7 +1260,15 @@
         if (!lines.length) return;
         const rowM = /^\[ROW (\d+)\]$/i.exec(lines[0]);
         const rowIndex = rowM ? parseInt(rowM[1], 10) : out.length;
-        const labelStart = rowM ? 1 : 0;
+        let labelStart = rowM ? 1 : 0;
+        let entryId = null;
+        if (labelStart < lines.length) {
+          const idM = /^\[ID\s+([^\]]+)\]$/i.exec(lines[labelStart]);
+          if (idM) {
+            entryId = idM[1].trim();
+            labelStart += 1;
+          }
+        }
         const keyStart = lines.findIndex(function (l) {
           return l === 'Past due amount';
         });
@@ -1227,7 +1283,7 @@
         const pairs = keys.map(function (k, i) {
           return { key: k, val: vals[i] != null ? vals[i] : '$0' };
         });
-        out.push({ rowIndex: rowIndex, label: label, pairs: pairs });
+        out.push({ entryId: entryId, rowIndex: rowIndex, label: label, pairs: pairs });
       });
       return out;
     }
@@ -1236,7 +1292,9 @@
       if (!entries || !entries.length) return '(none)';
       return entries
         .map(function (e, i) {
-          const lines = ['[ROW ' + (e.rowIndex != null ? e.rowIndex : i) + ']', e.label || ''];
+          const lines = ['[ROW ' + (e.rowIndex != null ? e.rowIndex : i) + ']'];
+          if (e.entryId) lines.push('[ID ' + e.entryId + ']');
+          lines.push(e.label || '');
           PAST_DUE_DETAIL_KEYS.forEach(function (k) {
             lines.push(k);
           });
@@ -1331,6 +1389,42 @@
         }
       }
       return out;
+    }
+
+    function isLedgerCalcStatusMarker(val) {
+      const t = String(val || '').trim();
+      return t === '✓' || t === '✗' || t === '✔' || t === '✘' || /^pass$/i.test(t) || /^fail$/i.test(t);
+    }
+
+    /** Calc Status is computed in the viewer only — strip legacy exports that stored ✓/✗ as a column. */
+    function stripLedgerCalcStatusColumn(ledger) {
+      if (!ledger || !ledger.headers || !ledger.headers.length) return ledger;
+      let calcCol = -1;
+      for (let i = 0; i < ledger.headers.length; i++) {
+        if (/^calc\s*status$/i.test(String(ledger.headers[i] || '').trim())) {
+          calcCol = i;
+          break;
+        }
+      }
+      if (calcCol < 0) return ledger;
+      const headers = ledger.headers.filter(function (_, i) {
+        return i !== calcCol;
+      });
+      const rows = (ledger.rows || []).map(function (row) {
+        if (isLedgerSeparatorRow(row)) return makeLedgerSeparatorRow(headers.length);
+        const cells = row.filter(function (_, i) {
+          return i !== calcCol;
+        });
+        while (
+          cells.length > headers.length &&
+          isLedgerCalcStatusMarker(cells[cells.length - 1])
+        ) {
+          cells.pop();
+        }
+        while (cells.length < headers.length) cells.push('');
+        return cells.slice(0, headers.length);
+      });
+      return { headers: headers, rows: rows };
     }
 
     function parseVerticalLedger(raw) {
@@ -1571,7 +1665,7 @@
       editableByStep.clear();
       stepOrder = stepsA.map((s) => s.stepNum);
       stepsA.forEach(function (s) {
-        const lh = parseVerticalLedger(s.ledgerRaw);
+        const lh = stripLedgerCalcStatusColumn(parseVerticalLedger(s.ledgerRaw));
         const amountA = parseAmountBreakdownVertical(s.amountRaw);
         const pastDueA = parsePastDueDetailsVertical(s.pastDueRaw || '');
         const pdfRawTrim = (s.pdfRaw || '').trim();
@@ -1585,6 +1679,7 @@
           }),
           pastDue: pastDueA.map(function (e) {
             return {
+              entryId: e.entryId || null,
               rowIndex: e.rowIndex,
               label: e.label,
               pairs: e.pairs.map(function (p) {
@@ -1601,6 +1696,7 @@
       stepOrder.forEach(function (sn) {
         relinkPastDueEntriesToLedger(sn);
         dedupePastDueEntries(sn);
+        ensurePastDueEntryIds(sn);
       });
       syncAllLedgerPastDueFromEntryTotals();
     }
@@ -1661,9 +1757,9 @@
       const seen = new Map();
       d.pastDue.forEach(function (e) {
         const fp = pastDueLabelToFingerprint(e.label);
-        if (!fp) return;
+        if (!fp && !e.entryId) return;
         const ord = getPastDueEntryMatchOrdinal(stepNum, e);
-        const key = fp + '\u0002' + ord;
+        const key = e.entryId || fp + '\u0002' + ord;
         const score = pastDueEntryRichnessScore(e);
         const prev = seen.get(key);
         if (!prev || score > prev.score) seen.set(key, { entry: e, score: score });
@@ -1753,21 +1849,83 @@
       );
     }
 
-    /** Match by label / fingerprint first — captured [ROW n] on entries is often stale. */
+    function assignPastDueEntryId(stepNum, entry) {
+      if (!entry || entry.entryId) return;
+      const d = editableByStep.get(stepNum);
+      if (!d) return;
+      if (!d._pastDueIdSeq) d._pastDueIdSeq = 1;
+      entry.entryId = 'PD-S' + stepNum + '-' + String(d._pastDueIdSeq++).padStart(4, '0');
+    }
+
+    function ensurePastDueEntryIds(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !Array.isArray(d.pastDue)) return;
+      let maxSeq = d._pastDueIdSeq || 0;
+      d.pastDue.forEach(function (e) {
+        if (!e.entryId) return;
+        const m = /-(\d+)$/.exec(String(e.entryId));
+        if (m) maxSeq = Math.max(maxSeq, parseInt(m[1], 10) + 1);
+      });
+      d._pastDueIdSeq = maxSeq;
+      d.pastDue.forEach(function (e) {
+        assignPastDueEntryId(stepNum, e);
+      });
+    }
+
+    function getPastDueEntryById(stepNum, entryId) {
+      if (!entryId) return null;
+      const d = editableByStep.get(stepNum);
+      if (!d || !Array.isArray(d.pastDue)) return null;
+      return (
+        d.pastDue.find(function (e) {
+          return e.entryId === entryId;
+        }) || null
+      );
+    }
+
+    function formatPastDueModalHeaderHtml(entry, stepNum) {
+      const rowHuman =
+        entry.rowIndex != null && !isNaN(entry.rowIndex) && entry.rowIndex >= 0
+          ? entry.rowIndex + 1
+          : '?';
+      return (
+        '<span class="mt-past-due-entry-id">Entry ID: <code>' +
+        escapeHtml(entry.entryId || 'pending') +
+        '</code></span>' +
+        '<span class="mt-past-due-entry-meta">Step ' +
+        stepNum +
+        ' · stored ledger row ' +
+        rowHuman +
+        '</span><br>' +
+        escapeHtml(entry.label || '')
+      );
+    }
+
+    /** Resolve past-due breakdown for one stored ledger row (never guess by label alone). */
     function resolvePastDueEntryForLedgerRow(stepNum, rowIndex) {
       const d = editableByStep.get(stepNum);
       if (!d || !d.ledger || !d.ledger.rows[rowIndex] || !Array.isArray(d.pastDue)) return null;
-      const ledgerFp = getLedgerRowFingerprint(stepNum, rowIndex);
-      const label = buildPastDueLabelForLedgerRow(stepNum, rowIndex);
-      if (label) {
-        const byLabel = d.pastDue.find(function (e) {
-          return String(e.label || '').trim() === label;
-        });
-        if (byLabel) {
-          byLabel.rowIndex = rowIndex;
-          return byLabel;
-        }
+      ensurePastDueEntryIds(stepNum);
+      const byBound = d.pastDue.filter(function (e) {
+        return e.rowIndex === rowIndex;
+      });
+      if (byBound.length === 1) {
+        byBound[0].rowIndex = rowIndex;
+        return byBound[0];
       }
+      if (byBound.length > 1) {
+        const ledgerFp = getLedgerRowFingerprint(stepNum, rowIndex);
+        const match = byBound.find(function (e) {
+          return pastDueLabelToFingerprint(e.label) === ledgerFp;
+        });
+        if (match) {
+          match.rowIndex = rowIndex;
+          return match;
+        }
+        byBound[0].rowIndex = rowIndex;
+        return byBound[0];
+      }
+      const ledgerFp = getLedgerRowFingerprint(stepNum, rowIndex);
       if (ledgerFp) {
         const ordinal = getLedgerRowMatchOrdinal(stepNum, rowIndex);
         const byFp = getPastDueEntryForFingerprint(stepNum, ledgerFp, ordinal);
@@ -1777,7 +1935,8 @@
         }
       }
       const direct = getPastDueEntryForRow(stepNum, rowIndex);
-      if (direct && ledgerFp && pastDueLabelToFingerprint(direct.label) === ledgerFp) {
+      if (direct) {
+        direct.rowIndex = rowIndex;
         return direct;
       }
       return null;
@@ -1795,10 +1954,16 @@
       return ordinal;
     }
 
+    function ledgerDisplayRowsForStep(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger) return [];
+      return ensureLedgerStatusSeparatorRows(d.ledger.headers, d.ledger.rows);
+    }
+
     /**
-     * Map a rendered ledger row to editableByStep.ledger row index.
-     * displayRowToStoredRowIndex is wrong when the table mixes stored spacer rows with
-     * render-time separators — match by date · type · subtype fingerprint instead.
+     * Map rendered ledger row index → stored ledger.rows index.
+     * Uses display-row position among same date/type/subtype occurrences so duplicate
+     * Status Update rows on one day stay independent (not collapsed to storedMatches[0]).
      */
     function findStoredLedgerRowIndexForDisplayRow(stepNum, displayRows, headers, displayRi, row) {
       if (!row || displayRi < 0 || isLedgerSeparatorRow(row)) return -1;
@@ -1808,19 +1973,29 @@
       }
       const fp = ledgerRowFingerprint(row, headers);
       if (!fp) return displayRowToStoredRowIndex(displayRows, displayRi);
+      const ord = getLedgerRowMatchOrdinalInDisplay(displayRows, headers, displayRi);
       const storedHeaders = d.ledger.headers;
-      const storedMatches = [];
+      let storedOcc = 0;
       for (let i = 0; i < d.ledger.rows.length; i++) {
         if (isLedgerSeparatorRow(d.ledger.rows[i])) continue;
-        if (ledgerRowFingerprint(d.ledger.rows[i], storedHeaders) === fp) {
-          storedMatches.push(i);
-        }
+        if (ledgerRowFingerprint(d.ledger.rows[i], storedHeaders) !== fp) continue;
+        if (storedOcc === ord) return i;
+        storedOcc++;
       }
-      if (!storedMatches.length) return displayRowToStoredRowIndex(displayRows, displayRi);
-      if (storedMatches.length === 1) return storedMatches[0];
-      const ord = getLedgerRowMatchOrdinalInDisplay(displayRows, headers, displayRi);
-      if (storedMatches[ord] != null) return storedMatches[ord];
-      return storedMatches[0];
+      return displayRowToStoredRowIndex(displayRows, displayRi);
+    }
+
+    function resolveStoredLedgerRowFromDisplay(stepNum, displayRi) {
+      if (isNaN(displayRi) || displayRi < 0) return -1;
+      const displayRows = ledgerDisplayRowsForStep(stepNum);
+      if (displayRi >= displayRows.length) return -1;
+      const row = displayRows[displayRi];
+      if (isLedgerSeparatorRow(row)) return -1;
+      const headers =
+        editableByStep.get(stepNum) && editableByStep.get(stepNum).ledger
+          ? editableByStep.get(stepNum).ledger.headers
+          : ledgerHeadersFromAnyStep();
+      return findStoredLedgerRowIndexForDisplayRow(stepNum, displayRows, headers, displayRi, row);
     }
 
     /** Legacy: non-separator row count (unreliable when spacer rows exist in stored ledger). */
@@ -1846,15 +2021,23 @@
       return resolvePastDueEntryForLedgerRow(stepNum, storedRi);
     }
 
-    function resolvePastDueEntryByLabel(stepNum, label) {
+    function resolvePastDueEntryByLabel(stepNum, label, rowIndex) {
       const d = editableByStep.get(stepNum);
       if (!d || !Array.isArray(d.pastDue) || !label) return null;
       const want = String(label).trim();
-      return (
-        d.pastDue.find(function (e) {
-          return String(e.label || '').trim() === want;
-        }) || null
-      );
+      const matches = d.pastDue.filter(function (e) {
+        return String(e.label || '').trim() === want;
+      });
+      if (!matches.length) return null;
+      if (matches.length === 1) return matches[0];
+      if (rowIndex != null && !isNaN(rowIndex)) {
+        const byRow = matches.find(function (e) {
+          return e.rowIndex === rowIndex;
+        });
+        if (byRow) return byRow;
+        return resolvePastDueEntryForLedgerRow(stepNum, rowIndex);
+      }
+      return null;
     }
 
     function mtLog(tag, payload) {
@@ -1929,6 +2112,7 @@
       const totalVal =
         col >= 0 ? ledgerCellStoredValue(d.ledger.rows[rowIndex][col]) : '$0';
       entry = {
+        entryId: null,
         rowIndex: rowIndex,
         label: buildPastDueLabelForLedgerRow(stepNum, rowIndex),
         pairs: PAST_DUE_DETAIL_KEYS.map(function (k) {
@@ -1938,10 +2122,12 @@
           };
         })
       };
+      assignPastDueEntryId(stepNum, entry);
       d.pastDue.push(entry);
       mtLog('ensurePastDueEntryForRow:created', {
         stepNum: stepNum,
         rowIndex: rowIndex,
+        entryId: entry.entryId,
         label: entry.label
       });
       return entry;
@@ -2102,12 +2288,12 @@
       return fp;
     }
 
-    function refreshValidationForFingerprint(fingerprint) {
+    function refreshValidationForFingerprint(fingerprint, ordinal) {
       if (!fingerprint) return;
+      const ord = ordinal == null || isNaN(ordinal) ? 0 : ordinal;
       stepOrder.forEach(function (sn) {
-        findAllLedgerRowIndicesByFingerprint(sn, fingerprint).forEach(function (ri) {
-          refreshLedgerRowAndDependents(sn, ri);
-        });
+        const ri = findLedgerRowIndexForSync(sn, fingerprint, ord);
+        if (ri >= 0) refreshLedgerRowAndDependents(sn, ri);
         refreshLedgerPastDueCellStatusInDom(sn);
         refreshLedgerBalanceAfterCellStatusInDom(sn);
         refreshLedgerAmountChargedCellStatusInDom(sn);
@@ -2655,17 +2841,27 @@
     const LEDGER_CALC_STATUS_TITLE_FAIL =
       'Column sum ≠ Balance After (Sewer + Tax Codes + PUC + Past Due + Late Fee − Credit − Amount Paid)';
 
+    /** Late Fee charge rows: Late Fee column only (never Amount Charged, which is incremental). */
+    function ledgerLateFeeForCalcEquation(row, headers) {
+      const c = ledgerMoneyCols(headers);
+      if (c.lateFee < 0) return 0;
+      return ledgerCellMoney(row, c.lateFee);
+    }
+
     /** Sewer + Tax + PUC + Past Due + Late Fee − Credit − Amount Paid = Balance After. */
     function validateLedgerRowBalance(row, headers) {
       const c = ledgerMoneyCols(headers);
       const paid = ledgerAmountPaidForEquation(row, headers);
+      const lateFee = isLedgerLateFeeRow(row, headers)
+        ? ledgerLateFeeForCalcEquation(row, headers)
+        : ledgerCellMoney(row, c.lateFee);
       const lhs =
         Math.round(
           (ledgerCellMoney(row, c.sewer) +
             ledgerCellMoney(row, c.pastDue) +
             ledgerCellMoney(row, c.tax) +
             ledgerCellMoney(row, c.puc) +
-            ledgerCellMoney(row, c.lateFee) -
+            lateFee -
             ledgerCellMoney(row, c.credit) -
             paid) *
             100
@@ -3343,7 +3539,9 @@
       if (!ctx) return;
       const statusEl = document.getElementById('pastDueModalStatus');
       const d = editableByStep.get(ctx.stepNum);
-      const entry = d && d.pastDue ? d.pastDue[ctx.entryIndex] : null;
+      const entry =
+        (ctx.entryId && getPastDueEntryById(ctx.stepNum, ctx.entryId)) ||
+        (d && d.pastDue && ctx.entryIndex != null ? d.pastDue[ctx.entryIndex] : null);
       if (entry && entry.pairs) {
         updateTestStatusIcon(
           statusEl,
@@ -3432,6 +3630,7 @@
               : highlightStatusRow
                 ? ' class="mt-ledger-status-row"'
                 : '') +
+            (separatorRow ? '' : ' data-display-row="' + ri + '"') +
             '>' +
             r
               .map(function (c, ci) {
@@ -3478,14 +3677,16 @@
                       looksLikeMoneyValue(c) ? moneyValueFromNumericPart(c) : String(c || '0')
                     )
                   );
-                  if (storedRi >= 0) ensurePastDueEntryForRow(stepNum, storedRi);
-                  const hasPd =
-                    storedRi >= 0 && !!resolvePastDueEntryForLedgerRow(stepNum, storedRi);
+                  let pdEntry = null;
+                  if (storedRi >= 0) pdEntry = ensurePastDueEntryForRow(stepNum, storedRi);
+                  const hasPd = !!(storedRi >= 0 && pdEntry);
                   const btn = hasPd
                     ? '<br><button type="button" class="mt-past-due-btn" data-past-due-open="1" data-step="' +
                       stepNum +
                       '" data-row="' +
                       storedRi +
+                      '" data-entry-id="' +
+                      escapeHtml(pdEntry.entryId || '') +
                       '" data-past-due-label="' +
                       escapeHtml(pastDueBtnLabel) +
                       '">Past Due Details</button>'
@@ -3810,13 +4011,26 @@
       }
       t.removeAttribute('contenteditable');
       if (section === 'ledger') {
-        const row = parseInt(t.getAttribute('data-row'), 10);
         const col = parseInt(t.getAttribute('data-col'), 10);
+        const displayRowEl = t.closest('tr[data-display-row]');
+        const displayRi = displayRowEl
+          ? parseInt(displayRowEl.getAttribute('data-display-row'), 10)
+          : NaN;
+        let row = parseInt(t.getAttribute('data-row'), 10);
+        const mappedRow = resolveStoredLedgerRowFromDisplay(step, displayRi);
+        if (mappedRow >= 0) row = mappedRow;
         const fp = propagateLedgerCellToAllSteps(step, row, col, stored);
-        refreshValidationForFingerprint(fp);
+        const ordinal = getLedgerRowMatchOrdinal(step, row);
+        refreshValidationForFingerprint(fp, ordinal);
       } else if (section === 'pastdue-modal' && pastDueModalCtx) {
         const ki = parseInt(t.getAttribute('data-kv'), 10);
-        propagatePastDuePairEdit(pastDueModalCtx.stepNum, pastDueModalCtx.rowIndex, ki, stored);
+        propagatePastDuePairEdit(
+          pastDueModalCtx.stepNum,
+          pastDueModalCtx.rowIndex,
+          ki,
+          stored,
+          pastDueModalCtx.entryId
+        );
       } else if (section === 'amount' || section === 'pdf' || section.indexOf('pastdue-') === 0) {
         const ki = parseInt(t.getAttribute('data-kv'), 10);
         applyKvEdit(step, section, ki, stored);
@@ -3962,7 +4176,7 @@
         html += '</div>';
       } else {
         html +=
-          '<p class="hint-edit">Double-click a cell below to edit. Click a <strong>Past Due</strong> cell, then <strong>Ctrl+C</strong> / <strong>Ctrl+V</strong> (Cmd on Mac) to copy/paste the value or full breakdown (see console: <code>[MasterTestViewer]</code>). Past Due Details modal: <strong>Copy configuration</strong> / <strong>Paste configuration</strong>. Ledger edits for the same date/type/subtype row sync across <strong>all steps</strong> (earlier and later).</p>' +
+          '<p class="hint-edit">Double-click a cell below to edit. Click a <strong>Past Due</strong> cell, then <strong>Ctrl+C</strong> / <strong>Ctrl+V</strong> (Cmd on Mac) to copy/paste the value or full breakdown (see console: <code>[MasterTestViewer]</code>). Past Due Details modal: <strong>Copy configuration</strong> / <strong>Paste configuration</strong>. Rows with the same date and type (e.g. two Status Updates on one day) stay <strong>separate</strong>; matching rows sync across <strong>steps</strong> only (same position among duplicates).</p>' +
           renderLedgerTable(lh.headers, ensureLedgerStatusSeparatorRows(lh.headers, lh.rows), step.stepNum, 'actual');
       }
       html += '</div>';
@@ -4106,12 +4320,17 @@
         .forEach(function (td) {
           if (td.querySelector('span.mt-money-value[data-editable="1"]')) return;
           const step = td.getAttribute('data-step');
+          const pdEntry =
+            row >= 0 ? resolvePastDueEntryForLedgerRow(parseInt(step, 10), row) : null;
           const btn =
             '<br><button type="button" class="mt-past-due-btn" data-past-due-open="1" data-step="' +
             step +
             '" data-row="' +
             row +
-            '">Past Due Details</button>';
+            (pdEntry && pdEntry.entryId
+              ? '" data-entry-id="' + escapeHtml(pdEntry.entryId) + '"'
+              : '"') +
+            '>Past Due Details</button>';
           td.className = 'mt-money-td';
           td.setAttribute('data-money-wrap', '1');
           td.innerHTML =
@@ -4226,7 +4445,7 @@
       const ordinal = getLedgerRowMatchOrdinal(stepNum, rowIndex);
       stepOrder.forEach(function (sn) {
         const ri = findLedgerRowIndexForSync(sn, fp, ordinal);
-        const entry = getPastDueEntryForFingerprint(sn, fp, ordinal);
+        const entry = resolvePastDueEntryForLedgerRow(sn, ri);
         if (!entry || !entry.pairs || ri < 0) return;
         entry.pairs.forEach(function (p) {
           syncPastDuePairToLedger(sn, ri, p.key, p.val);
@@ -4287,18 +4506,21 @@
         showPastDueModalFeedback('Open Past Due Details on a row first.', false);
         return;
       }
-      const entry = ensurePastDueEntryForRow(ctx.stepNum, ctx.rowIndex);
+      const entry =
+        (ctx.entryId && getPastDueEntryById(ctx.stepNum, ctx.entryId)) ||
+        ensurePastDueEntryForRow(ctx.stepNum, ctx.rowIndex);
       if (!entry || !entry.pairs) {
         showPastDueModalFeedback('No past-due breakdown found for this row.', false);
         mtLog('copyConfiguration:fail', { reason: 'no entry' });
         return;
       }
-      const fp = getLedgerRowFingerprint(ctx.stepNum, ctx.rowIndex);
+      const fp = getLedgerRowFingerprint(ctx.stepNum, entry.rowIndex);
       pastDueClipboard = {
         pairs: entry.pairs.map(function (p) {
           return { key: p.key, val: String(p.val) };
         }),
         sourceFingerprint: fp,
+        sourceEntryId: entry.entryId || '',
         sourceLabel: entry.label || ''
       };
       const pasteBtn = document.getElementById('pastDueModalPaste');
@@ -4329,12 +4551,19 @@
         showPastDueModalFeedback('Nothing copied yet — use Copy configuration first.', false);
         return;
       }
-      const fp = getLedgerRowFingerprint(ctx.stepNum, ctx.rowIndex);
+      const targetEntry =
+        (ctx.entryId && getPastDueEntryById(ctx.stepNum, ctx.entryId)) ||
+        resolvePastDueEntryForLedgerRow(ctx.stepNum, ctx.rowIndex);
+      if (!targetEntry) {
+        showPastDueModalFeedback('Could not identify this past-due entry.', false);
+        return;
+      }
+      const fp = getLedgerRowFingerprint(ctx.stepNum, targetEntry.rowIndex);
       if (!fp) {
         showPastDueModalFeedback('Could not identify this ledger row.', false);
         return;
       }
-      const ordinal = getLedgerRowMatchOrdinal(ctx.stepNum, ctx.rowIndex);
+      const ordinal = getLedgerRowMatchOrdinal(ctx.stepNum, targetEntry.rowIndex);
       let pastedCount = 0;
       const skipped = [];
       stepOrder.forEach(function (sn) {
@@ -4343,7 +4572,7 @@
           skipped.push({ step: sn, reason: 'ledger row not in step' });
           return;
         }
-        const entry = ensurePastDueEntryForRow(sn, ri);
+        const entry = resolvePastDueEntryForLedgerRow(sn, ri) || ensurePastDueEntryForRow(sn, ri);
         if (!entry || !entry.pairs) {
           skipped.push({ step: sn, reason: 'could not create past-due entry' });
           return;
@@ -4359,7 +4588,8 @@
         refreshLedgerRowAndDependents(sn, ri);
         pastedCount++;
       });
-      const modalEntry = getPastDueEntryForFingerprint(ctx.stepNum, fp);
+      const modalEntry =
+        (ctx.entryId && getPastDueEntryById(ctx.stepNum, ctx.entryId)) || targetEntry;
       if (modalEntry) {
         document.getElementById('pastDueModalKv').innerHTML = renderKV(
           modalEntry.pairs,
@@ -4367,8 +4597,12 @@
           'pastdue-modal',
           true
         );
+        document.getElementById('pastDueModalLabel').innerHTML = formatPastDueModalHeaderHtml(
+          modalEntry,
+          ctx.stepNum
+        );
       }
-      refreshValidationForFingerprint(fp);
+      refreshValidationForFingerprint(fp, ordinal);
       flashPastDueButton('pastDueModalPaste', pastedCount > 0);
       if (pastedCount > 0) {
         const msg =
@@ -4476,7 +4710,10 @@
       }
       refreshLedgerPastDueRowInDom(stepNum, rowIndex);
       refreshLedgerRowAndDependents(stepNum, rowIndex);
-      refreshValidationForFingerprint(targetFp);
+      refreshValidationForFingerprint(
+        targetFp,
+        getLedgerRowMatchOrdinal(stepNum, rowIndex)
+      );
       highlightLedgerPastDueCell(stepNum, rowIndex, true);
       setTimeout(function () {
         highlightLedgerPastDueCell(stepNum, rowIndex, false);
@@ -4535,13 +4772,11 @@
       });
     }
 
-    /** Past-due popup edit — same logical row (date · type · subtype) synced across all steps. */
-    function propagatePastDuePairEdit(stepNum, rowIndex, pairIndex, text) {
+    /** Past-due popup edit — syncs matching row position across steps; each entry ID stays separate. */
+    function propagatePastDuePairEdit(stepNum, rowIndex, pairIndex, text, entryId) {
       if (
         stepNum == null ||
         isNaN(stepNum) ||
-        rowIndex == null ||
-        isNaN(rowIndex) ||
         pairIndex == null ||
         isNaN(pairIndex)
       ) {
@@ -4551,11 +4786,19 @@
         isEditableMoneyValue(text) || looksLikeMoneyValue(text)
           ? pastDueModalPairStoredMoney(text)
           : text;
+      const sourceEntry =
+        (entryId && getPastDueEntryById(stepNum, entryId)) ||
+        (rowIndex != null && !isNaN(rowIndex)
+          ? resolvePastDueEntryForLedgerRow(stepNum, rowIndex)
+          : null);
+      if (!sourceEntry || !sourceEntry.pairs) return;
+      rowIndex =
+        sourceEntry.rowIndex != null && !isNaN(sourceEntry.rowIndex)
+          ? sourceEntry.rowIndex
+          : rowIndex;
       const fp = getLedgerRowFingerprint(stepNum, rowIndex);
       if (!fp) return;
       const ordinal = getLedgerRowMatchOrdinal(stepNum, rowIndex);
-      const sourceEntry = getPastDueEntryForFingerprint(stepNum, fp, ordinal);
-      if (!sourceEntry || !sourceEntry.pairs) return;
       let pairKey = null;
       if (sourceEntry.pairs[pairIndex]) {
         pairKey = sourceEntry.pairs[pairIndex].key;
@@ -4564,7 +4807,7 @@
       let totalRecalc = null;
       stepOrder.forEach(function (sn) {
         const ri = findLedgerRowIndexForSync(sn, fp, ordinal);
-        const entry = getPastDueEntryForFingerprint(sn, fp, ordinal);
+        const entry = ri >= 0 ? resolvePastDueEntryForLedgerRow(sn, ri) : null;
         if (!entry || !entry.pairs) return;
         if (pairKey) {
           entry.pairs.forEach(function (p) {
@@ -4612,7 +4855,7 @@
       } else {
         syncPastDueModalKvInDom(pairIndex, stored);
       }
-      refreshValidationForFingerprint(fp);
+      refreshValidationForFingerprint(fp, ordinal);
     }
 
     function findKvPairIndexByKey(list, keyPatterns) {
@@ -4712,40 +4955,45 @@
       }
     }
 
-    function openPastDueModal(stepNum, rowIndex, entryIndex, rowLabel) {
+    function openPastDueModal(stepNum, rowIndex, entryIndex, rowLabel, entryId) {
       const d = editableByStep.get(stepNum);
       if (!d || !Array.isArray(d.pastDue)) return;
+      ensurePastDueEntryIds(stepNum);
       let ei = entryIndex;
-      let entry = null;
-      if (ei != null && ei >= 0) {
+      let entry = entryId ? getPastDueEntryById(stepNum, entryId) : null;
+      if (ei != null && ei >= 0 && !entry) {
         entry = d.pastDue[ei];
-      }
-      if (!entry && rowLabel) {
-        entry = resolvePastDueEntryByLabel(stepNum, rowLabel);
-        if (entry) {
-          ei = d.pastDue.findIndex(function (e) {
-            return e === entry;
-          });
-        }
       }
       if (!entry && rowIndex != null && !isNaN(rowIndex)) {
         entry = resolvePastDueEntryForLedgerRow(stepNum, rowIndex);
-        if (entry) {
-          entry.rowIndex = rowIndex;
-          ei = d.pastDue.findIndex(function (e) {
-            return e === entry;
-          });
-        }
+        if (entry) entry.rowIndex = rowIndex;
+      }
+      if (!entry && rowLabel && rowIndex != null && !isNaN(rowIndex)) {
+        entry = resolvePastDueEntryByLabel(stepNum, rowLabel, rowIndex);
+      }
+      if (entry) {
+        ei = d.pastDue.findIndex(function (e) {
+          return e === entry;
+        });
       }
       if (!entry || ei == null || ei < 0) return;
-      pastDueModalCtx = { stepNum: stepNum, entryIndex: ei, rowIndex: entry.rowIndex };
+      if (!entry.entryId) assignPastDueEntryId(stepNum, entry);
+      pastDueModalCtx = {
+        stepNum: stepNum,
+        entryIndex: ei,
+        entryId: entry.entryId,
+        rowIndex: entry.rowIndex
+      };
       if (entry.rowIndex != null && !isNaN(entry.rowIndex)) {
         const ti = findPastDuePairIndexByKey(entry, 'Total (Past Due line)');
         if (ti >= 0 && entry.pairs[ti]) {
           syncPastDueTotalLineOnly(stepNum, entry.rowIndex, entry.pairs[ti].val);
         }
       }
-      document.getElementById('pastDueModalLabel').textContent = entry.label || '';
+      document.getElementById('pastDueModalLabel').innerHTML = formatPastDueModalHeaderHtml(
+        entry,
+        stepNum
+      );
       document.getElementById('pastDueModalKv').innerHTML = renderKV(entry.pairs, stepNum, 'pastdue-modal', true);
       refreshPastDueModalValidationInDom();
       const overlay = document.getElementById('pastDueModal');
@@ -4827,19 +5075,25 @@
           step,
           rowAttr != null ? parseInt(rowAttr, 10) : null,
           entryAttr != null ? parseInt(entryAttr, 10) : null,
-          btn.getAttribute('data-past-due-label') || null
+          btn.getAttribute('data-past-due-label') || null,
+          btn.getAttribute('data-entry-id') || null
         );
       });
 
     }
 
-    function showTestContentView(testKey, labelHtml) {
+    function showTestContentView(testKey, labelHtml, isExpected) {
       if (!testKey) return;
+      const panel = getTestPanelSection(testKey);
       const ids = getTestPanelIds(testKey);
-      const wrap = document.getElementById(ids.viewWrap);
-      const labelEl = document.getElementById(ids.viewLabel);
+      const wrap = (panel && panel.querySelector('.test1-view-wrap')) || document.getElementById(ids.viewWrap);
+      const labelEl =
+        (panel && panel.querySelector('.test1-view-label')) || document.getElementById(ids.viewLabel);
       if (labelEl) labelEl.innerHTML = labelHtml || '';
-      if (wrap) wrap.classList.remove('hidden');
+      if (wrap) {
+        wrap.classList.remove('hidden');
+        setTestViewWrapMode(testKey, !!isExpected, wrap);
+      }
     }
 
     function getPrimaryCustomTestSlug() {
@@ -4852,8 +5106,7 @@
 
     function setTestActiveButton(testKey, activeBtn) {
       if (!testKey) return;
-      const ids = getTestPanelIds(testKey);
-      const panel = document.getElementById(ids.panel);
+      const panel = getTestPanelSection(testKey) || document.getElementById(getTestPanelIds(testKey).panel);
       if (!panel) return;
       panel.querySelectorAll('.test1-actions button').forEach(function (btn) {
         const act = btn.getAttribute('data-action');
@@ -4867,7 +5120,7 @@
       collapseResultsView(testKey);
     }
 
-    function deleteCustomTest(slug) {
+    async function deleteCustomTest(slug) {
       const test = findCustomTest(slug);
       const panel = document.getElementById(slug + 'Panel');
       if (!test && !panel) return;
@@ -4877,7 +5130,9 @@
         slug;
       if (
         !confirm(
-          'Delete "' + displayName + '"?\n\nThis removes the test from the viewer. It cannot be undone.'
+          'Delete "' +
+            displayName +
+            '"?\n\nThis removes test files from Test Scripts on disk. It cannot be undone.'
         )
       ) {
         return;
@@ -4887,15 +5142,22 @@
         activeEditorIsExpected = false;
         rebuildEditableState([]);
       }
-      if (test) {
-        customTests = customTests.filter(function (t) {
-          return t.slug !== slug;
+      try {
+        const hit = await fetchMasterTestApi('/api/master-test/tests/' + encodeURIComponent(slug), {
+          method: 'DELETE'
         });
-        saveCustomTestsToStorage();
-        renderCustomTestPanels();
-      } else if (panel) {
-        panel.remove();
+        if (!hit.res.ok || !hit.data.ok) {
+          throw new Error((hit.data && hit.data.error) || 'Delete failed');
+        }
+      } catch (eDel) {
+        alert('Could not delete test files: ' + (eDel.message || String(eDel)));
+        return;
       }
+      customTests = customTests.filter(function (t) {
+        return t.slug !== slug;
+      });
+      renderCustomTestPanels();
+      if (panel && !findCustomTest(slug)) panel.remove();
     }
 
     function sanitizeTestExportFilename(name) {
@@ -4996,9 +5258,20 @@
       return base + (isExpected ? '_expected_output.txt' : '_results.txt');
     }
 
-    function isViewingExpectedForTest(testKey) {
+    function isViewingExpectedForTest(testKey, wrapEl) {
+      if (wrapEl) return isExpectedViewWrap(wrapEl);
+      const wrap = getTestViewWrapEl(testKey);
+      if (wrap && wrap.dataset.viewMode) return isExpectedViewWrap(wrap);
       if (activeEditorTestKey === testKey) return !!activeEditorIsExpected;
       return !!viewingExpectedOnly;
+    }
+
+    function removeStrayTestPanels() {
+      const container = document.getElementById('testsContainer');
+      if (!container) return;
+      container.querySelectorAll(':scope > section.test1-panel[data-test-slug]').forEach(function (el) {
+        el.remove();
+      });
     }
 
     function getRawTextForView(testKey) {
@@ -5016,11 +5289,11 @@
       return test ? test.name : testKey;
     }
 
-    function openRawTextEditor(testKey) {
+    function openRawTextEditor(testKey, triggerEl) {
       if (!testKey) return;
-      const isExpected = isViewingExpectedForTest(testKey);
-      const ids = getTestPanelIds(testKey);
-      const wrap = document.getElementById(ids.viewWrap);
+      const wrap =
+        (triggerEl && triggerEl.closest('.test1-view-wrap')) || getTestViewWrapEl(testKey);
+      const isExpected = isViewingExpectedForTest(testKey, wrap);
       if (!wrap || wrap.classList.contains('hidden')) {
         alert('Open results or expected output first, then use Edit.');
         return;
@@ -5065,7 +5338,7 @@
       }
     }
 
-    function saveRawTextEditor() {
+    async function saveRawTextEditor() {
       const ctx = rawEditorContext;
       if (!ctx) return;
       const ta = document.getElementById('rawTextEditorTextarea');
@@ -5077,35 +5350,55 @@
         closeRawTextEditorModal();
         return;
       }
-      if (isExpected) test.expectedText = text;
-      else test.resultsText = text;
-      saveCustomTestsToStorage();
+      try {
+        if (isExpected) {
+          test.expectedText = text;
+          await persistTestExpectedText(test.slug, text);
+        } else {
+          test.resultsText = text;
+          await persistTestResultsText(test.slug, text);
+        }
+      } catch (eSave) {
+        alert('Could not save to disk: ' + (eSave.message || String(eSave)));
+        return;
+      }
       closeRawTextEditorModal();
       viewingExpectedOnly = isExpected;
       actualText = text;
       const root = getTestRootEl(testKey);
+      const fileHint = isExpected ? test.slug + '_expected_output.txt' : test.slug + '_results.txt';
       renderAll(text, null, {
         testKey: testKey,
         rootEl: root,
+        isExpected: isExpected,
         compare: false,
         viewLabel: escapeHtml(test.name) + (isExpected ? ' expected output' : ' results'),
         exportHint:
-          'Editing ' +
-          test.slug +
-          (isExpected ? '_expected_output' : '_results') +
-          ' — export via <strong>Export results (.txt)</strong>.'
+          'Saved to <code>Test Scripts/Test Script ' +
+          test.slug.replace(/^test/, '') +
+          '/' +
+          fileHint +
+          '</code> on disk.'
       });
-      refreshCustomTestValidation(test);
-      showClipboardToast('Saved ' + test.name + ' ' + (isExpected ? 'expected' : 'results'), true);
+      await refreshCustomTestValidation(test);
+      showClipboardToast('Saved ' + test.name + ' ' + (isExpected ? 'expected' : 'results') + ' to disk', true);
     }
 
     function syncActiveEditorToTest(test) {
       if (!test || !activeEditorTestKey || activeEditorTestKey !== test.slug) return;
       if (!stepOrder.length) return;
       const text = buildExportText();
-      if (activeEditorIsExpected) test.expectedText = text;
-      else test.resultsText = text;
-      saveCustomTestsToStorage();
+      if (activeEditorIsExpected) {
+        test.expectedText = text;
+        persistTestExpectedText(test.slug, text).catch(function (e) {
+          console.error('[master-test-viewer] sync expected failed', e);
+        });
+      } else {
+        test.resultsText = text;
+        persistTestResultsText(test.slug, text).catch(function (e) {
+          console.error('[master-test-viewer] sync results failed', e);
+        });
+      }
     }
 
     function buildTestExportPackage(test) {
@@ -5195,27 +5488,16 @@
       );
     }
 
-    function importTestFromPayload(raw) {
+    async function importTestFromPayload(raw) {
       const norm = parseTestImportPayload(raw);
-      const slug = uniqueTestSlug(norm.name);
-      const test = {
-        slug: slug,
-        name: norm.name,
-        customerName: norm.customerName,
-        customerId: norm.customerId,
-        stepDefs: norm.stepDefs,
-        foundationText: norm.foundationText,
-        resultsText: norm.resultsText,
-        expectedText: norm.expectedText
-      };
-      customTests.push(test);
-      saveCustomTestsToStorage();
+      const preferred = preferredSlugForImportedTestName(norm.name);
+      const test = await addCustomTestFromPackage(norm, preferred);
       renderCustomTestPanels();
       closeImportTestModal();
-      refreshCustomTestValidation(test);
-      const panel = document.getElementById(slug + 'Panel');
+      await refreshCustomTestValidation(test);
+      const panel = document.getElementById(test.slug + 'Panel');
       if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      showClipboardToast('Imported "' + test.name + '"', true);
+      showClipboardToast('Imported "' + test.name + '" to disk', true);
     }
 
     function openImportTestModal() {
@@ -5265,6 +5547,12 @@
     function collapseResultsView(testKey) {
       if (!testKey) return;
       if (activeEditorTestKey === testKey) {
+        const closingTest = findCustomTest(testKey);
+        if (closingTest && stepOrder.length) {
+          syncActiveEditorToTest(closingTest);
+          saveCustomTestsToStorage();
+          refreshCustomTestValidation(closingTest);
+        }
         activeEditorTestKey = null;
         activeEditorIsExpected = false;
         rebuildEditableState([]);
@@ -5272,8 +5560,11 @@
       const ids = getTestPanelIds(testKey);
       const root = document.getElementById(ids.root);
       if (root) root.innerHTML = '';
-      const wrap = document.getElementById(ids.viewWrap);
-      if (wrap) wrap.classList.add('hidden');
+      const wrap = getTestViewWrapEl(testKey);
+      if (wrap) {
+        wrap.classList.add('hidden');
+        delete wrap.dataset.viewMode;
+      }
       const desc = document.getElementById(ids.descPanel);
       if (desc) desc.classList.add('hidden');
       setTestActiveButton(testKey, null);
@@ -5290,8 +5581,11 @@
       options = options || {};
       const testKey = options.testKey;
       if (!testKey) return;
+      const isExpectedView =
+        options.isExpected != null ? !!options.isExpected : !!viewingExpectedOnly;
       activeEditorTestKey = testKey;
-      activeEditorIsExpected = !!viewingExpectedOnly;
+      activeEditorIsExpected = isExpectedView;
+      viewingExpectedOnly = isExpectedView;
       const root = options.rootEl || getTestRootEl(testKey);
       const hint = document.getElementById('exportHint');
       const useCompare = options.compare === true && !!goldenCompareText;
@@ -5321,7 +5615,7 @@
         const viewLabel =
           options.viewLabel ||
           (useCompare ? 'Test results <span style="color:var(--muted)">vs</span> expected' : 'Test results');
-        showTestContentView(testKey, '<strong>Viewing:</strong> ' + viewLabel);
+        showTestContentView(testKey, '<strong>Viewing:</strong> ' + viewLabel, isExpectedView);
         if (hint) {
           hint.textContent =
             options.exportHint ||
@@ -5371,16 +5665,25 @@
 
     const btnExportCustom = document.getElementById('btnExportCustom');
     if (btnExportCustom) btnExportCustom.addEventListener('click', function () {
+      if (!activeEditorTestKey) {
+        alert('Open a test results or expected view first, then try export again.');
+        return;
+      }
+      const test = findCustomTest(activeEditorTestKey);
+      if (test && stepOrder.length) {
+        syncActiveEditorToTest(test);
+        saveCustomTestsToStorage();
+      }
       const text = buildExportText();
       if (!text.trim()) {
         alert('Open results or expected output first, then try export again.');
         return;
       }
-      if (!activeEditorTestKey) {
-        alert('Open a test results or expected view first, then try export again.');
-        return;
-      }
-      const fname = getExportFilenameForView(activeEditorTestKey, viewingExpectedOnly);
+      if (test) refreshCustomTestValidation(test);
+      const fname = getExportFilenameForView(
+        activeEditorTestKey,
+        isViewingExpectedForTest(activeEditorTestKey)
+      );
       exportDownloadAndCopyText(text, fname);
     });
 
@@ -5499,6 +5802,20 @@
       throw lastErr || new Error('Could not load: ' + urls.join(', '));
     }
 
+    /** test1 → Test Script 1/test1_results.txt, test2 → Test Script 2/test2_results.txt, … */
+    function getCustomTestDiskFileUrls(test) {
+      const slug = String((test && test.slug) || '').toLowerCase();
+      const m = /^test(\d+)$/.exec(slug);
+      if (!m) return null;
+      const n = m[1];
+      const dir = 'Test Script ' + n;
+      const prefix = 'test' + n;
+      return {
+        results: [dir + '/' + prefix + '_results.txt', dir + '/test_script_results.txt'],
+        expected: [dir + '/' + prefix + '_expected_output.txt', dir + '/expected_output.txt']
+      };
+    }
+
     async function loadTest1ResultsFile() {
       const hit = await fetchTest1FirstAvailable(TEST1_RESULTS_URLS);
       test1ActualCached = hit.text;
@@ -5584,7 +5901,7 @@
       return null;
     }
 
-    function importMasterTestDocument(text, role, filename) {
+    async function importMasterTestDocument(text, role, filename) {
       const testKey = getPrimaryCustomTestSlug();
       if (!testKey) {
         alert('Create or import a test first, then use Import Data for results or expected output.');
@@ -5599,15 +5916,25 @@
       const ids = getTestPanelIds(testKey);
       const descPanel = document.getElementById(ids.descPanel);
       if (descPanel) descPanel.classList.add('hidden');
+      try {
+        if (role === 'expected') {
+          await persistTestExpectedText(test.slug, text);
+        } else {
+          await persistTestResultsText(test.slug, text);
+        }
+      } catch (eImp) {
+        alert('Could not save import to disk: ' + (eImp.message || String(eImp)));
+        return;
+      }
       if (role === 'expected') {
         test.expectedText = text;
-        saveCustomTestsToStorage();
         actualText = text;
         viewingExpectedOnly = true;
         setTestActiveButton(testKey, null);
         renderAll(text, null, {
           testKey: testKey,
           rootEl: getTestRootEl(testKey),
+          isExpected: true,
           compare: false,
           viewLabel: label,
           exportHint:
@@ -5615,20 +5942,20 @@
         });
       } else {
         test.resultsText = text;
-        saveCustomTestsToStorage();
         actualText = text;
         viewingExpectedOnly = false;
         setTestActiveButton(testKey, null);
         renderAll(text, null, {
           testKey: testKey,
           rootEl: getTestRootEl(testKey),
+          isExpected: false,
           compare: false,
           viewLabel: label,
           exportHint: 'Editing results — export via <strong>Export results (.txt)</strong>.'
         });
       }
       refreshCustomTestValidation(test);
-      const viewWrap = document.getElementById(ids.viewWrap);
+      const viewWrap = getTestViewWrapEl(testKey);
       if (viewWrap) viewWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
@@ -5716,7 +6043,8 @@
         testKey,
         '<strong>Viewing:</strong> Imported ledger for ' +
           escapeHtml(String(cust.name || 'customer')) +
-          (cust.accountNumber ? ' (' + escapeHtml(String(cust.accountNumber)) + ')' : '')
+          (cust.accountNumber ? ' (' + escapeHtml(String(cust.accountNumber)) + ')' : ''),
+        false
       );
       const hint = document.getElementById('exportHint');
       if (hint) {
@@ -5767,7 +6095,6 @@
       }
     }
 
-    const MTV_CUSTOM_TESTS_KEY = 'mtv_custom_tests_v1';
     const MTV_TEST_EXPORT_FORMAT = 'cus-master-test-v1';
     const DEFAULT_DATA_CAPTURES = [
       'Log what the payments/charges table shows',
@@ -5892,8 +6219,15 @@
           if (stored) {
             stored.resultsText = test.resultsText;
             stored.foundationText = buildBlankMasterTestDocument(stored.stepDefs || []);
-            saveCustomTestsToStorage();
-            refreshCustomTestValidation(stored);
+            try {
+              await persistTestPackage(stored);
+              if (stored.resultsText) {
+                await persistTestResultsText(stored.slug, stored.resultsText);
+              }
+            } catch (eSave) {
+              console.error('[master-test-viewer] save results to disk failed', eSave);
+            }
+            await refreshCustomTestValidation(stored);
           }
           if (test.resultsText.trim()) {
             const root = getTestRootEl(test.slug);
@@ -5902,12 +6236,13 @@
             renderAll(test.resultsText, null, {
               testKey: test.slug,
               rootEl: root,
+              isExpected: false,
               compare: false,
               viewLabel: escapeHtml(test.name) + ' results',
               exportHint:
                 'Live test results — export via <strong>Export results (.txt)</strong>.'
             });
-            const viewWrap = document.getElementById(getTestPanelIds(test.slug).viewWrap);
+            const viewWrap = getTestViewWrapEl(test.slug);
             if (viewWrap) {
               viewWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
@@ -5983,12 +6318,10 @@
     }
 
     function reorderTestPanelsAlphabetically() {
-      const container = document.getElementById('testsContainer');
       const customHost = document.getElementById('customTestsContainer');
-      if (!container) return;
-      const panelNodes = customHost
-        ? customHost.querySelectorAll('section.test1-panel[data-test-slug]')
-        : container.querySelectorAll('section.test1-panel[data-test-slug]');
+      if (!customHost) return;
+      removeStrayTestPanels();
+      const panelNodes = customHost.querySelectorAll('section.test1-panel[data-test-slug]');
       const items = [];
       panelNodes.forEach(function (sec) {
         const slug = sec.getAttribute('data-test-slug');
@@ -5999,11 +6332,8 @@
         return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
       });
       items.forEach(function (item) {
-        container.appendChild(item.el);
+        customHost.appendChild(item.el);
       });
-      if (customHost && customHost.parentNode === container) {
-        container.appendChild(customHost);
-      }
     }
 
     async function loadTest1RunStepDefs() {
@@ -6111,18 +6441,154 @@
       }
     }
 
-    function loadCustomTestsFromStorage() {
-      try {
-        const raw = localStorage.getItem(MTV_CUSTOM_TESTS_KEY);
-        customTests = raw ? JSON.parse(raw) : [];
-        if (!Array.isArray(customTests)) customTests = [];
-      } catch (e) {
-        customTests = [];
+    function masterTestPackageBody(test) {
+      return {
+        name: test.name,
+        customerName: test.customerName,
+        customerId: test.customerId,
+        stepDefs: test.stepDefs,
+        foundationText: test.foundationText
+      };
+    }
+
+    async function persistTestPackage(test) {
+      if (!test || !test.slug) return;
+      const hit = await fetchMasterTestApi(
+        '/api/master-test/tests/' + encodeURIComponent(test.slug) + '/package',
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(masterTestPackageBody(test))
+        }
+      );
+      if (!hit.res.ok || !hit.data.ok) {
+        throw new Error((hit.data && hit.data.error) || 'Failed to save test package to disk');
+      }
+    }
+
+    async function persistTestResultsText(slug, text) {
+      const hit = await fetchMasterTestApi(
+        '/api/master-test/tests/' + encodeURIComponent(slug) + '/results',
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: text != null ? String(text) : ''
+        }
+      );
+      if (!hit.res.ok || !hit.data.ok) {
+        throw new Error((hit.data && hit.data.error) || 'Failed to save results file to disk');
+      }
+    }
+
+    async function persistTestExpectedText(slug, text) {
+      const hit = await fetchMasterTestApi(
+        '/api/master-test/tests/' + encodeURIComponent(slug) + '/expected',
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: text != null ? String(text) : ''
+        }
+      );
+      if (!hit.res.ok || !hit.data.ok) {
+        throw new Error((hit.data && hit.data.error) || 'Failed to save expected file to disk');
+      }
+    }
+
+    /** Save metadata + optional large text files (never one giant JSON body). */
+    async function persistTest(test, opts) {
+      opts = opts || {};
+      if (!test || !test.slug) return;
+      await persistTestPackage(test);
+      if (opts.resultsText !== undefined) {
+        await persistTestResultsText(test.slug, opts.resultsText);
+      } else if (opts.saveResults && test.resultsText !== undefined) {
+        await persistTestResultsText(test.slug, test.resultsText);
+      }
+      if (opts.expectedText !== undefined) {
+        await persistTestExpectedText(test.slug, opts.expectedText);
+      } else if (opts.saveExpected && test.expectedText !== undefined) {
+        await persistTestExpectedText(test.slug, test.expectedText);
       }
     }
 
     function saveCustomTestsToStorage() {
-      localStorage.setItem(MTV_CUSTOM_TESTS_KEY, JSON.stringify(customTests));
+      customTests.forEach(function (t) {
+        persistTestPackage(t).catch(function (e) {
+          console.error('[master-test-viewer] disk save failed', t.slug, e);
+        });
+      });
+    }
+
+    function preferredSlugForImportedTestName(name) {
+      const n = String(name || '').trim().toLowerCase();
+      if (n === 'test 1' || n === 'test1') return 'test1';
+      if (n === 'test 2' || n === 'test2') return 'test2';
+      return null;
+    }
+
+    async function addCustomTestFromPackage(norm, preferredSlug) {
+      const slug =
+        preferredSlug && !findCustomTest(preferredSlug)
+          ? preferredSlug
+          : uniqueTestSlug(norm.name);
+      if (findCustomTest(slug)) return findCustomTest(slug);
+      const test = {
+        slug: slug,
+        name: norm.name,
+        customerName: norm.customerName,
+        customerId: norm.customerId,
+        stepDefs: norm.stepDefs,
+        foundationText: norm.foundationText,
+        resultsText: norm.resultsText,
+        expectedText: norm.expectedText
+      };
+      const hit = await fetchMasterTestApi('/api/master-test/tests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ slug: slug }, masterTestPackageBody(test)))
+      });
+      if (!hit.res.ok || !hit.data.ok) {
+        throw new Error((hit.data && hit.data.error) || 'Failed to create test on disk');
+      }
+      if (norm.resultsText && String(norm.resultsText).trim()) {
+        await persistTestResultsText(slug, norm.resultsText);
+      }
+      if (norm.expectedText && String(norm.expectedText).trim()) {
+        await persistTestExpectedText(slug, norm.expectedText);
+      }
+      customTests.push(test);
+      return test;
+    }
+
+    async function loadAllCustomTestsFromDisk() {
+      customTests = [];
+      const reg = await fetchMasterTestApi('/api/master-test/registry');
+      if (!reg.res.ok || !reg.data.ok) {
+        throw new Error((reg.data && reg.data.error) || 'Could not load tests from disk');
+      }
+      const list = reg.data.tests || [];
+      for (let i = 0; i < list.length; i++) {
+        const meta = list[i];
+        const hit = await fetchMasterTestApi(
+          '/api/master-test/tests/' + encodeURIComponent(meta.slug)
+        );
+        if (!hit.res.ok || !hit.data.ok || !hit.data.test) continue;
+        const t = hit.data.test;
+        let foundationText = String(t.foundationText || '').trim();
+        if (!foundationText && Array.isArray(t.stepDefs) && t.stepDefs.length) {
+          foundationText = buildBlankMasterTestDocument(t.stepDefs);
+        }
+        customTests.push({
+          slug: meta.slug,
+          name: t.name || meta.name,
+          customerName: t.customerName || meta.customerName,
+          customerId: t.customerId || meta.customerId,
+          stepDefs: Array.isArray(t.stepDefs) ? t.stepDefs : [],
+          foundationText: foundationText,
+          resultsText: t.resultsText || '',
+          expectedText: t.expectedText || ''
+        });
+      }
     }
 
     function findCustomTest(slug) {
@@ -6297,7 +6763,11 @@
         icon.title = test.name + ' results match expected output';
         if (meta) {
           meta.textContent =
-            'Validation passed — ' + test.slug + '_results.txt matches ' + test.slug + '_expected_output.txt.';
+            'Validation passed — ' +
+            test.slug +
+            '_results.txt matches ' +
+            test.slug +
+            '_expected_output.txt on disk.';
         }
       } else {
         icon.classList.add('fail');
@@ -6305,12 +6775,16 @@
         icon.title = mismatchCount + ' line mismatch(es) vs expected';
         if (meta) {
           meta.textContent =
-            'Validation failed — ' + mismatchCount + ' line mismatch(es). Re-run the test or edit imported files.';
+            'Validation failed — ' +
+            mismatchCount +
+            ' line mismatch(es). Results vs expected differ on disk. Re-run the test or edit expected/results, then save (auto-writes to Test Scripts folder).';
         }
       }
     }
 
-    function refreshCustomTestValidation(test) {
+    /** Validate results vs expected (semantic line compare; data loaded from disk). */
+    async function refreshCustomTestValidation(test) {
+      if (!test) return;
       const act = (test.resultsText || '').trim();
       const exp = (test.expectedText || '').trim();
       if (!act && !exp) {
@@ -6416,12 +6890,24 @@
     function renderCustomTestPanels() {
       const host = document.getElementById('customTestsContainer');
       if (!host) return;
+      removeStrayTestPanels();
+      if (!customTests.length) {
+        host.innerHTML =
+          '<section class="test1-panel test1-empty-state" aria-label="No tests loaded">' +
+          '<h2 class="test1-title">No tests on disk</h2>' +
+          '<p class="test1-meta">Tests are loaded from <code>Test Scripts/Test Script N/</code> folders (not browser storage). ' +
+          'Run <code>npm start</code> and add <code>Test_N.master-test.json</code> under each folder, or use <strong>Import Test</strong> / <strong>Create New Test</strong>.</p>' +
+          '</section>';
+        return;
+      }
       host.innerHTML = getSortedCustomTests()
         .map(function (t) {
           return buildCustomTestPanelHtml(t);
         })
         .join('');
-      customTests.forEach(refreshCustomTestValidation);
+      customTests.forEach(function (t) {
+        refreshCustomTestValidation(t);
+      });
       reorderTestPanelsAlphabetically();
     }
 
@@ -6827,7 +7313,7 @@
       return defs;
     }
 
-    function submitCreateTest() {
+    async function submitCreateTest() {
       const nameEl = document.getElementById('createTestName');
       const custNameEl = document.getElementById('createTestCustomerName');
       const custIdEl = document.getElementById('createTestCustomerId');
@@ -6866,32 +7352,45 @@
         : 'CUS-3011000';
 
       let test;
-      if (editingTestSlug) {
-        test = findCustomTest(editingTestSlug);
-        if (!test) {
-          alert('Test not found.');
-          return;
+      try {
+        if (editingTestSlug) {
+          test = findCustomTest(editingTestSlug);
+          if (!test) {
+            alert('Test not found.');
+            return;
+          }
+          test.name = name;
+          test.customerName = customerName;
+          test.customerId = customerId;
+          test.stepDefs = stepDefs;
+          test.foundationText = foundation;
+          await persistTestPackage(test);
+        } else {
+          const slug = uniqueTestSlug(name);
+          test = {
+            slug: slug,
+            name: name,
+            customerName: customerName,
+            customerId: customerId,
+            stepDefs: stepDefs,
+            foundationText: foundation,
+            resultsText: '',
+            expectedText: ''
+          };
+          const hit = await fetchMasterTestApi('/api/master-test/tests', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({ slug: slug }, masterTestPackageBody(test)))
+          });
+          if (!hit.res.ok || !hit.data.ok) {
+            throw new Error((hit.data && hit.data.error) || 'Failed to create test folder on disk');
+          }
+          customTests.push(test);
         }
-        test.name = name;
-        test.customerName = customerName;
-        test.customerId = customerId;
-        test.stepDefs = stepDefs;
-        test.foundationText = foundation;
-      } else {
-        const slug = uniqueTestSlug(name);
-        test = {
-          slug: slug,
-          name: name,
-          customerName: customerName,
-          customerId: customerId,
-          stepDefs: stepDefs,
-          foundationText: foundation,
-          resultsText: '',
-          expectedText: ''
-        };
-        customTests.push(test);
+      } catch (eSave) {
+        alert('Could not save test to disk: ' + (eSave.message || String(eSave)));
+        return;
       }
-      saveCustomTestsToStorage();
       renderCustomTestPanels();
       closeCreateTestModal();
       const panel = document.getElementById(test.slug + 'Panel');
@@ -6984,7 +7483,8 @@
             '<strong>Viewing:</strong> ' +
               escapeHtml(test.name) +
               ' — ' +
-              (isExpected ? 'expected output (empty)' : 'results (empty)')
+              (isExpected ? 'expected output (empty)' : 'results (empty)'),
+            isExpected
           );
           const hint = document.getElementById('exportHint');
           if (hint) {
@@ -7002,6 +7502,7 @@
         renderAll(text, null, {
           testKey: slug,
           rootEl: root,
+          isExpected: isExpected,
           compare: false,
           viewLabel: escapeHtml(test.name) + (isExpected ? ' expected output' : ' results'),
           exportHint:
@@ -7091,6 +7592,7 @@
         }
         const panelBtn = e.target.closest('button[data-action][data-test]');
         if (!panelBtn) return;
+        if (panelBtn.getAttribute('data-action') === 'raw-edit') return;
         handleCustomTestPanelClick(e);
       });
     }
@@ -7121,11 +7623,21 @@
       }
     }
 
-    loadCustomTestsFromStorage();
-    renderCustomTestPanels();
-    reorderTestPanelsAlphabetically();
-    wireCreateTestModal();
-    checkMasterTestApiOnLoad();
+    async function initMasterTestViewer() {
+      await checkMasterTestApiOnLoad();
+      try {
+        await loadAllCustomTestsFromDisk();
+      } catch (eLoad) {
+        console.error('[master-test-viewer] load tests from disk failed', eLoad);
+        customTests = [];
+      }
+      renderCustomTestPanels();
+      wireCreateTestModal();
+    }
+    initMasterTestViewer().catch(function (eInit) {
+      console.error('[master-test-viewer] init failed', eInit);
+      renderCustomTestPanels();
+    });
     const btnRunAllTests = document.getElementById('btnRunAllTests');
     if (btnRunAllTests) btnRunAllTests.addEventListener('click', runAllTests);
 
@@ -7142,7 +7654,7 @@
         if (rawBtn) {
           e.preventDefault();
           const testKey = rawBtn.getAttribute('data-test');
-          if (testKey) openRawTextEditor(testKey);
+          if (testKey) openRawTextEditor(testKey, rawBtn);
         }
       });
     }
@@ -7177,11 +7689,9 @@
     document.getElementById('importTestApply').addEventListener('click', function () {
       const ta = document.getElementById('importTestTextarea');
       const raw = ta ? ta.value : '';
-      try {
-        importTestFromPayload(raw);
-      } catch (err) {
+      importTestFromPayload(raw).catch(function (err) {
         alert('Import failed: ' + (err.message || String(err)));
-      }
+      });
     });
     document.getElementById('importTestModal').addEventListener('click', function (e) {
       if (e.target.id === 'importTestModal') closeImportTestModal();

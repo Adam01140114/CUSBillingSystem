@@ -1,0 +1,4893 @@
+Step 1:
+
+Description: 
+Do a fresh start and then set the test date to 1/1/26
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log View Past Due Details
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+$178.46
+$178.46
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$0
+$0
+$0
+$0
+$0
+$0
+
+View Past Due Details Shows:
+
+[ROW 0]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 1]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+
+Step 2:
+
+Description: 
+Bill them
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log View Past Due Details
+Log what PDF Bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+$178.46
+$178.46
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.10
+$0
+$0
+$0
+$178.46
+
+View Past Due Details Shows:
+
+[ROW 0]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 1]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 2]
+01/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 3]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.46
+$0
+$0
+$0
+$178.46
+
+
+Step 3:
+
+Description: 
+Advance date to 2/1/26 and bill them again
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log View Past Due Details
+Log what PDF Bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+$178.46
+$178.46
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+01/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+N/A
+$178.46
+N/A
+$361.92
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+$0
+N/A
+N/A
+$361.92
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.10
+$178.46
+$5.00
+$0
+$361.92
+
+View Past Due Details Shows:
+
+[ROW 0]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 1]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 2]
+01/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 3]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 4]
+01/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 5]
+01/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 6]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 7]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.46
+$178.46
+$5.00
+$0
+$361.92
+
+
+Step 4:
+
+Description: 
+Advance date to 3/1/26 and bill them again
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log View Past Due Details
+Log what PDF bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+$178.46
+$178.46
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+01/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+N/A
+$178.46
+N/A
+$361.92
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+$0
+N/A
+N/A
+$361.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+N/A
+5
+N/A
+$366.92
+02/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+$0
+N/A
+N/A
+$366.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+N/A
+$178.46
+N/A
+$545.38
+03/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+$0
+N/A
+N/A
+$545.38
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.10
+$361.92
+$5.00
+$0
+$545.38
+
+View Past Due Details Shows:
+
+[ROW 0]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 1]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 2]
+01/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 3]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 4]
+01/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 5]
+01/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 6]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 7]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 8]
+02/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 9]
+02/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 10]
+03/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 11]
+03/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.46
+$361.92
+$5.00
+$0
+$545.38
+
+
+Step 5:
+
+Description: 
+Advance date to 3/2/26 and bill them again
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log View Past Due Details
+Log what PDF bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+$178.46
+$178.46
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+01/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+N/A
+$178.46
+N/A
+$361.92
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+$0
+N/A
+N/A
+$361.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+N/A
+5
+N/A
+$366.92
+02/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+$0
+N/A
+N/A
+$366.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+N/A
+$178.46
+N/A
+$545.38
+03/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+$0
+N/A
+N/A
+$545.38
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Payment
+Security deposit
+168.36
+2.42
+7.68
+$361.92
+$5.00
+$0
+N/A
+$545.38
+$0
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.10
+$0
+$0
+$0
+$178.46
+
+View Past Due Details Shows:
+
+[ROW 0]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 1]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 2]
+01/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 3]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 4]
+01/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 5]
+01/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 6]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 7]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 8]
+02/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 9]
+02/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 10]
+03/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 11]
+03/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 12]
+03/02/2026 12:00 AM · Payment · Security deposit
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 13]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 14]
+03/02/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 15]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.46
+$0
+$0
+$0
+$178.46
+
+
+Step 6:
+
+Description: 
+Advance date to 4/1/26
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log View Past Due Details
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+$178.46
+$178.46
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+01/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+N/A
+$178.46
+N/A
+$361.92
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+$0
+N/A
+N/A
+$361.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+N/A
+5
+N/A
+$366.92
+02/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+$0
+N/A
+N/A
+$366.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+N/A
+$178.46
+N/A
+$545.38
+03/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+$0
+N/A
+N/A
+$545.38
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Payment
+Security deposit
+168.36
+2.42
+7.68
+$361.92
+$5.00
+$0
+N/A
+$545.38
+$0
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/23/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+03/23/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.10
+$0
+$5.00
+$0
+$183.46
+
+View Past Due Details Shows:
+
+[ROW 0]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 1]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 2]
+01/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 3]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 4]
+01/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 5]
+01/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 6]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 7]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 8]
+02/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 9]
+02/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 10]
+03/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 11]
+03/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 12]
+03/02/2026 12:00 AM · Payment · Security deposit
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 13]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 14]
+03/02/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 15]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 16]
+03/23/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 17]
+03/23/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+
+Step 7:
+
+Description: 
+Have susan pay 10 dollars.
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log View Past Due Details
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+$178.46
+$178.46
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+01/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+N/A
+$178.46
+N/A
+$361.92
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+$0
+N/A
+N/A
+$361.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+N/A
+5
+N/A
+$366.92
+02/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+$0
+N/A
+N/A
+$366.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+N/A
+$178.46
+N/A
+$545.38
+03/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+$0
+N/A
+N/A
+$545.38
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Payment
+Security deposit
+168.36
+2.42
+7.68
+$361.92
+$5.00
+$0
+N/A
+$545.38
+$0
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/23/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+03/23/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+04/01/2026 12:00 AM
+Payment
+Check
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+$10.00
+$173.46
+04/01/2026 12:00 AM
+Status Update
+Current Status
+$163.36
+$2.42
+$2.68
+$0
+$5.00
+$0
+N/A
+N/A
+$173.46
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$163.36
+$5.10
+$0
+$5.00
+$0
+$173.46
+
+View Past Due Details Shows:
+
+[ROW 0]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 1]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 2]
+01/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 3]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 4]
+01/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 5]
+01/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 6]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 7]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 8]
+02/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 9]
+02/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 10]
+03/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 11]
+03/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 12]
+03/02/2026 12:00 AM · Payment · Security deposit
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 13]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 14]
+03/02/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 15]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 16]
+03/23/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 17]
+03/23/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 18]
+04/01/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 19]
+04/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+
+Step 8:
+
+Description: 
+Bill her
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log View Past Due Details
+Log what PDF bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+$178.46
+$178.46
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+01/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+N/A
+$178.46
+N/A
+$361.92
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+$0
+N/A
+N/A
+$361.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+N/A
+5
+N/A
+$366.92
+02/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+$0
+N/A
+N/A
+$366.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+N/A
+$178.46
+N/A
+$545.38
+03/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+$0
+N/A
+N/A
+$545.38
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Payment
+Security deposit
+168.36
+2.42
+7.68
+$361.92
+$5.00
+$0
+N/A
+$545.38
+$0
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/23/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+03/23/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+04/01/2026 12:00 AM
+Payment
+Check
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+$10.00
+$173.46
+04/01/2026 12:00 AM
+Status Update
+Current Status
+$163.36
+$2.42
+$2.68
+$0
+$5.00
+$0
+N/A
+N/A
+$173.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+04/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$168.46
+$5.00
+N/A
+$178.46
+N/A
+$351.92
+04/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$168.46
+$5.00
+$0
+N/A
+N/A
+$351.92
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.10
+$168.46
+$5.00
+$0
+$351.92
+
+View Past Due Details Shows:
+
+[ROW 0]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 1]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 2]
+01/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 3]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 4]
+01/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 5]
+01/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 6]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 7]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 8]
+02/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 9]
+02/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 10]
+03/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 11]
+03/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 12]
+03/02/2026 12:00 AM · Payment · Security deposit
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 13]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 14]
+03/02/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 15]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 16]
+03/23/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 17]
+03/23/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 18]
+04/01/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 19]
+04/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 20]
+04/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$163.36
+$0
+$0
+$5.10
+$0
+$0
+$168.46
+
+[ROW 21]
+04/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$10
+$168.46
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.46
+$168.46
+$5.00
+$0
+$351.92
+
+
+Step 9:
+
+Description: 
+Advance date to 5/1/26 and bill them again
+Log what the payments/charges shows
+Log what the amount breakdown shows
+Log View Past Due Details
+Log what PDF bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+$178.46
+$178.46
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+01/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+01/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+N/A
+$178.46
+N/A
+$361.92
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$5.00
+$0
+N/A
+N/A
+$361.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+02/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+N/A
+5
+N/A
+$366.92
+02/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$178.46
+$10.00
+$0
+N/A
+N/A
+$366.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+N/A
+$178.46
+N/A
+$545.38
+03/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$361.92
+$5.00
+$0
+N/A
+N/A
+$545.38
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Payment
+Security deposit
+168.36
+2.42
+7.68
+$361.92
+$5.00
+$0
+N/A
+$545.38
+$0
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/02/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+03/02/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+03/23/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+N/A
+5
+N/A
+$183.46
+03/23/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+N/A
+$183.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+04/01/2026 12:00 AM
+Payment
+Check
+$168.36
+$2.42
+$7.68
+$0
+$5.00
+$0
+N/A
+$10.00
+$173.46
+04/01/2026 12:00 AM
+Status Update
+Current Status
+$163.36
+$2.42
+$2.68
+$0
+$5.00
+$0
+N/A
+N/A
+$173.46
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+04/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$168.46
+$5.00
+N/A
+$178.46
+N/A
+$351.92
+04/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$168.46
+$5.00
+$0
+N/A
+N/A
+$351.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+04/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.42
+$7.68
+$168.46
+$10.00
+N/A
+5
+N/A
+$356.92
+04/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$168.46
+$10.00
+$0
+N/A
+N/A
+$356.92
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+05/01/2026 12:00 AM
+Payment
+Security deposit
+168.36
+2.42
+7.68
+$168.46
+$10.00
+$0
+N/A
+$356.92
+$0
+05/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+$0
+$0
+$0
+N/A
+N/A
+$0
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+------------
+05/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.42
+$7.68
+$0
+$0
+N/A
+$178.46
+N/A
+$178.46
+05/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.42
+$7.68
+$0
+$0
+$0
+N/A
+N/A
+$178.46
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.10
+$0
+$0
+$0
+$178.46
+
+View Past Due Details Shows:
+
+[ROW 0]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 1]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 2]
+01/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 3]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 4]
+01/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 5]
+01/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 6]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 7]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 8]
+02/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 9]
+02/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$0
+$178.46
+
+[ROW 10]
+03/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 11]
+03/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 12]
+03/02/2026 12:00 AM · Payment · Security deposit
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.46
+5
+$2.42
+$7.68
+$168.36
+$0
+$361.92
+
+[ROW 13]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 14]
+03/02/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 15]
+03/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 16]
+03/23/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 17]
+03/23/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 18]
+04/01/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 19]
+04/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 20]
+04/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$163.36
+$0
+$0
+$5.10
+$0
+$0
+$168.46
+
+[ROW 21]
+04/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$10
+$168.46
+
+[ROW 22]
+04/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$10
+$168.46
+
+[ROW 23]
+04/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$10
+$168.46
+
+[ROW 24]
+05/01/2026 12:00 AM · Payment · Security deposit
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.42
+$7.68
+$168.36
+$10
+$168.46
+
+[ROW 25]
+05/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 26]
+05/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+[ROW 27]
+05/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+$0
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.46
+$0
+$0
+$0
+$178.46

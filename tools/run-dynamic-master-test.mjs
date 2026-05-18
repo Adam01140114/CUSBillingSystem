@@ -5,7 +5,11 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
+
+const require = createRequire(import.meta.url);
+const { saveResultsToDisk } = require('./master-test-disk-store.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
@@ -231,6 +235,15 @@ async function main() {
     const report = result && typeof result.masterTestReport === 'string' ? result.masterTestReport : '';
     const consoleText =
       result && Array.isArray(result.consoleLines) ? result.consoleLines.join('\n') : '';
+
+    const testSlug = config.testSlug ? String(config.testSlug).trim() : '';
+    if (testSlug && report) {
+      try {
+        saveResultsToDisk(testSlug, report, consoleText);
+      } catch (eDisk) {
+        console.error('[dynamic-master-test] disk save failed:', eDisk.message || eDisk);
+      }
+    }
 
     if (!result || !result.ok) {
       writeJob(jobFile, {

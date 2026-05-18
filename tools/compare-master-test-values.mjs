@@ -20,8 +20,14 @@ function resolveTestFile(names) {
   return path.join(dirs[0], list[0]);
 }
 
-const expPath = resolveTestFile(['test1_expected_output.txt', 'expected_output.txt']);
-const actPath = resolveTestFile(['test1_results.txt', 'test_script_results.txt']);
+const expArg = process.argv[2];
+const actArg = process.argv[3];
+const expPath = expArg
+  ? path.resolve(process.cwd(), expArg)
+  : resolveTestFile(['test1_expected_output.txt', 'expected_output.txt']);
+const actPath = actArg
+  ? path.resolve(process.cwd(), actArg)
+  : resolveTestFile(['test1_results.txt', 'test_script_results.txt']);
 
 function normMoney(s) {
   const t = String(s ?? '').trim();

@@ -26945,11 +26945,68 @@
 
     function formatLedgerAmountChargedCell(row) {
       if (!row || row.sourceKind === 'status') return 'N/A';
-      if (row.sourceKind === 'payment') return formatLedgerDisplayMoney(0, { forceDollar: false });
+      if (row.sourceKind === 'payment') {
+        if (row.ledgerPayment && row.ledgerPayment.source === 'testFreshStart') {
+          return formatLedgerDisplayMoney(0, { forceDollar: false });
+        }
+        try {
+          if (typeof window.masterTestLog === 'function') {
+            window.masterTestLog('ledgerAmountChargedCell:na', {
+              subtype: row.subtype || '',
+              amountPaid: row.amountPaid
+            });
+          } else {
+            console.info('[LedgerAmountCharged] N/A on payment row', {
+              subtype: row.subtype || '',
+              amountPaid: row.amountPaid
+            });
+          }
+        } catch (eLog) {
+          /* ignore */
+        }
+        return 'N/A';
+      }
       return formatLedgerDisplayMoney(ledgerAmountChargedForDisplayRow(row), {
         forceDollar: false,
         allowDollar: true
       });
+    }
+
+    /**
+     * Credit column: N/A when no credit applies; Fresh Start payment rows keep bare 0 for legacy master-test export.
+     */
+    function formatLedgerCreditCell(row) {
+      if (!row) return '—';
+      const credNum =
+        typeof row.credit === 'number' && !isNaN(row.credit) ? Math.round(row.credit * 100) / 100 : 0;
+      if (row.sourceKind === 'payment') {
+        if (
+          row.ledgerPayment &&
+          row.ledgerPayment.source === 'testFreshStart' &&
+          credNum <= 0.005
+        ) {
+          return formatLedgerDisplayMoney(0, { forceDollar: false });
+        }
+        if (credNum > 0.005) {
+          return formatLedgerDisplayMoney(credNum, { forceDollar: true, allowDollar: true });
+        }
+        return formatLedgerDisplayMoney(0, { forceDollar: true, allowDollar: true });
+      }
+      if (row.sourceKind === 'status') {
+        return formatLedgerDisplayMoney(credNum, {
+          forceDollar: credNum > 0.005,
+          allowDollar: true
+        });
+      }
+      if (row.sourceKind === 'charge') {
+        if (/late fee/i.test(String(row.subtype || '')) && credNum <= 0.005) {
+          return formatLedgerDisplayMoney(0, { forceDollar: true, allowDollar: true });
+        }
+        if (credNum <= 0.005) return 'N/A';
+        return formatLedgerDisplayMoney(credNum, { allowDollar: true });
+      }
+      if (credNum <= 0.005) return 'N/A';
+      return formatLedgerDisplayMoney(credNum, { forceDollar: true, allowDollar: true });
     }
 
     function formatLedgerAmountPaidCell(row) {
@@ -26986,7 +27043,8 @@
       const tax = typeof r.taxCodes === 'number' && !isNaN(r.taxCodes) ? r.taxCodes : 0;
       const puc = typeof r.pucSurcharge === 'number' && !isNaN(r.pucSurcharge) ? r.pucSurcharge : 0;
       const pastDue = typeof r.pastDue === 'number' && !isNaN(r.pastDue) ? r.pastDue : 0;
-      const lateFee = typeof r.lateFee === 'number' && !isNaN(r.lateFee) ? r.lateFee : 0;
+      const lateFee =
+        typeof r.lateFee === 'number' && !isNaN(r.lateFee) ? r.lateFee : 0;
       const credit = typeof r.credit === 'number' && !isNaN(r.credit) ? r.credit : 0;
       if (r.balanceAfter == null || isNaN(r.balanceAfter)) return null;
       const paid = ledgerRowAmountPaidForCalc(r);
@@ -27007,6 +27065,24 @@
           LEDGER_CALC_STATUS_TITLE_OK +
           '" aria-label="Pass">✓</span>'
         );
+      }
+      try {
+        if (typeof window.masterTestLog === 'function') {
+          window.masterTestLog('ledgerCalcStatus:fail', {
+            subtype: r && r.subtype ? r.subtype : '',
+            type: r && r.type ? r.type : '',
+            sewer: r && r.sewer,
+            taxCodes: r && r.taxCodes,
+            pucSurcharge: r && r.pucSurcharge,
+            pastDue: r && r.pastDue,
+            lateFee: r && r.lateFee,
+            credit: r && r.credit,
+            amountPaid: r && r.amountPaid,
+            balanceAfter: r && r.balanceAfter
+          });
+        }
+      } catch (eLog) {
+        /* ignore */
       }
       return (
         '<span class="text-rose-600 dark:text-rose-400 font-semibold" title="' +
@@ -27033,7 +27109,6 @@
     function ledgerDisplayRowToExportCells(r) {
       const tc = typeof r.taxCodes === 'number' ? r.taxCodes : 0;
       const puc = typeof r.pucSurcharge === 'number' ? r.pucSurcharge : 0;
-      const credNum = typeof r.credit === 'number' && !isNaN(r.credit) ? r.credit : 0;
       return [
         r.dateTime || '',
         r.type || '',
@@ -27052,10 +27127,7 @@
         }),
         formatLedgerDisplayMoney(r.pastDue, { forceDollar: true }),
         formatLedgerDisplayMoney(r.lateFee, { forceDollar: true }),
-        formatLedgerDisplayMoney(credNum, {
-          forceDollar: credNum > 0.005,
-          allowDollar: true
-        }),
+        formatLedgerCreditCell(r),
         formatLedgerAmountChargedCell(r),
         formatLedgerAmountPaidCell(r),
         r.balanceAfter != null && !isNaN(r.balanceAfter)
@@ -27960,11 +28032,7 @@
                 <button type="button" onclick="openLedgerLateFeeBreakdown(${idx})" class="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline text-left">Late Fee Details</button>
               </div>`
                 : formatLedgerDisplayMoney(r.lateFee, { forceDollar: true });
-          const credNum = typeof r.credit === 'number' && !isNaN(r.credit) ? r.credit : 0;
-          const creditCell = formatLedgerDisplayMoney(credNum, {
-            forceDollar: credNum > 0.005,
-            allowDollar: true
-          });
+          const creditCell = formatLedgerCreditCell(r);
           const sewerCell = formatLedgerDisplayMoney(r.sewer, {
             forceDollar: r.sourceKind !== 'status',
             allowDollar: true
@@ -29355,6 +29423,7 @@
           .replace(/\s+/g, ' ')
           .trim()
           .replace(/^\$0\.00$/, '$0');
+        if (raw === 'N/A' || raw === '—') return raw;
         if (/^-?\$?\d+(\.\d{1,2})?$/.test(raw)) {
           const n = parseFloat(raw.replace(/^\$/, ''));
           if (!isNaN(n)) {
@@ -29401,6 +29470,7 @@
           tbl.querySelectorAll('tr').forEach(function (tr) {
             const isHead = !!tr.closest('thead');
             const isStatusSeparator = tr.classList.contains('ledger-status-separator-row');
+            if (isStatusSeparator) return;
             const parts = [];
             const htmlCells = [];
             const cells = tr.querySelectorAll('th, td');
@@ -29418,11 +29488,11 @@
               (subtypeLow.includes('security deposit') ||
                 rowPastDueNum + 0.02 >= 361.98);
             cells.forEach(function (cell, colIdx) {
-              let t = isStatusSeparator
-                ? '------------'
-                : developTestLedgerCellExportText(cell).replace(/\t/g, ' ');
-              if (
-                !isStatusSeparator &&
+              if (colIdx === 12) return;
+              let t = developTestLedgerCellExportText(cell).replace(/\t/g, ' ');
+              if (!isHead && colIdx === 6) {
+                t = developTestLedgerPastDueColumnExport(t);
+              } else if (
                 stripSewerTaxPucForMasterTest &&
                 (colIdx === 3 || colIdx === 4 || colIdx === 5)
               ) {
@@ -30414,12 +30484,22 @@
         return comp;
       }
 
-      /** Master-test export: whole dollars without $ (matches expected_output.txt). */
-      function developTestMasterTestMoneyExportLine(n) {
+      /** Master-test export: whole dollars without $; zero past-due totals use bare 0. */
+      function developTestMasterTestMoneyExportLine(n, opts) {
+        opts = opts || {};
         const x = Math.round((isNaN(n) ? 0 : n) * 100) / 100;
-        if (Math.abs(x) < 0.005) return '$0';
+        if (Math.abs(x) < 0.005) return opts.bareZero ? '0' : '$0';
         if (Math.abs(x - Math.round(x)) < 0.005) return String(Math.round(x));
         return '$' + x.toFixed(2);
+      }
+
+      /** Ledger Past Due column for master-test export (bare 0 / 178.49 / 361.98 — no $ prefix). */
+      function developTestLedgerPastDueColumnExport(cellText) {
+        const n = parseFloat(String(cellText || '').replace(/[^0-9.-]/g, ''));
+        if (isNaN(n) || Math.abs(n) < 0.005) return '0';
+        const x = Math.round(n * 100) / 100;
+        if (Math.abs(x - Math.round(x)) < 0.005) return String(Math.round(x));
+        return x.toFixed(2);
       }
 
       function developTestMasterTestPastDuePackToEntry(rowIndex, pack) {
@@ -30499,17 +30579,26 @@
               key: 'Credit',
               val: developTestMasterTestCreditMoney(Math.round(creditAmt * 100) / 100)
             },
-            { key: 'Total (Past Due line)', val: developTestMasterTestMoneyExportLine(pastDue) }
+            {
+              key: 'Total (Past Due line)',
+              val: developTestMasterTestMoneyExportLine(pastDue, { bareZero: true })
+            }
           ]
         };
       }
 
-      function developTestMasterTestPastDueEntriesVertical(entries) {
+      function developTestMasterTestPastDueEntriesVertical(entries, stepNum) {
         if (!entries || !entries.length) return '(none)';
         const blocks = [];
+        let idSeq = 1;
+        const stepId = stepNum != null && !isNaN(stepNum) ? Number(stepNum) : 0;
         for (let i = 0; i < entries.length; i++) {
           const e = entries[i];
-          const lines = ['[ROW ' + (e.rowIndex != null ? e.rowIndex : i) + ']', e.label];
+          const lines = ['[ROW ' + (e.rowIndex != null ? e.rowIndex : i) + ']'];
+          if (stepId > 0) {
+            lines.push('[ID PD-S' + stepId + '-' + String(idSeq++).padStart(4, '0') + ']');
+          }
+          lines.push(e.label);
           DEVELOP_TEST_PAST_DUE_EXPORT_KEYS.forEach(function (k) {
             lines.push(k);
           });
@@ -30522,7 +30611,7 @@
       }
 
       /** Per-ledger-row Past Due details (same packs as ledger "Past Due Details" modal). */
-      function developTestMasterTestPastDueDetailsVertical(customer) {
+      function developTestMasterTestPastDueDetailsVertical(customer, stepNum) {
         if (!customer || typeof displayAllLedgerModal !== 'function') {
           return '(unavailable)';
         }
@@ -30542,7 +30631,7 @@
             entries.push(developTestMasterTestPastDuePackToEntry(idx, pack));
           }
           if (typeof hideAllLedgerModal === 'function') hideAllLedgerModal();
-          return developTestMasterTestPastDueEntriesVertical(entries);
+          return developTestMasterTestPastDueEntriesVertical(entries, stepNum);
         } catch (ePd) {
           try {
             if (typeof hideAllLedgerModal === 'function') hideAllLedgerModal();
@@ -30662,7 +30751,7 @@
             try {
               pastDueVert =
                 typeof developTestMasterTestPastDueDetailsVertical === 'function'
-                  ? developTestMasterTestPastDueDetailsVertical(customer)
+                  ? developTestMasterTestPastDueDetailsVertical(customer, stepNum)
                   : '(unavailable)';
             } catch (ePd) {
               pastDueVert = '(past due error: ' + (ePd && ePd.message) + ')';
@@ -30892,7 +30981,12 @@
 
       function developTestMasterTestStepDescription(stepDef) {
         const lines = [];
-        if (stepDef && stepDef.advanceDateEnabled && stepDef.advanceDate) {
+        if (
+          stepDef &&
+          stepDef.advanceDateEnabled &&
+          stepDef.advanceDate &&
+          !stepDef.freshStart
+        ) {
           lines.push(
             'Advance to future date: ' + developTestFormatAdvanceDateLabel(stepDef.advanceDate)
           );
@@ -31021,7 +31115,7 @@
             try {
               pastDueVert =
                 typeof developTestMasterTestPastDueDetailsVertical === 'function'
-                  ? developTestMasterTestPastDueDetailsVertical(customer)
+                  ? developTestMasterTestPastDueDetailsVertical(customer, stepNum)
                   : '(unavailable)';
             } catch (ePd) {
               pastDueVert = '(past due error: ' + (ePd && ePd.message) + ')';

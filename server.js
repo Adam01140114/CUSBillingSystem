@@ -44,8 +44,9 @@ const nodemailer    = require('nodemailer');
 const { spawn }     = require('child_process');
 
 const app = express();
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: '2mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '2mb' }));
+const masterTestTextBody = bodyParser.text({ type: 'text/plain', limit: '64mb' });
 app.use(fileUpload());          // parses multipart/form‑data (fields ➜ req.body, files ➜ req.files)
 app.use(cors());
 
@@ -155,6 +156,101 @@ app.get('/api/master-test/status/:jobId', (req, res) => {
     return res.status(404).json({ ok: false, error: 'Job not found' });
   }
   res.json({ ok: true, job: job });
+});
+
+const masterTestDisk = require('./tools/master-test-disk-store.cjs');
+
+app.get('/api/master-test/registry', (req, res) => {
+  try {
+    res.json({ ok: true, tests: masterTestDisk.listTestsOnDisk() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.get('/api/master-test/tests/:slug', (req, res) => {
+  try {
+    const loaded = masterTestDisk.loadTestFromDisk(req.params.slug);
+    res.json({ ok: true, test: loaded.test });
+  } catch (err) {
+    res.status(404).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.put('/api/master-test/tests/:slug/package', (req, res) => {
+  try {
+    const body = req.body || {};
+    const slug = String(req.params.slug || '').trim();
+    masterTestDisk.savePackageToDisk(slug, {
+      name: body.name,
+      customerName: body.customerName,
+      customerId: body.customerId,
+      stepDefs: body.stepDefs,
+      foundationText: body.foundationText
+    });
+    res.json({ ok: true, slug: slug });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.put('/api/master-test/tests/:slug/results', masterTestTextBody, (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    masterTestDisk.saveResultsTextToDisk(slug, req.body || '');
+    res.json({ ok: true, slug: slug });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.put('/api/master-test/tests/:slug/expected', masterTestTextBody, (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    masterTestDisk.saveExpectedTextToDisk(slug, req.body || '');
+    res.json({ ok: true, slug: slug });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+/** Legacy: small metadata only — do not send results/expected in JSON (use /results and /expected). */
+app.put('/api/master-test/tests/:slug', (req, res) => {
+  try {
+    const body = req.body || {};
+    const slug = String(req.params.slug || '').trim();
+    masterTestDisk.savePackageToDisk(slug, {
+      name: body.name,
+      customerName: body.customerName,
+      customerId: body.customerId,
+      stepDefs: body.stepDefs,
+      foundationText: body.foundationText
+    });
+    res.json({ ok: true, slug: slug });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.post('/api/master-test/tests', (req, res) => {
+  try {
+    const body = req.body || {};
+    const slug = String(body.slug || masterTestDisk.allocateNextSlug()).trim();
+    masterTestDisk.createTestFolder(slug, body);
+    const loaded = masterTestDisk.loadTestFromDisk(slug);
+    res.json({ ok: true, slug: slug, test: loaded.test });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.delete('/api/master-test/tests/:slug', (req, res) => {
+  try {
+    masterTestDisk.deleteTestFromDisk(req.params.slug);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
 });
 
 // ────────────────────────────────────────────────────────────
