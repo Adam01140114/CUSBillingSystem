@@ -41,12 +41,121 @@ const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const cors          = require('cors');
 const fs            = require('fs');
 const nodemailer    = require('nodemailer');
+const { spawn }     = require('child_process');
 
 const app = express();
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(fileUpload());          // parses multipart/form‑data (fields ➜ req.body, files ➜ req.files)
 app.use(cors());
+
+// ────────────────────────────────────────────────────────────
+// Master test runner (viewer → Playwright) — before static so POST is never swallowed
+// ────────────────────────────────────────────────────────────
+const masterTestJobsDir = path.join(__dirname, 'Test Scripts', '.master-test-jobs');
+
+function readMasterTestJobFile(jobId) {
+  const safe = String(jobId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safe) return null;
+  const fp = path.join(masterTestJobsDir, safe + '.json');
+  if (!fs.existsSync(fp)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(fp, 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeMasterTestJobFile(jobId, patch) {
+  const safe = String(jobId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safe) return null;
+  fs.mkdirSync(masterTestJobsDir, { recursive: true });
+  const fp = path.join(masterTestJobsDir, safe + '.json');
+  let cur = {};
+  if (fs.existsSync(fp)) {
+    try {
+      cur = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    } catch (e) {
+      cur = {};
+    }
+  }
+  const next = Object.assign({}, cur, patch, { jobId: safe, updatedAt: Date.now() });
+  fs.writeFileSync(fp, JSON.stringify(next, null, 0), 'utf8');
+  return next;
+}
+
+app.get('/api/master-test/ping', (req, res) => {
+  const runnerPath = path.join(__dirname, 'tools', 'run-dynamic-master-test.mjs');
+  res.json({
+    ok: true,
+    runnerInstalled: fs.existsSync(runnerPath),
+    jobsDir: masterTestJobsDir
+  });
+});
+
+app.post('/api/master-test/run', (req, res) => {
+  try {
+    const body = req.body || {};
+    const steps = body.steps;
+    if (!Array.isArray(steps) || !steps.length) {
+      return res.status(400).json({ ok: false, error: 'At least one step is required.' });
+    }
+    const jobId =
+      'job-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    const config = {
+      accountNumber: String(body.accountNumber || body.customerId || 'CUS-3011000').trim(),
+      customerName: String(body.customerName || '').trim(),
+      steps: steps,
+      advanceMode: body.advanceMode === 'walk' ? 'walk' : 'instant',
+      testSlug: String(body.testSlug || '').trim()
+    };
+    writeMasterTestJobFile(jobId, {
+      status: 'queued',
+      progress: 0,
+      message: 'Queued…',
+      config: config,
+      resultsText: '',
+      consoleText: '',
+      error: null,
+      startedAt: Date.now()
+    });
+    const runnerPath = path.join(__dirname, 'tools', 'run-dynamic-master-test.mjs');
+    if (!fs.existsSync(runnerPath)) {
+      return res.status(500).json({ ok: false, error: 'Test runner script missing.' });
+    }
+    const jobFile = path.join(masterTestJobsDir, jobId + '.json');
+    const child = spawn(process.execPath, [runnerPath], {
+      cwd: __dirname,
+      detached: true,
+      stdio: 'ignore',
+      env: Object.assign({}, process.env, {
+        MASTER_TEST_JOB_FILE: jobFile,
+        MASTER_TEST_CONFIG: JSON.stringify(config)
+      })
+    });
+    child.on('error', function (spawnErr) {
+      writeMasterTestJobFile(jobId, {
+        status: 'failed',
+        progress: 100,
+        message: 'Could not start runner',
+        error: spawnErr.message || String(spawnErr)
+      });
+    });
+    child.unref();
+    res.json({ ok: true, jobId: jobId });
+  } catch (err) {
+    console.error('[master-test] run error:', err);
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.get('/api/master-test/status/:jobId', (req, res) => {
+  const job = readMasterTestJobFile(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ ok: false, error: 'Job not found' });
+  }
+  res.json({ ok: true, job: job });
+});
 
 // ────────────────────────────────────────────────────────────
 // Firebase
@@ -75,6 +184,10 @@ const db = admin.firestore();
 // Static files
 // ────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/Master Test/master_test_viewer.html', (req, res) => {
+  res.redirect(301, '/test-scripts/master_test_viewer.html');
+});
+app.use('/test-scripts', express.static(path.join(__dirname, 'Test Scripts')));
 
 // ────────────────────────────────────────────────────────────
 // Routes

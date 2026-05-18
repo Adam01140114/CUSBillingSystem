@@ -12,7 +12,9 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
+const test1Dir = path.join(repoRoot, 'Test Scripts', 'Test Script 1');
 const masterDir = path.join(repoRoot, 'Master Test');
+const defaultOutDir = fs.existsSync(test1Dir) ? test1Dir : masterDir;
 
 function buildSusanTemplate() {
   const factor = Math.round((168.36 / 170) * 1000000) / 1000000;
@@ -125,11 +127,11 @@ async function main() {
   const baseUrl = (process.env.BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
   const outResults = path.resolve(
     process.cwd(),
-    process.env.MASTER_TEST_RESULTS || path.join(masterDir, 'test_script_results.txt')
+    process.env.MASTER_TEST_RESULTS || path.join(defaultOutDir, 'test1_results.txt')
   );
   const outConsole = path.resolve(
     process.cwd(),
-    process.env.MASTER_TEST_CONSOLE || path.join(masterDir, 'test_script_console_logs.txt')
+    process.env.MASTER_TEST_CONSOLE || path.join(defaultOutDir, 'test1_console_logs.txt')
   );
 
   const scenario = {

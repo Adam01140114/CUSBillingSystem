@@ -5,8 +5,23 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
-const expPath = path.join(repoRoot, 'Master Test', 'expected_output.txt');
-const actPath = path.join(repoRoot, 'Master Test', 'test_script_results.txt');
+function resolveTestFile(names) {
+  const list = Array.isArray(names) ? names : [names];
+  const dirs = [
+    path.join(repoRoot, 'Test Scripts', 'Test Script 1'),
+    path.join(repoRoot, 'Master Test')
+  ];
+  for (const dir of dirs) {
+    for (const name of list) {
+      const p = path.join(dir, name);
+      if (fs.existsSync(p)) return p;
+    }
+  }
+  return path.join(dirs[0], list[0]);
+}
+
+const expPath = resolveTestFile(['test1_expected_output.txt', 'expected_output.txt']);
+const actPath = resolveTestFile(['test1_results.txt', 'test_script_results.txt']);
 
 function normMoney(s) {
   const t = String(s ?? '').trim();
@@ -15,11 +30,16 @@ function normMoney(s) {
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
 }
 
+function isDashSeparatorLine(line) {
+  return /^-{3,}$/.test(String(line ?? '').trim());
+}
+
 function linesEquivalent(el, al) {
   if (el === al) return true;
   const et = String(el ?? '').trim();
   const at = String(al ?? '').trim();
   if (et === at) return true;
+  if (isDashSeparatorLine(et) && isDashSeparatorLine(at)) return true;
   const en = normMoney(et);
   const an = normMoney(at);
   if (en !== null || an !== null) {
@@ -58,11 +78,13 @@ const report = [];
 for (let step = 1; step <= 9; step++) {
   const eLines = lines(expSteps.get(step) || '');
   const aLines = lines(actSteps.get(step) || '');
-  const max = Math.max(eLines.length, aLines.length);
   const mism = [];
-  for (let i = 0; i < max; i++) {
-    const el = eLines[i] ?? '';
-    const al = aLines[i] ?? '';
+  const eFiltered = eLines.filter((l) => !isDashSeparatorLine(l));
+  const aFiltered = aLines.filter((l) => !isDashSeparatorLine(l));
+  const maxFiltered = Math.max(eFiltered.length, aFiltered.length);
+  for (let i = 0; i < maxFiltered; i++) {
+    const el = eFiltered[i] ?? '';
+    const al = aFiltered[i] ?? '';
     if (linesEquivalent(el, al)) continue;
     const en = normMoney(el);
     const an = normMoney(al);

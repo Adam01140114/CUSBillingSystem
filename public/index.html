@@ -26967,6 +26967,157 @@
       return `$${Math.max(0, n).toFixed(2)}`;
     }
 
+    const LEDGER_CALC_STATUS_TITLE_OK =
+      'Sewer + Tax Codes + PUC Surcharge + Past Due + Late Fee − Credit − Amount Paid = Balance After';
+    const LEDGER_CALC_STATUS_TITLE_FAIL =
+      'Column sum ≠ Balance After (Sewer + Tax Codes + PUC + Past Due + Late Fee − Credit − Amount Paid)';
+
+    function ledgerRowAmountPaidForCalc(r) {
+      if (!r) return 0;
+      if (r.sourceKind === 'charge' || r.sourceKind === 'status') return 0;
+      const ap = typeof r.amountPaid === 'number' && !isNaN(r.amountPaid) ? r.amountPaid : 0;
+      return Math.round(Math.max(0, ap) * 100) / 100;
+    }
+
+    /** Sewer + Tax Codes + PUC + Past Due + Late Fee − Credit − Amount Paid = Balance After. */
+    function validateLedgerRowCalcStatus(r) {
+      if (!r) return null;
+      const sewer = typeof r.sewer === 'number' && !isNaN(r.sewer) ? r.sewer : 0;
+      const tax = typeof r.taxCodes === 'number' && !isNaN(r.taxCodes) ? r.taxCodes : 0;
+      const puc = typeof r.pucSurcharge === 'number' && !isNaN(r.pucSurcharge) ? r.pucSurcharge : 0;
+      const pastDue = typeof r.pastDue === 'number' && !isNaN(r.pastDue) ? r.pastDue : 0;
+      const lateFee = typeof r.lateFee === 'number' && !isNaN(r.lateFee) ? r.lateFee : 0;
+      const credit = typeof r.credit === 'number' && !isNaN(r.credit) ? r.credit : 0;
+      if (r.balanceAfter == null || isNaN(r.balanceAfter)) return null;
+      const paid = ledgerRowAmountPaidForCalc(r);
+      const lhs =
+        Math.round((sewer + tax + puc + pastDue + lateFee - credit - paid) * 100) / 100;
+      const rhs = Math.round(r.balanceAfter * 100) / 100;
+      return Math.abs(lhs - rhs) <= 0.02;
+    }
+
+    function formatLedgerCalcStatusCell(r) {
+      const ok = validateLedgerRowCalcStatus(r);
+      if (ok === null) {
+        return '<span class="text-slate-400 dark:text-slate-500" title="No balance after on this row">—</span>';
+      }
+      if (ok) {
+        return (
+          '<span class="text-emerald-600 dark:text-emerald-400 font-semibold" title="' +
+          LEDGER_CALC_STATUS_TITLE_OK +
+          '" aria-label="Pass">✓</span>'
+        );
+      }
+      return (
+        '<span class="text-rose-600 dark:text-rose-400 font-semibold" title="' +
+        LEDGER_CALC_STATUS_TITLE_FAIL +
+        '" aria-label="Fail">✗</span>'
+      );
+    }
+
+    const LEDGER_TABLE_EXPORT_HEADERS = [
+      'Date & Time',
+      'Type',
+      'Subtype',
+      'Sewer',
+      'Tax Codes',
+      'PUC Surcharge',
+      'Past Due',
+      'Late Fee',
+      'Credit',
+      'Amount Charged',
+      'Amount Paid',
+      'Balance After'
+    ];
+
+    function ledgerDisplayRowToExportCells(r) {
+      const tc = typeof r.taxCodes === 'number' ? r.taxCodes : 0;
+      const puc = typeof r.pucSurcharge === 'number' ? r.pucSurcharge : 0;
+      const credNum = typeof r.credit === 'number' && !isNaN(r.credit) ? r.credit : 0;
+      return [
+        r.dateTime || '',
+        r.type || '',
+        r.subtype || '',
+        formatLedgerDisplayMoney(r.sewer, {
+          forceDollar: r.sourceKind !== 'status',
+          allowDollar: true
+        }),
+        formatLedgerDisplayMoney(tc, {
+          forceDollar: r.sourceKind !== 'status',
+          allowDollar: true
+        }),
+        formatLedgerDisplayMoney(puc, {
+          forceDollar: r.sourceKind !== 'status',
+          allowDollar: true
+        }),
+        formatLedgerDisplayMoney(r.pastDue, { forceDollar: true }),
+        formatLedgerDisplayMoney(r.lateFee, { forceDollar: true }),
+        formatLedgerDisplayMoney(credNum, {
+          forceDollar: credNum > 0.005,
+          allowDollar: true
+        }),
+        formatLedgerAmountChargedCell(r),
+        formatLedgerAmountPaidCell(r),
+        r.balanceAfter != null && !isNaN(r.balanceAfter)
+          ? formatLedgerBalanceAfterCell(r.balanceAfter)
+          : '—'
+      ];
+    }
+
+    function buildLedgerTableExportPayload(customer, rows, lastCurrentStatusRowIdx) {
+      const exportRows = [];
+      rows.forEach(function (r, idx) {
+        exportRows.push({ kind: 'row', cells: ledgerDisplayRowToExportCells(r) });
+        if (
+          r.sourceKind === 'status' &&
+          /current\s*status/i.test(String(r.subtype || '')) &&
+          idx !== lastCurrentStatusRowIdx
+        ) {
+          exportRows.push({
+            kind: 'separator',
+            cells: LEDGER_TABLE_EXPORT_HEADERS.map(function () {
+              return '------------';
+            })
+          });
+        }
+      });
+      return {
+        format: 'cus-ledger-table-v1',
+        exportedAt: new Date().toISOString(),
+        customer: {
+          name: customer.name || '',
+          accountNumber: customer.accountNumber || customer.id || '',
+          id: customer.id || ''
+        },
+        headers: LEDGER_TABLE_EXPORT_HEADERS.slice(),
+        rows: exportRows
+      };
+    }
+
+    window.exportAllLedgerTableData = function () {
+      const payload = window.__ledgerModalExportPayload;
+      if (!payload || !payload.rows || !payload.rows.length) {
+        alert('No ledger data to export. Open All Previous Payments/Charges first.');
+        return;
+      }
+      const safeName = String(
+        payload.customer.accountNumber || payload.customer.id || 'customer'
+      ).replace(/[^\w.-]+/g, '_');
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: 'application/json;charset=utf-8'
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = safeName + '_ledger_export.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () {
+        URL.revokeObjectURL(url);
+      }, 60000);
+    };
+
     function displayAllLedgerModal(customer) {
       let modal = document.getElementById('allLedgerModal');
       if (!modal) {
@@ -27671,9 +27822,16 @@
         return pack;
       }
 
+      let lastCurrentStatusRowIdx = -1;
+      rows.forEach(function (r, idx) {
+        if (r.sourceKind === 'status' && /current\s*status/i.test(String(r.subtype || ''))) {
+          lastCurrentStatusRowIdx = idx;
+        }
+      });
+
       let htmlRows = '';
       if (rows.length === 0) {
-        htmlRows = '<tr><td colspan="12" class="text-center text-slate-500 dark:text-slate-400 py-8">No activity yet.</td></tr>';
+        htmlRows = '<tr><td colspan="13" class="text-center text-slate-500 dark:text-slate-400 py-8">No activity yet.</td></tr>';
       } else {
         rows.forEach((r, idx) => {
           if (r.sourceKind === 'payment' && r.ledgerPayment && r.amountPaid > 0) {
@@ -27820,8 +27978,12 @@
             allowDollar: true
           });
           const amountChargedCell = formatLedgerAmountChargedCell(r);
+          const statusRowClass =
+            r.sourceKind === 'status' && /current\s*status/i.test(String(r.subtype || ''))
+              ? ' ledger-status-row'
+              : '';
           htmlRows += `
-            <tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">
+            <tr class="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800${statusRowClass}">
               <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.dateTime}</td>
               <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.type}</td>
               <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${r.subtype}</td>
@@ -27834,14 +27996,40 @@
               <td class="px-3 py-2 whitespace-nowrap text-sm text-slate-900 dark:text-slate-100">${amountChargedCell}</td>
               <td class="px-3 py-2 text-sm text-slate-900 dark:text-slate-100">${amountPaidCell}</td>
               <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-slate-100">${bal}</td>
+              <td class="px-3 py-2 whitespace-nowrap text-sm text-center">${formatLedgerCalcStatusCell(r)}</td>
             </tr>
           `;
+          if (
+            r.sourceKind === 'status' &&
+            /current\s*status/i.test(String(r.subtype || '')) &&
+            idx !== lastCurrentStatusRowIdx
+          ) {
+
+            //This is where the "------------" divider lives
+            const sepDash = ' ';
+            htmlRows +=
+              '<tr class="ledger-status-separator-row" aria-hidden="true">' +
+              Array(13)
+                .fill(
+                  '<td class="px-1 py-4 min-h-[4rem] text-center text-[10px] leading-[4rem] text-slate-400 dark:text-slate-500 ledger-status-separator-cell">' +
+                    sepDash +
+                    '</td>'
+                )
+                .join('') +
+              '</tr>';
+          }
         });
       }
 
+      window.__ledgerModalExportPayload = buildLedgerTableExportPayload(
+        customer,
+        rows,
+        lastCurrentStatusRowIdx
+      );
+
       modal.innerHTML = `
-        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 sm:p-8 max-w-none w-[min(96rem,calc(100vw-1.5rem))] mx-auto max-h-[90vh] overflow-y-auto">
-          <div class="flex justify-between items-center mb-6">
+        <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 sm:p-8 max-w-none w-[min(96rem,calc(100vw-1.5rem))] mx-auto max-h-[90vh] flex flex-col">
+          <div class="flex justify-between items-center mb-4 flex-shrink-0">
             <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200">All Previous Payments/Charges</h2>
             <button onclick="hideAllLedgerModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -27849,25 +28037,26 @@
               </svg>
             </button>
           </div>
-          <div class="mb-4 text-sm text-slate-600 dark:text-slate-400">
+          <div class="mb-3 text-sm text-slate-600 dark:text-slate-400 flex-shrink-0">
             <strong>Customer:</strong> ${customer.name} (${customer.accountNumber || customer.id})
           </div>
-          <div class="w-full overflow-x-visible">
-            <table class="w-full table-auto divide-y divide-slate-200 dark:divide-slate-700 text-sm">
-              <thead class="bg-slate-50 dark:bg-slate-700">
+          <div class="ledger-modal-table-wrap flex-1 min-h-0 overflow-auto rounded-lg border border-slate-200 dark:border-slate-600">
+            <table class="w-full table-auto divide-y divide-slate-200 dark:divide-slate-700 text-sm border-collapse">
+              <thead class="bg-slate-50 dark:bg-slate-700 sticky top-0 z-20 shadow-[0_1px_0_0_rgba(148,163,184,0.35)]">
                 <tr>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Date & Time</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Type</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Subtype</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Sewer</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Tax Codes</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">PUC Surcharge</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Past Due</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Late Fee</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Credit</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Charged</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Amount Paid</th>
-                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider">Balance After</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Date & Time</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Type</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Subtype</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Sewer</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Tax Codes</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">PUC Surcharge</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Past Due</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Late Fee</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Credit</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Amount Charged</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Amount Paid</th>
+                  <th class="px-3 py-2 text-left text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Balance After</th>
+                  <th class="px-3 py-2 text-center text-xs font-medium text-slate-500 dark:text-slate-300 uppercase tracking-wider bg-slate-50 dark:bg-slate-700">Calc Status</th>
                 </tr>
               </thead>
               <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
@@ -27875,7 +28064,8 @@
               </tbody>
             </table>
           </div>
-          <div class="mt-6 flex justify-end gap-3 flex-wrap">
+          <div class="mt-4 pt-4 flex justify-end gap-3 flex-wrap flex-shrink-0 border-t border-slate-200 dark:border-slate-600">
+            <button type="button" onclick="exportAllLedgerTableData()" class="border border-emerald-600 dark:border-emerald-500 text-emerald-800 dark:text-emerald-200 font-semibold py-2 px-6 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/30 transition-colors">Export Data</button>
             <button type="button" onclick="openLedgerAccountingTotalModal()" class="border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-100 font-semibold py-2 px-6 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">View Accounting Total</button>
             <button type="button" onclick="hideAllLedgerModal()" class="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-blue-700 transition-colors">Close</button>
           </div>
@@ -29210,6 +29400,7 @@
           let tbodyHtml = '';
           tbl.querySelectorAll('tr').forEach(function (tr) {
             const isHead = !!tr.closest('thead');
+            const isStatusSeparator = tr.classList.contains('ledger-status-separator-row');
             const parts = [];
             const htmlCells = [];
             const cells = tr.querySelectorAll('th, td');
@@ -29227,8 +29418,14 @@
               (subtypeLow.includes('security deposit') ||
                 rowPastDueNum + 0.02 >= 361.98);
             cells.forEach(function (cell, colIdx) {
-              let t = developTestLedgerCellExportText(cell).replace(/\t/g, ' ');
-              if (stripSewerTaxPucForMasterTest && (colIdx === 3 || colIdx === 4 || colIdx === 5)) {
+              let t = isStatusSeparator
+                ? '------------'
+                : developTestLedgerCellExportText(cell).replace(/\t/g, ' ');
+              if (
+                !isStatusSeparator &&
+                stripSewerTaxPucForMasterTest &&
+                (colIdx === 3 || colIdx === 4 || colIdx === 5)
+              ) {
                 t = t.replace(/^\$/, '');
               }
               parts.push(t);
@@ -29259,6 +29456,8 @@
             'th{background:#e2e8f0;font-weight:600;font-size:0.72rem;letter-spacing:.04em;color:#334155;text-transform:uppercase;}\n' +
             'tbody tr:nth-child(even){background:#f8fafc;}\n' +
             'tbody tr:hover{background:#eff6ff;}\n' +
+            'tbody tr.ledger-status-row td{background:rgba(59,130,246,.08);border-top:2px solid #3b82f6;font-weight:600;}\n' +
+            'tbody tr.ledger-status-separator-row td{background:transparent;border:none;padding:16px 8px;min-height:4rem;line-height:4rem;color:#94a3b8;font-size:10px;letter-spacing:.02em;vertical-align:middle;}\n' +
             '</style></head><body>\n' +
             '<h1>' +
             developTestEscapeHtml(title) +
@@ -30645,6 +30844,305 @@
             } catch (ePersist) {
               if (typeof window.masterTestLog === 'function') {
                 window.masterTestLog('runSusanMasterTest:persistFailed', {
+                  error: ePersist && ePersist.message ? ePersist.message : String(ePersist)
+                });
+              }
+            }
+          }
+          developTestEndConsoleCapture();
+          developTestRestoreBillDiagGlobals(prevBillDiagSnap);
+          if (cfg.suppressAlerts) {
+            window.alert = prevAlert;
+            window.confirm = prevConfirm;
+          }
+        }
+      };
+
+      function developTestNormalizeAdvanceDateIso(raw) {
+        const t = String(raw || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+        const m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(t);
+        if (m) {
+          let y = parseInt(m[3], 10);
+          if (y < 100) y += 2000;
+          const mo = parseInt(m[1], 10);
+          const d = parseInt(m[2], 10);
+          if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+            return (
+              String(y) +
+              '-' +
+              String(mo).padStart(2, '0') +
+              '-' +
+              String(d).padStart(2, '0')
+            );
+          }
+        }
+        return '';
+      }
+
+      function developTestFormatAdvanceDateLabel(raw) {
+        const iso = developTestNormalizeAdvanceDateIso(raw);
+        if (!iso) return String(raw || '').trim();
+        const p = iso.split('-');
+        const y = parseInt(p[0], 10);
+        const mo = parseInt(p[1], 10);
+        const d = parseInt(p[2], 10);
+        return mo + '/' + d + '/' + (y % 100);
+      }
+
+      function developTestMasterTestStepDescription(stepDef) {
+        const lines = [];
+        if (stepDef && stepDef.advanceDateEnabled && stepDef.advanceDate) {
+          lines.push(
+            'Advance to future date: ' + developTestFormatAdvanceDateLabel(stepDef.advanceDate)
+          );
+        }
+        if (stepDef && stepDef.freshStart) {
+          lines.push('Do a fresh start and then set the test date to 1/1/26');
+        }
+        if (stepDef && stepDef.billThem) lines.push('Bill them');
+        if (stepDef && stepDef.payEnabled) {
+          const raw = stepDef.payAmount != null ? String(stepDef.payAmount).trim().replace(/[^0-9.]/g, '') : '';
+          const n = parseFloat(raw);
+          let amt = '$0';
+          if (!isNaN(n)) {
+            amt = Math.abs(n - Math.round(n)) < 0.005 ? '$' + String(Math.round(n)) : '$' + n.toFixed(2);
+          }
+          lines.push('Have them pay ' + amt);
+        }
+        const caps =
+          stepDef && Array.isArray(stepDef.dataCaptures) && stepDef.dataCaptures.length
+            ? stepDef.dataCaptures
+            : [
+                'Log what the payments/charges table shows',
+                'Log what the amount breakdown shows',
+                'Log View Past Due Details'
+              ];
+        caps.forEach(function (c) {
+          if (c && lines.indexOf(c) === -1) lines.push(c);
+        });
+        return lines.join('\n');
+      }
+
+      function developTestMasterTestStepWantsPdf(stepDef) {
+        if (!stepDef) return false;
+        if (stepDef.billThem) return true;
+        const caps = stepDef.dataCaptures || [];
+        return caps.some(function (c) {
+          return c && /pdf\s*bill/i.test(String(c));
+        });
+      }
+
+      function developTestMasterTestReportProgress(current, total, message) {
+        if (typeof window.masterTestLog === 'function') {
+          window.masterTestLog('progress', {
+            current: current,
+            total: total,
+            message: message,
+            percent: total > 0 ? Math.round((current / total) * 100) : 0
+          });
+        }
+      }
+
+      /**
+       * Run a master test from viewer-defined steps (Create Test / Edit steps).
+       * @param {{ accountNumber?: string, customerNameMatch?: string, steps: object[], advanceMode?: string, liveMode?: boolean }} opts
+       */
+      window.runMasterTestFromStepDefs = async function (opts) {
+        opts = opts || {};
+        const stepDefs = Array.isArray(opts.steps) ? opts.steps : [];
+        if (!stepDefs.length) {
+          return { ok: false, error: 'No steps defined', masterTestReport: '', masterTestSteps: [], consoleLines: [] };
+        }
+        if (typeof window.masterTestLog === 'function') {
+          window.masterTestLog('runMasterTestFromStepDefs:start', { steps: stepDefs.length });
+        }
+        const advanceMode = opts.advanceMode === 'instant' ? 'instant' : 'walk';
+        const skipAnim = advanceMode === 'instant';
+        const cfg = developTestMergeConfig(
+          Object.assign(
+            {
+              preset: 'susanMaster',
+              liveMode: opts.liveMode === true,
+              accountNumber: opts.accountNumber || 'CUS-3011000',
+              customerNameMatch: opts.customerNameMatch || opts.customerName || '',
+              captureConsole: opts.captureConsole !== false,
+              suppressAlerts: true,
+              openResultsTab: false,
+              scopeDiagnosticConsole: opts.scopeDiagnosticConsole !== false,
+              walkStepDelayMs: opts.walkStepDelayMs != null ? opts.walkStepDelayMs : 0
+            },
+            opts
+          )
+        );
+        const noop = function () {};
+        const prevAlert = window.alert;
+        const prevConfirm = window.confirm;
+        const prevBillDiagSnap = developTestSnapshotBillDiagGlobals();
+        if (cfg.suppressAlerts) {
+          window.alert = noop;
+          window.confirm = function () {
+            return true;
+          };
+        }
+        const masterTestSteps = [];
+        let errText = '';
+        let customer = null;
+        const totalSteps = stepDefs.length;
+        try {
+          customer = developTestResolveCustomer(cfg);
+          if (!customer) {
+            throw new Error(
+              'Master test: customer not found for ' +
+                (cfg.accountNumber || cfg.customerNameMatch || '(no account)')
+            );
+          }
+          developTestApplyScenarioBillDiagScope(customer, cfg);
+          if (cfg.captureConsole) {
+            developTestBeginConsoleCapture(null);
+          }
+
+          async function snap(stepNum, description, withPdf) {
+            if (typeof window.masterTestLog === 'function') {
+              window.masterTestLog('snap:start', { step: stepNum, withPdf: !!withPdf });
+            }
+            let ledgerTsv = '';
+            try {
+              ledgerTsv =
+                typeof developTestExtractLedgerTablePlainText === 'function'
+                  ? developTestExtractLedgerTablePlainText(customer)
+                  : '(ledger unavailable)';
+            } catch (eL) {
+              ledgerTsv = '(ledger error: ' + (eL && eL.message) + ')';
+            }
+            const ledgerVert = developTestMasterTestLedgerVertical(ledgerTsv);
+            const amountVert = developTestMasterTestAmountLines(customer);
+            let pastDueVert = '(unavailable)';
+            try {
+              pastDueVert =
+                typeof developTestMasterTestPastDueDetailsVertical === 'function'
+                  ? developTestMasterTestPastDueDetailsVertical(customer)
+                  : '(unavailable)';
+            } catch (ePd) {
+              pastDueVert = '(past due error: ' + (ePd && ePd.message) + ')';
+            }
+            const pdfVert = withPdf ? developTestMasterTestPdfLines(customer) : null;
+            const block = developTestMasterTestFormatStep(
+              stepNum,
+              description,
+              ledgerVert,
+              amountVert,
+              pastDueVert,
+              pdfVert
+            );
+            masterTestSteps.push({
+              step: stepNum,
+              description: description,
+              ledgerTsv: ledgerTsv,
+              ledgerVertical: ledgerVert,
+              amountVertical: amountVert,
+              pastDueVertical: pastDueVert,
+              pdfVertical: pdfVert
+            });
+            if (typeof window.masterTestLog === 'function') {
+              window.masterTestLog('snap:done', { step: stepNum });
+            }
+            return block;
+          }
+
+          const dateOpts =
+            advanceMode === 'walk' ? developTestMasterWalkDateOpts(cfg) : developTestDateAdvanceOpts(cfg, skipAnim);
+          const parts = [];
+          let didSetAnchorDate = false;
+
+          for (let i = 0; i < stepDefs.length; i++) {
+            const stepDef = stepDefs[i] || {};
+            const stepNum = i + 1;
+            developTestMasterTestReportProgress(
+              i,
+              totalSteps,
+              'Step ' + stepNum + ' of ' + totalSteps + '…'
+            );
+            if (typeof window.masterTestLog === 'function') {
+              window.masterTestLog('stepDef:' + stepNum, stepDef);
+            }
+
+            if (stepDef.advanceDateEnabled && stepDef.advanceDate) {
+              const advanceIso = developTestNormalizeAdvanceDateIso(stepDef.advanceDate);
+              if (advanceIso) {
+                if (typeof window.masterTestLog === 'function') {
+                  window.masterTestLog('stepDef:' + stepNum + ':advance', { date: advanceIso });
+                }
+                await window.setTestDate(advanceIso, dateOpts);
+                didSetAnchorDate = true;
+              }
+            }
+            if (stepDef.freshStart) {
+              if (!didSetAnchorDate) {
+                await window.setTestDate('2026-01-01', Object.assign({ skipAnimation: true }, dateOpts));
+                didSetAnchorDate = true;
+              }
+              await developTestFreshStartSingleCustomer(customer);
+            }
+            if (stepDef.billThem) {
+              await developTestProduceBillFor(customer);
+            }
+            if (stepDef.payEnabled) {
+              const raw = stepDef.payAmount != null ? String(stepDef.payAmount).trim().replace(/[^0-9.]/g, '') : '';
+              const payAmt = parseFloat(raw);
+              if (!isNaN(payAmt) && payAmt > 0.005) {
+                await developTestProcessCheckPayment(customer, {
+                  checkPaymentAmount: payAmt,
+                  checkNumber: 'MT-' + stepNum
+                });
+              }
+            }
+
+            const description = developTestMasterTestStepDescription(stepDef);
+            const withPdf = developTestMasterTestStepWantsPdf(stepDef);
+            parts.push(await snap(stepNum, description, withPdf));
+            developTestMasterTestReportProgress(
+              stepNum,
+              totalSteps,
+              'Finished step ' + stepNum + ' of ' + totalSteps
+            );
+          }
+
+          const masterTestReport = parts.join('\n\n\n') + '\n';
+          developTestMasterTestReportProgress(totalSteps, totalSteps, 'Complete');
+          const cap = cfg.captureConsole ? DT.lines.slice() : [];
+          if (typeof window.masterTestLog === 'function') {
+            window.masterTestLog('runMasterTestFromStepDefs:complete', { steps: masterTestSteps.length });
+          }
+          return {
+            ok: true,
+            masterTestReport: masterTestReport,
+            masterTestSteps: masterTestSteps,
+            consoleLines: cap
+          };
+        } catch (e) {
+          errText = e && e.stack ? e.stack : String(e);
+          if (typeof window.masterTestLog === 'function') {
+            window.masterTestLog('runMasterTestFromStepDefs:error', { error: errText });
+          }
+          const cap = cfg.captureConsole ? DT.lines.slice() : [];
+          return {
+            ok: false,
+            error: errText,
+            masterTestReport: '',
+            masterTestSteps: masterTestSteps,
+            consoleLines: cap
+          };
+        } finally {
+          if (customer && cfg.liveMode && typeof saveSingleCustomerToFirestore === 'function') {
+            try {
+              await saveSingleCustomerToFirestore(customer);
+              if (typeof persistTestDateToFirestore === 'function' && testDate) {
+                await persistTestDateToFirestore(testDate);
+              }
+            } catch (ePersist) {
+              if (typeof window.masterTestLog === 'function') {
+                window.masterTestLog('runMasterTestFromStepDefs:persistFailed', {
                   error: ePersist && ePersist.message ? ePersist.message : String(ePersist)
                 });
               }

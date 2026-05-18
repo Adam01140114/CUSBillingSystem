@@ -14,9 +14,10 @@
     "test_credit": "node \"Test Scripts/test_script2.mjs\"",
     "test_script1": "node \"Test Scripts/test_script1.mjs\"",
     "test_script2": "node \"Test Scripts/test_script2.mjs\"",
-    "test:master:susan": "node \"Master Test/susan_master_test_script.mjs\"",
+    "test:master:susan": "node \"Test Scripts/Test Script 1/test1_script.mjs\"",
     "test:master:susan:offline": "node tools/run-master-test-offline.mjs",
-    "format:validation-report": "node tools/format-validation-report.mjs"
+    "format:validation-report": "node tools/format-validation-report.mjs",
+    "verify:past-due-resolve": "node tools/verify-past-due-entry-resolve.mjs"
   },
   "dependencies": {
     "body-parser": "^1.20.2",

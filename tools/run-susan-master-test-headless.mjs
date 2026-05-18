@@ -27,7 +27,9 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
+const test1Dir = path.join(repoRoot, 'Test Scripts', 'Test Script 1');
 const masterDir = path.join(repoRoot, 'Master Test');
+const defaultOutDir = fs.existsSync(test1Dir) ? test1Dir : masterDir;
 
 async function loadPlaywright() {
   try {
@@ -65,16 +67,19 @@ async function main() {
     process.exit(1);
   }
 
-  fs.mkdirSync(masterDir, { recursive: true });
+  fs.mkdirSync(defaultOutDir, { recursive: true });
   const outResults = path.resolve(
     process.cwd(),
-    process.env.MASTER_TEST_RESULTS || path.join(masterDir, 'test_script_results.txt')
+    process.env.MASTER_TEST_RESULTS || path.join(defaultOutDir, 'test1_results.txt')
   );
   const outConsole = path.resolve(
     process.cwd(),
-    process.env.MASTER_TEST_CONSOLE || path.join(masterDir, 'test_script_console_logs.txt')
+    process.env.MASTER_TEST_CONSOLE || path.join(defaultOutDir, 'test1_console_logs.txt')
   );
-  const shotPath = path.resolve(process.cwd(), process.env.SCREENSHOT_PATH || path.join(masterDir, 'master-test-error.png'));
+  const shotPath = path.resolve(
+    process.cwd(),
+    process.env.SCREENSHOT_PATH || path.join(defaultOutDir, 'master-test-error.png')
+  );
   const headed = process.env.HEADED === '1' || process.env.HEADED === 'true';
 
   const scenario = {

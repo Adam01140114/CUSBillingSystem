@@ -49,14 +49,16 @@ async function main() {
   const { chromium } = await import('playwright');
   const baseUrl = (process.env.BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
   const accountNumber = (process.env.TEST_ACCOUNT_NUMBER || 'CUS-3011000').trim();
+  const test1Dir = path.join(repoRoot, 'Test Scripts', 'Test Script 1');
   const masterDir = path.join(repoRoot, 'Master Test');
+  const defaultOutDir = fs.existsSync(test1Dir) ? test1Dir : masterDir;
   const outResults = path.resolve(
     process.cwd(),
-    process.env.MASTER_TEST_RESULTS || path.join(masterDir, 'test_script_results.txt')
+    process.env.MASTER_TEST_RESULTS || path.join(defaultOutDir, 'test1_results.txt')
   );
   const outConsole = path.resolve(
     process.cwd(),
-    process.env.MASTER_TEST_CONSOLE || path.join(masterDir, 'test_script_console_logs.txt')
+    process.env.MASTER_TEST_CONSOLE || path.join(defaultOutDir, 'test1_console_logs.txt')
   );
 
   console.error('[master-admin] Fetching customer', accountNumber, 'from Firestore…');
