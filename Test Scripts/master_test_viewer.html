@@ -1028,7 +1028,14 @@
         <label for="createTestName">Test name</label>
         <input type="text" id="createTestName" placeholder="Test 2" autocomplete="off" />
       </div>
-      <div class="create-test-field" style="display: flex; gap: 0.75rem; flex-wrap: wrap">
+      <div class="create-test-field">
+        <label for="createTestCustomerMode">Customer</label>
+        <select id="createTestCustomerMode">
+          <option value="existing">Test existing customer</option>
+          <option value="create">Create new customer</option>
+        </select>
+      </div>
+      <div id="createTestExistingCustomerFields" class="create-test-field" style="display: flex; gap: 0.75rem; flex-wrap: wrap">
         <div style="flex: 1 1 12rem">
           <label for="createTestCustomerName">Customer name</label>
           <input type="text" id="createTestCustomerName" value="Susan Young" autocomplete="off" />
@@ -1036,6 +1043,24 @@
         <div style="flex: 1 1 10rem">
           <label for="createTestCustomerId">Customer ID</label>
           <input type="text" id="createTestCustomerId" value="CUS-3011000" autocomplete="off" />
+        </div>
+      </div>
+      <div id="createTestNewCustomerFields" class="create-test-field hidden" style="display: none; gap: 0.75rem; flex-wrap: wrap">
+        <div style="flex: 1 1 8rem">
+          <label for="createTestNewFirstName">First name</label>
+          <input type="text" id="createTestNewFirstName" placeholder="Test" autocomplete="off" />
+        </div>
+        <div style="flex: 1 1 8rem">
+          <label for="createTestNewLastName">Last name</label>
+          <input type="text" id="createTestNewLastName" placeholder="User" autocomplete="off" />
+        </div>
+        <div style="flex: 1 1 10rem">
+          <label for="createTestNewCreatedDate">Customer creation date</label>
+          <input type="date" id="createTestNewCreatedDate" value="2026-01-15" />
+        </div>
+        <div style="flex: 1 1 10rem">
+          <label for="createTestNewCustomerId">Customer ID (auto if blank)</label>
+          <input type="text" id="createTestNewCustomerId" placeholder="CUS-990015" autocomplete="off" />
         </div>
       </div>
       <div id="createTestStepsHost"></div>
@@ -2470,6 +2495,159 @@
       return ch && typeof ch.total === 'number' ? ch.total : null;
     }
 
+    /** Amount breakdown sewer + tax charge for a step (ignores past due / late fee). */
+    function computeCustomerDefaultChargesFromAmount(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.amount || !d.amount.length) return null;
+      const sewer = kvMoneyByKey(d.amount, [/^sewer\s*charge$/i]);
+      const tax = kvMoneyByKey(d.amount, [/^tax\s*charge$/i]);
+      if (sewer <= 0.005 && tax <= 0.005) return null;
+      const taxCombined = Math.round(tax * 100) / 100;
+      const total = Math.round((sewer + taxCombined) * 100) / 100;
+      return { sewer: sewer, taxCodes: tax, puc: 0, taxCombined: taxCombined, total: total };
+    }
+
+    /**
+     * Prorated (first bill) and regular (full-month) cycle charge profiles for the active test.
+     * Step 1 amount breakdown = first-bill/prorated baseline; highest sewer in any step = full month.
+     */
+    function getCustomerCycleChargeProfiles() {
+      const prorated = computeCustomerDefaultChargesFromAmount(1);
+      let fullMonth = prorated ? Object.assign({}, prorated) : null;
+
+      for (let i = 0; i < stepOrder.length; i++) {
+        const ch = computeCustomerDefaultChargesFromAmount(stepOrder[i]);
+        if (!ch) continue;
+        if (!fullMonth || ch.sewer > fullMonth.sewer + 0.02) {
+          fullMonth = ch;
+        }
+      }
+
+      for (let i = 0; i < stepOrder.length; i++) {
+        const sn = stepOrder[i];
+        const d = editableByStep.get(sn);
+        if (!d || !d.ledger) continue;
+        const headers = d.ledger.headers;
+        const rows = d.ledger.rows;
+        const c = ledgerMoneyCols(headers);
+        let billCount = 0;
+        for (let r = 0; r < rows.length; r++) {
+          if (
+            !isLedgerChargeRow(rows[r], headers) ||
+            !isLedgerBilledCustomerRow(rows[r], headers)
+          ) {
+            continue;
+          }
+          billCount++;
+          if (billCount < 2 || c.amountCharged < 0) continue;
+          const charged = ledgerCellMoney(rows[r], c.amountCharged);
+          if (charged <= 0.005) continue;
+          if (!fullMonth || charged > fullMonth.total + 0.02) {
+            const sewerCol = ledgerCellMoney(rows[r], c.sewer);
+            const taxCol = ledgerCellMoney(rows[r], c.tax);
+            const pucCol = ledgerCellMoney(rows[r], c.puc);
+            const colSum = Math.round((sewerCol + taxCol + pucCol) * 100) / 100;
+            if (colSum > charged + 0.02) {
+              fullMonth = {
+                sewer: charged,
+                taxCodes: 0,
+                puc: 0,
+                taxCombined: 0,
+                total: charged
+              };
+            } else if (colSum > 0.005) {
+              fullMonth = {
+                sewer: sewerCol,
+                taxCodes: taxCol,
+                puc: pucCol,
+                taxCombined: Math.round((taxCol + pucCol) * 100) / 100,
+                total: charged
+              };
+            } else {
+              fullMonth = {
+                sewer: charged,
+                taxCodes: 0,
+                puc: 0,
+                taxCombined: 0,
+                total: charged
+              };
+            }
+          }
+        }
+      }
+
+      const hasProration =
+        !!prorated &&
+        !!fullMonth &&
+        fullMonth.sewer > prorated.sewer + 0.02 &&
+        fullMonth.total > prorated.total + 0.02;
+
+      return {
+        prorated: prorated,
+        fullMonth: fullMonth || prorated,
+        hasProration: hasProration
+      };
+    }
+
+    function countPriorBilledCustomerChargeRows(rows, headers, rowIndex) {
+      let n = 0;
+      if (!rows || rowIndex <= 0) return 0;
+      for (let i = 0; i < rowIndex; i++) {
+        if (isLedgerChargeRow(rows[i], headers) && isLedgerBilledCustomerRow(rows[i], headers)) n++;
+      }
+      return n;
+    }
+
+    /**
+     * Expected Amount Charged on a Billed Customer row:
+     * 1st bill in ledger = prorated cycle total; 2nd+ bill = regular full-month cycle total.
+     * (Charge-row Sewer/Tax/PUC columns are status snapshots — Amount Charged is the cycle total.)
+     */
+    function expectedAmountChargedForBilledCustomerRow(stepNum, rows, headers, rowIndex) {
+      const priorBills = countPriorBilledCustomerChargeRows(rows, headers, rowIndex);
+      const profiles = getCustomerCycleChargeProfiles();
+
+      if (priorBills === 0) {
+        if (profiles.prorated && profiles.prorated.total > 0.005) {
+          return {
+            expected: profiles.prorated.total,
+            ruleLabel: profiles.hasProration
+              ? 'First bill (prorated cycle total)'
+              : 'Cycle total (Sewer + Tax)'
+          };
+        }
+      } else if (profiles.fullMonth && profiles.fullMonth.total > 0.005) {
+        return {
+          expected: profiles.fullMonth.total,
+          ruleLabel: profiles.hasProration
+            ? 'Regular bill (full-month cycle total)'
+            : 'Cycle total (Sewer + Tax)'
+        };
+      }
+
+      const c = ledgerMoneyCols(headers);
+      const sewer = ledgerCellMoney(rows[rowIndex], c.sewer);
+      const tax = ledgerCellMoney(rows[rowIndex], c.tax);
+      const puc = ledgerCellMoney(rows[rowIndex], c.puc);
+      const fromCols = Math.round((sewer + tax + puc) * 100) / 100;
+      if (fromCols > 0.005) {
+        return { expected: fromCols, ruleLabel: 'Sewer + Tax Codes + PUC on bill row' };
+      }
+
+      if (c.amountCharged >= 0) {
+        const charged = ledgerCellMoney(rows[rowIndex], c.amountCharged);
+        if (charged > 0.005) {
+          return { expected: charged, ruleLabel: 'Amount Charged on bill row' };
+        }
+      }
+
+      const fallback = getDefaultCycleTotalForStep(stepNum);
+      if (fallback != null) {
+        return { expected: fallback, ruleLabel: 'Default total (Sewer + Tax)' };
+      }
+      return null;
+    }
+
     function sumPaymentsBetweenRows(rows, headers, fromExclusive, toExclusive) {
       let sum = 0;
       for (let j = fromExclusive + 1; j < toExclusive; j++) {
@@ -2578,27 +2756,33 @@
       }
       const c = ledgerMoneyCols(headers);
       if (c.amountCharged < 0) return null;
-      const defaultTotal = getDefaultCycleTotalForStep(stepNum);
-      if (defaultTotal == null) return null;
+      const expectMeta = expectedAmountChargedForBilledCustomerRow(
+        stepNum,
+        rows,
+        headers,
+        rowIndex
+      );
+      if (!expectMeta || expectMeta.expected == null) return null;
+      const expected = Math.round(expectMeta.expected * 100) / 100;
+      const ruleLabel = expectMeta.ruleLabel || 'Cycle total (Sewer + Tax)';
       const raw = String(rows[rowIndex][c.amountCharged] || '').trim();
       if (/^n\/?a$/i.test(raw)) {
         return {
           ok: false,
-          titleOk: 'Amount Charged = Default total (Sewer + Tax)',
+          titleOk: 'Amount Charged = ' + ruleLabel,
           titleFail:
-            'Amount Charged is N/A on Billed Customer row (expected Default total $' +
-            defaultTotal.toFixed(2) +
-            ')'
+            'Amount Charged is N/A on Billed Customer row (expected $' + expected.toFixed(2) + ')'
         };
       }
       const actual = ledgerCellMoney(rows[rowIndex], c.amountCharged);
-      const expected = Math.round(defaultTotal * 100) / 100;
       const ok = moneyNearlyEqual(actual, expected);
       return {
         ok: ok,
-        titleOk: 'Amount Charged = Default total (Sewer + Tax) $' + expected.toFixed(2),
+        titleOk: 'Amount Charged = ' + ruleLabel + ' $' + expected.toFixed(2),
         titleFail:
-          'Amount Charged should equal Default total (Sewer + Tax): expected $' +
+          'Amount Charged should equal ' +
+          ruleLabel +
+          ': expected $' +
           expected.toFixed(2) +
           ', got $' +
           actual.toFixed(2)
@@ -2997,33 +3181,45 @@
 
     function computeCustomerDefaultCharges(stepNum) {
       const d = editableByStep.get(stepNum);
-      if (!d || !d.ledger) return null;
+      if (!d) return null;
+      const fromAmount = computeCustomerDefaultChargesFromAmount(stepNum);
+      if (fromAmount) return fromAmount;
+      if (!d.ledger) return null;
       const headers = d.ledger.headers;
       const rows = d.ledger.rows;
       const c = ledgerMoneyCols(headers);
       for (let i = 0; i < rows.length; i++) {
-        if (isLedgerStatusUpdateRow(rows[i], headers)) continue;
+        if (
+          !isLedgerChargeRow(rows[i], headers) ||
+          !isLedgerBilledCustomerRow(rows[i], headers)
+        ) {
+          continue;
+        }
         const sewer = ledgerCellMoney(rows[i], c.sewer);
         const tax = ledgerCellMoney(rows[i], c.tax);
         const puc = ledgerCellMoney(rows[i], c.puc);
-        if (sewer > 0 || tax > 0 || puc > 0) {
+        const fromCols = Math.round((sewer + tax + puc) * 100) / 100;
+        if (fromCols > 0.005) {
           const taxCombined = Math.round((tax + puc) * 100) / 100;
-          const total = Math.round((sewer + taxCombined) * 100) / 100;
-          return { sewer: sewer, taxCodes: tax, puc: puc, taxCombined: taxCombined, total: total };
-        }
-      }
-      const amount = d.amount;
-      if (amount && amount.length) {
-        const sewer = kvMoneyByKey(amount, [/^sewer\s*charge$/i]);
-        const tax = kvMoneyByKey(amount, [/^tax\s*charge$/i]);
-        if (sewer > 0 || tax > 0) {
           return {
             sewer: sewer,
             taxCodes: tax,
-            puc: 0,
-            taxCombined: tax,
-            total: Math.round((sewer + tax) * 100) / 100
+            puc: puc,
+            taxCombined: taxCombined,
+            total: fromCols
           };
+        }
+        if (c.amountCharged >= 0) {
+          const charged = ledgerCellMoney(rows[i], c.amountCharged);
+          if (charged > 0.005) {
+            return {
+              sewer: charged,
+              taxCodes: 0,
+              puc: 0,
+              taxCombined: 0,
+              total: charged
+            };
+          }
         }
       }
       return null;
@@ -3035,35 +3231,61 @@
       return '$' + x.toFixed(2);
     }
 
+    function renderCustomerChargeProfileBlock(title, ch, hint) {
+      if (!ch) return '';
+      let html =
+        '<div style="margin-top:0.75rem"><strong>' +
+        escapeHtml(title) +
+        '</strong>';
+      if (hint) {
+        html += '<p class="hint-edit" style="margin:0.25rem 0 0.5rem">' + escapeHtml(hint) + '</p>';
+      }
+      html +=
+        '<div class="kv">' +
+        '<div>Sewer charge</div><div>' +
+        formatUsd(ch.sewer) +
+        '</div>' +
+        '<div>Tax charge (Tax Codes + PUC)</div><div><strong>' +
+        formatUsd(ch.taxCombined != null ? ch.taxCombined : ch.taxCodes || 0) +
+        '</strong></div>' +
+        '<div>Cycle total (Sewer + Tax)</div><div><strong>' +
+        formatUsd(ch.total) +
+        '</strong></div></div></div>';
+      return html;
+    }
+
     function renderCustomerInfoBanner(stepNum) {
       if (stepNum !== 1) return '';
-      const ch = computeCustomerDefaultCharges(1);
-      if (!ch) {
+      const profiles = getCustomerCycleChargeProfiles();
+      if (!profiles.prorated && !profiles.fullMonth) {
         return (
           '<div class="mt-customer-info"><h3>Customer · default cycle charges</h3>' +
           '<p class="hint-edit" style="margin:0">No base sewer/tax amounts found in Step 1 yet.</p></div>'
         );
       }
-      return (
+      let html =
         '<div class="mt-customer-info"><h3>Customer · default cycle charges</h3>' +
-        '<p class="hint-edit" style="margin:0 0 0.5rem">Base bill (no past due, late fee, or credit): sewer plus tax charges only.</p>' +
-        '<div class="kv">' +
-        '<div>Sewer charge</div><div>' +
-        formatUsd(ch.sewer) +
-        '</div>' +
-        '<div>Tax Codes</div><div>' +
-        formatUsd(ch.taxCodes) +
-        '</div>' +
-        '<div>PUC Surcharge</div><div>' +
-        formatUsd(ch.puc) +
-        '</div>' +
-        '<div>Tax charge (Tax Codes + PUC)</div><div><strong>' +
-        formatUsd(ch.taxCombined) +
-        '</strong></div>' +
-        '<div>Default total (Sewer + Tax)</div><div><strong>' +
-        formatUsd(ch.total) +
-        '</strong></div></div></div>'
-      );
+        '<p class="hint-edit" style="margin:0 0 0.5rem">Base bill amounts (no past due, late fee, or credit). Amount Charged on Billed Customer rows uses these cycle totals.</p>';
+      if (profiles.hasProration) {
+        html += renderCustomerChargeProfileBlock(
+          'First bill (prorated)',
+          profiles.prorated,
+          'Used for the 1st Billed Customer row (join mid-month).'
+        );
+        html += renderCustomerChargeProfileBlock(
+          'Regular bill (full month)',
+          profiles.fullMonth,
+          'Used for the 2nd and later Billed Customer rows.'
+        );
+      } else {
+        html += renderCustomerChargeProfileBlock(
+          'Default cycle',
+          profiles.fullMonth || profiles.prorated,
+          'Same amount every billing cycle.'
+        );
+      }
+      html += '</div>';
+      return html;
     }
 
     function validatePdfPreviewPairs(pairs) {
@@ -5427,8 +5649,12 @@
         format: MTV_TEST_EXPORT_FORMAT,
         exportedAt: new Date().toISOString(),
         name: test.name || 'Test',
+        customerMode: test.customerMode || 'existing',
         customerName: test.customerName || 'Susan Young',
         customerId: test.customerId || 'CUS-3011000',
+        customerFirstName: test.customerFirstName || '',
+        customerLastName: test.customerLastName || '',
+        customerCreatedDate: test.customerCreatedDate || '',
         stepDefs: JSON.parse(JSON.stringify(test.stepDefs || [])),
         foundationText: test.foundationText || '',
         resultsText: test.resultsText || '',
@@ -5474,8 +5700,12 @@
       if (!foundationText) foundationText = buildBlankMasterTestDocument(stepDefs);
       return {
         name: name,
+        customerMode: String(data.customerMode || 'existing').trim() || 'existing',
         customerName: String(data.customerName || 'Susan Young').trim() || 'Susan Young',
         customerId: String(data.customerId || 'CUS-3011000').trim() || 'CUS-3011000',
+        customerFirstName: String(data.customerFirstName || '').trim(),
+        customerLastName: String(data.customerLastName || '').trim(),
+        customerCreatedDate: String(data.customerCreatedDate || '').trim(),
         stepDefs: stepDefs,
         foundationText: foundationText,
         resultsText: String(data.resultsText || data.results || '').trim(),
@@ -6293,6 +6523,10 @@
           body: JSON.stringify({
             accountNumber: test.customerId,
             customerName: test.customerName,
+            customerMode: test.customerMode || 'existing',
+            customerFirstName: test.customerFirstName || '',
+            customerLastName: test.customerLastName || '',
+            customerCreatedDate: test.customerCreatedDate || '',
             steps: test.stepDefs,
             advanceMode: 'instant',
             testSlug: test.slug
@@ -6464,8 +6698,12 @@
     function masterTestPackageBody(test) {
       return {
         name: test.name,
+        customerMode: test.customerMode || 'existing',
         customerName: test.customerName,
         customerId: test.customerId,
+        customerFirstName: test.customerFirstName || '',
+        customerLastName: test.customerLastName || '',
+        customerCreatedDate: test.customerCreatedDate || '',
         stepDefs: test.stepDefs,
         foundationText: test.foundationText
       };
@@ -6555,8 +6793,12 @@
       const test = {
         slug: slug,
         name: norm.name,
+        customerMode: norm.customerMode || 'existing',
         customerName: norm.customerName,
         customerId: norm.customerId,
+        customerFirstName: norm.customerFirstName || '',
+        customerLastName: norm.customerLastName || '',
+        customerCreatedDate: norm.customerCreatedDate || '',
         stepDefs: norm.stepDefs,
         foundationText: norm.foundationText,
         resultsText: norm.resultsText,
@@ -6601,8 +6843,12 @@
         customTests.push({
           slug: meta.slug,
           name: t.name || meta.name,
+          customerMode: t.customerMode || 'existing',
           customerName: t.customerName || meta.customerName,
           customerId: t.customerId || meta.customerId,
+          customerFirstName: t.customerFirstName || '',
+          customerLastName: t.customerLastName || '',
+          customerCreatedDate: t.customerCreatedDate || '',
           stepDefs: Array.isArray(t.stepDefs) ? t.stepDefs : [],
           foundationText: foundationText,
           resultsText: t.resultsText || '',
@@ -6679,11 +6925,19 @@
     }
 
     function buildStepDescriptionLines(stepDef) {
+      const lines = [];
+      if (stepDef.advanceDateEnabled && stepDef.advanceDate) {
+        lines.push('Advance to future date: ' + formatAdvanceDateForDescription(stepDef.advanceDate));
+      }
+      if (stepDef.freshStart) lines.push('Do a fresh start');
+      if (stepDef.billThem) lines.push('Bill them');
+      if (stepDef.payEnabled || (stepDef.payAmount != null && String(stepDef.payAmount).trim() !== '')) {
+        lines.push('Have them pay ' + formatPayAmountForDescription(stepDef.payAmount));
+      }
       const caps =
         stepDef && Array.isArray(stepDef.dataCaptures) && stepDef.dataCaptures.length
           ? stepDef.dataCaptures
           : DEFAULT_DATA_CAPTURES.slice();
-      const lines = [];
       caps.forEach(function (cap) {
         if (cap && lines.indexOf(cap) === -1) lines.push(cap);
       });
@@ -7232,14 +7486,100 @@
       }
     }
 
+    function syncCreateTestCustomerModeUI() {
+      const modeEl = document.getElementById('createTestCustomerMode');
+      const existingWrap = document.getElementById('createTestExistingCustomerFields');
+      const newWrap = document.getElementById('createTestNewCustomerFields');
+      const createMode = modeEl && modeEl.value === 'create';
+      if (existingWrap) {
+        existingWrap.style.display = createMode ? 'none' : 'flex';
+      }
+      if (newWrap) {
+        newWrap.style.display = createMode ? 'flex' : 'none';
+        if (createMode) {
+          newWrap.classList.remove('hidden');
+        } else {
+          newWrap.classList.add('hidden');
+        }
+      }
+    }
+
+    function readCreateTestCustomerFields() {
+      const modeEl = document.getElementById('createTestCustomerMode');
+      const mode = modeEl && modeEl.value === 'create' ? 'create' : 'existing';
+      if (mode === 'create') {
+        const firstEl = document.getElementById('createTestNewFirstName');
+        const lastEl = document.getElementById('createTestNewLastName');
+        const dateEl = document.getElementById('createTestNewCreatedDate');
+        const idEl = document.getElementById('createTestNewCustomerId');
+        const firstName = firstEl ? String(firstEl.value || '').trim() : '';
+        const lastName = lastEl ? String(lastEl.value || '').trim() : '';
+        const customerCreatedDate = dateEl ? normalizeAdvanceDateIso(dateEl.value) : '';
+        let customerId = idEl ? String(idEl.value || '').trim() : '';
+        if (!customerId) {
+          customerId = 'CUS-' + String(Date.now()).slice(-6);
+          if (idEl) idEl.value = customerId;
+        }
+        const customerName = [firstName, lastName].filter(Boolean).join(' ');
+        return {
+          customerMode: 'create',
+          customerName: customerName,
+          customerId: customerId,
+          customerFirstName: firstName,
+          customerLastName: lastName,
+          customerCreatedDate: customerCreatedDate
+        };
+      }
+      const custNameEl = document.getElementById('createTestCustomerName');
+      const custIdEl = document.getElementById('createTestCustomerId');
+      return {
+        customerMode: 'existing',
+        customerName: custNameEl
+          ? String(custNameEl.value || '').trim() || 'Susan Young'
+          : 'Susan Young',
+        customerId: custIdEl ? String(custIdEl.value || '').trim() || 'CUS-3011000' : 'CUS-3011000',
+        customerFirstName: '',
+        customerLastName: '',
+        customerCreatedDate: ''
+      };
+    }
+
     function fillCreateTestFormFromTest(test) {
       const nameEl = document.getElementById('createTestName');
+      const modeEl = document.getElementById('createTestCustomerMode');
       const custName = document.getElementById('createTestCustomerName');
       const custId = document.getElementById('createTestCustomerId');
+      const firstEl = document.getElementById('createTestNewFirstName');
+      const lastEl = document.getElementById('createTestNewLastName');
+      const dateEl = document.getElementById('createTestNewCreatedDate');
+      const newIdEl = document.getElementById('createTestNewCustomerId');
       const host = document.getElementById('createTestStepsHost');
       if (nameEl) nameEl.value = test.name || '';
+      const mode = test.customerMode === 'create' ? 'create' : 'existing';
+      if (modeEl) modeEl.value = mode;
       if (custName) custName.value = test.customerName || 'Susan Young';
       if (custId) custId.value = test.customerId || 'CUS-3011000';
+      if (firstEl) {
+        firstEl.value =
+          test.customerFirstName ||
+          (test.customerName ? String(test.customerName).split(' ')[0] : '');
+      }
+      if (lastEl) {
+        lastEl.value =
+          test.customerLastName ||
+          (test.customerName
+            ? String(test.customerName)
+                .split(' ')
+                .slice(1)
+                .join(' ')
+            : '');
+      }
+      if (dateEl) {
+        dateEl.value =
+          normalizeAdvanceDateIso(test.customerCreatedDate || '') || '2026-01-15';
+      }
+      if (newIdEl) newIdEl.value = test.customerId || '';
+      syncCreateTestCustomerModeUI();
       if (!host) return;
       host.innerHTML = '';
       const defs = test.stepDefs && test.stepDefs.length ? test.stepDefs : [{}];
@@ -7273,12 +7613,23 @@
 
     function resetCreateTestForm() {
       const nameEl = document.getElementById('createTestName');
+      const modeEl = document.getElementById('createTestCustomerMode');
       const custName = document.getElementById('createTestCustomerName');
       const custId = document.getElementById('createTestCustomerId');
+      const firstEl = document.getElementById('createTestNewFirstName');
+      const lastEl = document.getElementById('createTestNewLastName');
+      const dateEl = document.getElementById('createTestNewCreatedDate');
+      const newIdEl = document.getElementById('createTestNewCustomerId');
       const host = document.getElementById('createTestStepsHost');
       if (nameEl) nameEl.value = '';
+      if (modeEl) modeEl.value = 'existing';
       if (custName) custName.value = 'Susan Young';
       if (custId) custId.value = 'CUS-3011000';
+      if (firstEl) firstEl.value = 'Test';
+      if (lastEl) lastEl.value = 'User';
+      if (dateEl) dateEl.value = '2026-01-15';
+      if (newIdEl) newIdEl.value = '';
+      syncCreateTestCustomerModeUI();
       if (host) {
         host.innerHTML = '';
         addCreateTestStepCard();
@@ -7331,12 +7682,21 @@
 
     async function submitCreateTest() {
       const nameEl = document.getElementById('createTestName');
-      const custNameEl = document.getElementById('createTestCustomerName');
-      const custIdEl = document.getElementById('createTestCustomerId');
       const name = nameEl ? String(nameEl.value || '').trim() : '';
       if (!name) {
         alert('Enter a test name.');
         return;
+      }
+      const customerFields = readCreateTestCustomerFields();
+      if (customerFields.customerMode === 'create') {
+        if (!customerFields.customerFirstName || !customerFields.customerLastName) {
+          alert('Enter first and last name for the new customer.');
+          return;
+        }
+        if (!customerFields.customerCreatedDate) {
+          alert('Pick a customer creation date.');
+          return;
+        }
       }
       const stepDefs = collectCreateTestStepDefs();
       if (!stepDefs.length) {
@@ -7360,12 +7720,8 @@
         return;
       }
       const foundation = buildBlankMasterTestDocument(stepDefs);
-      const customerName = custNameEl
-        ? String(custNameEl.value || '').trim() || 'Susan Young'
-        : 'Susan Young';
-      const customerId = custIdEl
-        ? String(custIdEl.value || '').trim() || 'CUS-3011000'
-        : 'CUS-3011000';
+      const customerName = customerFields.customerName;
+      const customerId = customerFields.customerId;
 
       let test;
       try {
@@ -7376,8 +7732,12 @@
             return;
           }
           test.name = name;
+          test.customerMode = customerFields.customerMode;
           test.customerName = customerName;
           test.customerId = customerId;
+          test.customerFirstName = customerFields.customerFirstName;
+          test.customerLastName = customerFields.customerLastName;
+          test.customerCreatedDate = customerFields.customerCreatedDate;
           test.stepDefs = stepDefs;
           test.foundationText = foundation;
           await persistTestPackage(test);
@@ -7386,8 +7746,12 @@
           test = {
             slug: slug,
             name: name,
+            customerMode: customerFields.customerMode,
             customerName: customerName,
             customerId: customerId,
+            customerFirstName: customerFields.customerFirstName,
+            customerLastName: customerFields.customerLastName,
+            customerCreatedDate: customerFields.customerCreatedDate,
             stepDefs: stepDefs,
             foundationText: foundation,
             resultsText: '',
@@ -7545,6 +7909,11 @@
       if (importBtn) importBtn.addEventListener('click', openImportTestModal);
       if (addStepBtn) addStepBtn.addEventListener('click', addCreateTestStepCard);
       if (submitBtn) submitBtn.addEventListener('click', submitCreateTest);
+      const customerModeEl = document.getElementById('createTestCustomerMode');
+      if (customerModeEl) {
+        customerModeEl.addEventListener('change', syncCreateTestCustomerModeUI);
+      }
+      syncCreateTestCustomerModeUI();
       if (modal) {
         modal.addEventListener('click', function (e) {
           if (e.target.id === 'createTestModal') closeCreateTestModal();

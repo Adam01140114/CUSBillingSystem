@@ -153,8 +153,12 @@ function loadTestFromDisk(slug) {
     test: {
       slug,
       name: String(data.name || 'Test ' + paths.n).trim() || 'Test ' + paths.n,
+      customerMode: String(data.customerMode || 'existing').trim() || 'existing',
       customerName: String(data.customerName || 'Susan Young').trim() || 'Susan Young',
       customerId: String(data.customerId || 'CUS-3011000').trim() || 'CUS-3011000',
+      customerFirstName: String(data.customerFirstName || '').trim(),
+      customerLastName: String(data.customerLastName || '').trim(),
+      customerCreatedDate: String(data.customerCreatedDate || '').trim(),
       stepDefs: Array.isArray(data.stepDefs) ? data.stepDefs : [],
       foundationText: String(data.foundationText || '').trim(),
       resultsText: data.resultsText,
@@ -171,8 +175,12 @@ function savePackageToDisk(slug, test) {
     format: 'cus-master-test-v1',
     exportedAt: new Date().toISOString(),
     name: test && test.name ? test.name : 'Test ' + paths.n,
+    customerMode: test && test.customerMode ? test.customerMode : 'existing',
     customerName: test && test.customerName ? test.customerName : 'Susan Young',
     customerId: test && test.customerId ? test.customerId : 'CUS-3011000',
+    customerFirstName: test && test.customerFirstName ? test.customerFirstName : '',
+    customerLastName: test && test.customerLastName ? test.customerLastName : '',
+    customerCreatedDate: test && test.customerCreatedDate ? test.customerCreatedDate : '',
     stepDefs: test && Array.isArray(test.stepDefs) ? test.stepDefs : [],
     foundationText: test && test.foundationText ? test.foundationText : ''
   };

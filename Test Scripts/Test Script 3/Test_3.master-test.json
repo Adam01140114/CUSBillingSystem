@@ -1,0 +1,68 @@
+{
+  "format": "cus-master-test-v1",
+  "exportedAt": "2026-05-30T21:28:55.323Z",
+  "name": "Test 3",
+  "customerMode": "create",
+  "customerName": "Test User",
+  "customerId": "CUS-679014",
+  "customerFirstName": "Test",
+  "customerLastName": "User",
+  "customerCreatedDate": "2026-01-15",
+  "stepDefs": [
+    {
+      "freshStart": false,
+      "advanceDateEnabled": true,
+      "advanceDate": "2026-01-15",
+      "billThem": false,
+      "payEnabled": false,
+      "payAmount": "",
+      "dataCaptures": [
+        "Log what the payments/charges table shows",
+        "Log what the amount breakdown shows",
+        "Log View Past Due Details"
+      ]
+    },
+    {
+      "freshStart": false,
+      "advanceDateEnabled": true,
+      "advanceDate": "2026-02-01",
+      "billThem": true,
+      "payEnabled": false,
+      "payAmount": "",
+      "dataCaptures": [
+        "Log what the payments/charges table shows",
+        "Log what the amount breakdown shows",
+        "Log View Past Due Details",
+        "Log what PDF Bill shows"
+      ]
+    },
+    {
+      "freshStart": false,
+      "advanceDateEnabled": true,
+      "advanceDate": "2026-03-01",
+      "billThem": false,
+      "payEnabled": false,
+      "payAmount": "",
+      "dataCaptures": [
+        "Log what the payments/charges table shows",
+        "Log what the amount breakdown shows",
+        "Log View Past Due Details"
+      ]
+    },
+    {
+      "freshStart": false,
+      "advanceDateEnabled": false,
+      "advanceDate": "",
+      "billThem": true,
+      "payEnabled": false,
+      "payAmount": "",
+      "dataCaptures": [
+        "Log what the payments/charges table shows",
+        "Log what the amount breakdown shows",
+        "Log View Past Due Details",
+        "Log what PDF Bill shows"
+      ]
+    }
+  ],
+  "foundationText": "Step 1:\n\nDescription: \nAdvance to future date: 1/15/26\nLog what the payments/charges table shows\nLog what the amount breakdown shows\nLog View Past Due Details\n\nPayments/Charges Table Shows:\n\nDate & Time\nType\nSubtype\nSewer\nTax Codes\nPUC Surcharge\nPast Due\nLate Fee\nCredit\nAmount Charged\nAmount Paid\nBalance After\n\nAmount Breakdown Shows:\n\nSewer Charge\nTax Charge\nPast Due\nLate Fee\nCredit\nTotal amount due\n$0\n$0\n$0\n$0\n$0\n$0\n\nView Past Due Details Shows:\n\n(none)\n\n\nStep 2:\n\nDescription: \nAdvance to future date: 2/1/26\nBill them\nLog what the payments/charges table shows\nLog what the amount breakdown shows\nLog View Past Due Details\nLog what PDF Bill shows\n\nPayments/Charges Table Shows:\n\nDate & Time\nType\nSubtype\nSewer\nTax Codes\nPUC Surcharge\nPast Due\nLate Fee\nCredit\nAmount Charged\nAmount Paid\nBalance After\n\nAmount Breakdown Shows:\n\nSewer Charge\nTax Charge\nPast Due\nLate Fee\nCredit\nTotal amount due\n$0\n$0\n$0\n$0\n$0\n$0\n\nView Past Due Details Shows:\n\n(none)\n\nBill PDF Preview Shows:\n\nCurrent_due\nPrevious_amount\nLate_fee\nCredit\nTotal_amount\n$0\n$0\n$0\n$0\n$0\n\n\nStep 3:\n\nDescription: \nAdvance to future date: 3/1/26\nLog what the payments/charges table shows\nLog what the amount breakdown shows\nLog View Past Due Details\n\nPayments/Charges Table Shows:\n\nDate & Time\nType\nSubtype\nSewer\nTax Codes\nPUC Surcharge\nPast Due\nLate Fee\nCredit\nAmount Charged\nAmount Paid\nBalance After\n\nAmount Breakdown Shows:\n\nSewer Charge\nTax Charge\nPast Due\nLate Fee\nCredit\nTotal amount due\n$0\n$0\n$0\n$0\n$0\n$0\n\nView Past Due Details Shows:\n\n(none)\n\n\nStep 4:\n\nDescription: \nBill them\nLog what the payments/charges table shows\nLog what the amount breakdown shows\nLog View Past Due Details\nLog what PDF Bill shows\n\nPayments/Charges Table Shows:\n\nDate & Time\nType\nSubtype\nSewer\nTax Codes\nPUC Surcharge\nPast Due\nLate Fee\nCredit\nAmount Charged\nAmount Paid\nBalance After\n\nAmount Breakdown Shows:\n\nSewer Charge\nTax Charge\nPast Due\nLate Fee\nCredit\nTotal amount due\n$0\n$0\n$0\n$0\n$0\n$0\n\nView Past Due Details Shows:\n\n(none)\n\nBill PDF Preview Shows:\n\nCurrent_due\nPrevious_amount\nLate_fee\nCredit\nTotal_amount\n$0\n$0\n$0\n$0\n$0"
+}

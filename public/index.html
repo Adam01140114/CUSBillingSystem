@@ -4818,6 +4818,7 @@
       } else if (
         !mirrorFirstUnpaid &&
         opts.customer &&
+        !shouldSuppressPostFirstBillFullMonthAccrual(opts.customer) &&
         noMeaningfulLedgerPast &&
         su > OWED.ZERO &&
         cur > OWED.ZERO &&
@@ -5083,7 +5084,22 @@
       const pastDueRaw = parseFloat(customer.pastDue || 0);
       const pastDue = Math.max(0, pastDueRaw);
       const credit = Math.abs(Math.min(0, pastDueRaw));
-      return Math.max(0, Math.round((currentDue + pastDue - credit) * 100) / 100);
+      const stmtUnpaid = getOutstandingLastStatementUnpaid(customer);
+      const pastDueForOwed = getPanelPastDueLineDollars(customer, pastDue);
+      const useStmtShortcut =
+        !shouldSuppressPostFirstBillFullMonthAccrual(customer);
+      const b = computeCustomerOwedBalanceTotal(
+        pastDueForOwed,
+        credit,
+        stmtUnpaid,
+        currentDue,
+        0,
+        {
+          customer,
+          applySameMonthStmtShortcut: useStmtShortcut
+        }
+      );
+      return Math.max(0, Math.round(b.total * 100) / 100);
     }
 
     /**
@@ -5134,8 +5150,27 @@
       return compute21DayLateFeeDollars(customer);
     }
 
+    /** PUC surcharge: percentage of sewer charge only (not tax codes). */
+    function computePucSurchargeAmountFromSewer(sewerAmount) {
+      const sewer = Math.max(0, parseFloat(sewerAmount) || 0);
+      if (pucSurcharge <= 0.005 || sewer <= 0.005) return 0;
+      return Math.round(sewer * (pucSurcharge / 100) * 100) / 100;
+    }
+
     /** Current-cycle subtotal + PUC only (no late fee, no side effects). */
-    function getSubtotalBeforePucAndPucSurcharge(customer) {
+    function getSubtotalBeforePucAndPucSurcharge(customer, opts) {
+      opts = opts || {};
+      if (
+        opts.allowPostFirstProratedAccrual !== true &&
+        shouldSuppressPostFirstBillFullMonthAccrual(customer)
+      ) {
+        return {
+          subtotalBeforePuc: 0,
+          pucSurchargeAmount: 0,
+          adjustedServiceCost: 0,
+          totalSurcharge: 0
+        };
+      }
       const baseServiceCost = calculateProratedServiceCost(customer);
       const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
       const adjustedServiceCost = baseServiceCost * factor;
@@ -5147,22 +5182,16 @@
             latestCode = codes.find(c => c.name.toLowerCase() === customerCode.name.toLowerCase());
           }
           const codeToUse = latestCode || customerCode;
-          const codeType = codeToUse.type || 'percentage';
-          const codeAmount = codeToUse.amount !== undefined ? codeToUse.amount : (codeToUse.percentage !== undefined ? codeToUse.percentage : 0);
-          let baseSurchargeAmount;
-          if (codeType === 'flat') {
-            baseSurchargeAmount = codeAmount;
-          } else {
-            baseSurchargeAmount = adjustedServiceCost * (codeAmount / 100);
-          }
-          totalSurcharge += baseSurchargeAmount * factor;
+          totalSurcharge += computeCustomerCodeSurchargeForCycle(
+            customer,
+            codeToUse,
+            adjustedServiceCost,
+            factor
+          );
         });
       }
       const subtotalBeforePuc = adjustedServiceCost + totalSurcharge;
-      let pucSurchargeAmount = 0;
-      if (pucSurcharge > 0) {
-        pucSurchargeAmount = subtotalBeforePuc * (pucSurcharge / 100);
-      }
+      const pucSurchargeAmount = computePucSurchargeAmountFromSewer(adjustedServiceCost);
       return { subtotalBeforePuc, pucSurchargeAmount, adjustedServiceCost, totalSurcharge };
     }
 
@@ -5313,9 +5342,11 @@
       const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, lateFeeAmt, parts);
       const stmtUnpaid = getOutstandingLastStatementUnpaid(customer);
       const pastDueForOwed = getPanelPastDueLineDollars(customer, pastDue);
+      const useStmtShortcut =
+        !shouldSuppressPostFirstBillFullMonthAccrual(customer);
       const b = computeCustomerOwedBalanceTotal(pastDueForOwed, credit, stmtUnpaid, currentDue, lateFeeAmt, {
         customer,
-        applySameMonthStmtShortcut: true
+        applySameMonthStmtShortcut: useStmtShortcut
       });
       return Math.max(0, b.total);
     }
@@ -6923,39 +6954,38 @@
       const lateFeeAmount = getAutomaticLateFeeAmount(customer);
 
       const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
-      const adjustedServiceCost = baseServiceCost * factor;
-
-      // Calculate code surcharges - refresh from global codes array
+      let adjustedServiceCost = baseServiceCost * factor;
       let totalSurcharge = 0;
-      if (customer.codes && customer.codes.length > 0) {
+      if (
+        billUiSnapshot &&
+        shouldSuppressPostFirstBillFullMonthAccrual(customer)
+      ) {
+        adjustedServiceCost = 0;
+        totalSurcharge = 0;
+      } else if (customer.codes && customer.codes.length > 0) {
         customer.codes.forEach(customerCode => {
-          // Look up the latest code data from the global codes array
           let latestCode = codes.find(c => c.id === customerCode.id);
           if (!latestCode) {
             latestCode = codes.find(c => c.name.toLowerCase() === customerCode.name.toLowerCase());
           }
           const codeToUse = latestCode || customerCode;
-
-          const codeType = codeToUse.type || 'percentage';
-          const codeAmount = codeToUse.amount !== undefined ? codeToUse.amount : (codeToUse.percentage !== undefined ? codeToUse.percentage : 0);
-
-          let baseSurchargeAmount;
-          if (codeType === 'flat') {
-            baseSurchargeAmount = codeAmount;
-          } else {
-            baseSurchargeAmount = adjustedServiceCost * (codeAmount / 100);
-          }
-
-          const surchargeAmount = baseSurchargeAmount * factor;
-          totalSurcharge += surchargeAmount;
+          totalSurcharge += computeCustomerCodeSurchargeForCycle(
+            customer,
+            codeToUse,
+            adjustedServiceCost,
+            factor
+          );
         });
       }
 
-      const subtotalBeforePuc = adjustedServiceCost + totalSurcharge;
+      let subtotalBeforePuc = adjustedServiceCost + totalSurcharge;
 
       let pucSurchargeAmount = 0;
-      if (pucSurcharge > 0) {
-        pucSurchargeAmount = subtotalBeforePuc * (pucSurcharge / 100);
+      if (!(billUiSnapshot && shouldSuppressPostFirstBillFullMonthAccrual(customer))) {
+        pucSurchargeAmount = computePucSurchargeAmountFromSewer(adjustedServiceCost);
+      }
+      if (billUiSnapshot && shouldSuppressPostFirstBillFullMonthAccrual(customer)) {
+        subtotalBeforePuc = 0;
       }
 
       const currentDueBeforePayment = subtotalBeforePuc + pucSurchargeAmount + lateFeeAmount;
@@ -7625,15 +7655,12 @@
             latestCode = codes.find(c => c.name.toLowerCase() === customerCode.name.toLowerCase());
           }
           const codeToUse = latestCode || customerCode;
-          const codeType = codeToUse.type || 'percentage';
-          const codeAmount = codeToUse.amount !== undefined ? codeToUse.amount : (codeToUse.percentage !== undefined ? codeToUse.percentage : 0);
-          let baseSurchargeAmount;
-          if (codeType === 'flat') {
-            baseSurchargeAmount = codeAmount;
-          } else {
-            baseSurchargeAmount = adjustedServiceCost * (codeAmount / 100);
-          }
-          const surchargeAmount = baseSurchargeAmount * factor;
+          const surchargeAmount = computeCustomerCodeSurchargeForCycle(
+            customer,
+            codeToUse,
+            adjustedServiceCost,
+            factor
+          );
           taxCodeDetails.push({
             name: codeToUse.name,
             amount: surchargeAmount
@@ -7643,11 +7670,145 @@
       taxCodeDetails.sort((a, b) => a.name.localeCompare(b.name));
       if (pucSurcharge > 0) {
         taxCodeDetails.push({
-          name: `PUC SCHG SW (${pucSurcharge.toFixed(2)}% x $${calc.subtotalBeforePuc.toFixed(2)})`,
+          name: `PUC SCHG SW (${pucSurcharge.toFixed(2)}% x $${calc.adjustedServiceCost.toFixed(2)})`,
           amount: calc.pucSurchargeAmount
         });
       }
       return taxCodeDetails;
+    }
+
+    /** ISO string for customer.createdDate using the app calendar (test date when simulating). */
+    function getCustomerCreatedDateIsoFromAppCalendar(dateOptional) {
+      const d = dateOptional instanceof Date ? dateOptional : window.getCurrentDate();
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString();
+    }
+
+    function customerCreatedCalendarDate(customer) {
+      if (!customer || !customer.createdDate) return null;
+      const raw = String(customer.createdDate).trim();
+      let d;
+      if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+        const p = raw.slice(0, 10).split('-').map(Number);
+        d = new Date(p[0], p[1] - 1, p[2]);
+      } else {
+        d = new Date(raw);
+      }
+      if (isNaN(d.getTime())) return null;
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+
+    function customerHasReceivedFirstBill(customer) {
+      return !!(customer && customer.lastBillPrintDate);
+    }
+
+    function countBillingChargeHistoryRows(customer) {
+      if (!customer || !Array.isArray(customer.chargeHistory)) return 0;
+      return customer.chargeHistory.filter(function (c) {
+        return typeof isChargeHistoryBillingStatementRow === 'function' && isChargeHistoryBillingStatementRow(c);
+      }).length;
+    }
+
+    /** True when the last printed bill used a prorated (sub-full-month) sewer charge. */
+    function customerLastPrintedBillWasProrated(customer) {
+      if (!customer || !customer.lastBillPrintDate) return false;
+      const bill =
+        typeof getAnchorBillingChargeHistoryRowForLastPrint === 'function'
+          ? getAnchorBillingChargeHistoryRowForLastPrint(customer)
+          : typeof getLatestBillingChargeHistoryRow === 'function'
+            ? getLatestBillingChargeHistoryRow(customer)
+            : null;
+      if (!bill) return false;
+      const sewerOnBill = Math.max(0, parseFloat(bill.sewerChargeOnBill || 0));
+      if (sewerOnBill <= 0.005) return false;
+      const factor = customer.factor ? parseFloat(customer.factor) : 1.0;
+      const fullSewer = Math.round(sewerCharge * factor * 100) / 100;
+      return sewerOnBill < fullSewer - 1.0;
+    }
+
+    /**
+     * After a prorated first bill, suppress full-month current-cycle accrual until the second bill prints.
+     * Prevents double-counting (e.g. $96.30 statement + $183.07 live accrual) between first and second bill.
+     */
+    function shouldSuppressPostFirstBillFullMonthAccrual(customer) {
+      if (!customer || !customer.lastBillPrintDate) return false;
+      if (!customerLastPrintedBillWasProrated(customer)) return false;
+      return countBillingChargeHistoryRows(customer) <= 1;
+    }
+
+    /**
+     * Days remaining in the creation month after the join date (exclusive of join day).
+     * Example: join 1/15/26 in a 31-day month → 31 − 15 = 16 days.
+     */
+    function getFirstBillProrateDays(customer) {
+      if (!customer || customer.importData || customerHasReceivedFirstBill(customer)) return null;
+      const joinDate = customerCreatedCalendarDate(customer);
+      if (!joinDate) return null;
+      if (joinDate.getDate() <= 1) return null;
+      const lastDayOfMonth = new Date(joinDate.getFullYear(), joinDate.getMonth() + 1, 0).getDate();
+      const daysRemaining = lastDayOfMonth - joinDate.getDate();
+      if (daysRemaining <= 0) return null;
+      return daysRemaining;
+    }
+
+    /** First-bill prorate: ((monthly × 12) / 365) × prorateDays */
+    function prorateFirstBillMonthlyAmount(monthlyAmount, prorateDays) {
+      const monthly = parseFloat(monthlyAmount) || 0;
+      if (monthly <= 0 || !prorateDays || prorateDays <= 0) return monthly;
+      const daily = (monthly * 12) / 365;
+      return Math.round(daily * prorateDays * 100) / 100;
+    }
+
+    /**
+     * Tax code surcharge for the current cycle.
+     * Percentage codes use prorated sewer (adjustedServiceCost) — no separate prorate pass.
+     * Flat fee codes alone get first-bill daily proration.
+     */
+    function computeCustomerCodeSurchargeForCycle(customer, codeToUse, adjustedServiceCost, factor) {
+      const codeType = codeToUse.type || 'percentage';
+      const codeAmount =
+        codeToUse.amount !== undefined
+          ? codeToUse.amount
+          : codeToUse.percentage !== undefined
+            ? codeToUse.percentage
+            : 0;
+      let baseSurchargeAmount;
+      if (codeType === 'flat') {
+        baseSurchargeAmount = codeAmount;
+      } else {
+        baseSurchargeAmount = adjustedServiceCost * (codeAmount / 100);
+      }
+      let surchargeAmount = baseSurchargeAmount * factor;
+      const prorateDays = getFirstBillProrateDays(customer);
+      if (prorateDays != null && codeType === 'flat') {
+        const before = surchargeAmount;
+        surchargeAmount = prorateFirstBillMonthlyAmount(surchargeAmount, prorateDays);
+        logFirstBillProrate('flatTax', customer, {
+          code: codeToUse.name,
+          monthly: before,
+          prorated: surchargeAmount
+        });
+      }
+      return surchargeAmount;
+    }
+
+    function logFirstBillProrate(tag, customer, detail) {
+      try {
+        const payload = Object.assign(
+          {
+            account: customer && (customer.accountNumber || customer.id),
+            prorateDays: getFirstBillProrateDays(customer)
+          },
+          detail || {}
+        );
+        if (typeof window.masterTestLog === 'function') {
+          window.masterTestLog('billing:firstBillProrate:' + tag, payload);
+        }
+        if (typeof billDiagCustomerMatch === 'function' && billDiagCustomerMatch(customer)) {
+          billDiag('firstBillProrate:' + tag, customer, payload);
+        }
+      } catch (eLog) {
+        /* ignore */
+      }
     }
 
     // Calculate prorated service cost based on when customer was added
@@ -7659,29 +7820,17 @@
         return baseServiceCost;
       }
 
-      // If customer was added this month, calculate proration
-      const now = window.getCurrentDate();
-      const customerAddedDate = new Date(customer.createdDate);
-
-      // Check if customer was added in the current month
-      if (customerAddedDate.getMonth() === now.getMonth() && 
-          customerAddedDate.getFullYear() === now.getFullYear()) {
-
-        // Calculate days remaining in the month from when they joined
-        const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-        const totalDaysInMonth = lastDayOfMonth.getDate();
-
-        // Days from when they joined to end of month
-        const daysRemaining = lastDayOfMonth.getDate() - customerAddedDate.getDate() + 1;
-
-        // Calculate prorated amount
-        const proratedAmount = (baseServiceCost * daysRemaining) / totalDaysInMonth;
-
-        return Math.round(proratedAmount * 100) / 100; // Round to 2 decimal places
+      const prorateDays = getFirstBillProrateDays(customer);
+      if (prorateDays != null) {
+        const proratedAmount = prorateFirstBillMonthlyAmount(baseServiceCost, prorateDays);
+        logFirstBillProrate('sewer', customer, {
+          monthly: baseServiceCost,
+          prorated: proratedAmount,
+          prorateDays: prorateDays
+        });
+        return proratedAmount;
       }
 
-      // If customer was added in a previous month, charge full amount
       return baseServiceCost;
     }
 
@@ -14448,7 +14597,7 @@
         lastPayment: 'Never',
         paymentHistory: [],
         needsPasswordChange: true,
-        createdDate: new Date().toISOString(),
+        createdDate: getCustomerCreatedDateIsoFromAppCalendar(),
         entityType: entityType,
         ssn: ssn,
         idType: idType,
@@ -20431,7 +20580,7 @@
           lastPayment: 'Never',
           paymentHistory: [],
           needsPasswordChange: true,
-          createdDate: new Date().toISOString(),
+          createdDate: getCustomerCreatedDateIsoFromAppCalendar(),
           entityType: newClientData.entityType || '',
           ssn: newClientData.ssn || '',
           idType: newClientData.idType || '',
@@ -23130,7 +23279,7 @@
                     lastPayment: rowData['Last Payment'] || 'Never',
                     paymentHistory: [],
                     needsPasswordChange: true,
-                    createdDate: new Date().toISOString(),
+                    createdDate: getCustomerCreatedDateIsoFromAppCalendar(),
                     entityType: rowData['Entity Type'] || rowData['Type'] || '',
                     ssn: rowData['SSN'] || rowData['Social Security Number'] || '',
                     idType: rowData['ID Type'] || '',
@@ -23909,7 +24058,7 @@
           if (pucSurcharge > 0) {
             const pucRow = document.createElement('div');
             pucRow.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600 last:border-b-0';
-            const pucDisplayText = `PUC SCHG SW (${pucSurcharge.toFixed(2)}% x $${calc.subtotalBeforePuc.toFixed(2)})`;
+            const pucDisplayText = `PUC SCHG SW (${pucSurcharge.toFixed(2)}% x $${calc.adjustedServiceCost.toFixed(2)})`;
             pucRow.innerHTML = `
               <span class="text-slate-600 dark:text-slate-300">${pucDisplayText}</span>
               <span class="font-medium text-slate-800 dark:text-slate-100">$${(calc.pucSurchargeAmount || 0).toFixed(2)}</span>
@@ -30226,6 +30375,212 @@
         return null;
       }
 
+      function developTestCreatedDateIsoFromCfg(raw) {
+        const iso = developTestNormalizeAdvanceDateIso(raw);
+        if (!iso) return getCustomerCreatedDateIsoFromAppCalendar();
+        const p = iso.split('-').map(Number);
+        return new Date(p[0], p[1] - 1, p[2]).toISOString();
+      }
+
+      function developTestCloneGlobalCodesForCustomer() {
+        if (!Array.isArray(codes) || !codes.length) return [];
+        return codes.map(function (c) {
+          return {
+            id: c.id,
+            name: c.name,
+            type: c.type || 'percentage',
+            amount:
+              c.amount !== undefined
+                ? c.amount
+                : c.percentage !== undefined
+                  ? c.percentage
+                  : 0,
+            percentage:
+              c.percentage !== undefined
+                ? c.percentage
+                : c.type === 'percentage' && c.amount !== undefined
+                  ? c.amount
+                  : 0
+          };
+        });
+      }
+
+      function developTestBuildNewMasterTestCustomer(cfg) {
+        const firstName = String(
+          (cfg && (cfg.customerFirstName || cfg.newCustomerFirstName)) || ''
+        ).trim();
+        const lastName = String(
+          (cfg && (cfg.customerLastName || cfg.newCustomerLastName)) || ''
+        ).trim();
+        const name =
+          [firstName, lastName].filter(Boolean).join(' ') ||
+          String((cfg && cfg.customerNameMatch) || 'Test User').trim();
+        const accountNumber =
+          String((cfg && cfg.accountNumber) || '').trim() ||
+          'CUS-' + String(Date.now()).slice(-6);
+        const createdRaw =
+          (cfg && (cfg.customerCreatedDate || cfg.newCustomerCreatedDate)) || '';
+        const createdDate = developTestCreatedDateIsoFromCfg(createdRaw);
+        const customer = {
+          id: accountNumber,
+          accountNumber: accountNumber,
+          name: name,
+          email: 'master-test+' + accountNumber.toLowerCase() + '@example.com',
+          phone: '5555550100',
+          address: '100 Master Test Street',
+          mailingStreet: '100 Master Test Street',
+          mailingCity: 'Testville',
+          mailingState: 'TX',
+          mailingZip: '75001',
+          currentBill: typeof sewerCharge === 'number' ? sewerCharge : 170,
+          pastDue: 0,
+          lastPayment: 'Never',
+          paymentHistory: [],
+          chargeHistory: [],
+          needsPasswordChange: false,
+          createdDate: createdDate,
+          entityType: 'Individual',
+          codes: developTestCloneGlobalCodesForCustomer(),
+          factor: 1,
+          deposit: 1000,
+          paymentStatus: 'current'
+        };
+        updateCustomerPaymentStatus(customer);
+        return customer;
+      }
+
+      async function developTestDeleteCustomerSilent(customerId) {
+        const want = String(customerId || '').trim();
+        if (!want) return false;
+        const customer = customers.find(function (c) {
+          return c && (String(c.id) === want || String(c.accountNumber) === want);
+        });
+        if (!customer) return false;
+        try {
+          const customerRef = doc(db, 'customers', customer.id);
+          await deleteDoc(customerRef);
+        } catch (eDel) {
+          if (typeof window.masterTestLog === 'function') {
+            window.masterTestLog('createCustomer:deleteFailed', {
+              customerId: want,
+              error: eDel && eDel.message ? eDel.message : String(eDel)
+            });
+          }
+          return false;
+        }
+        customers = customers.filter(function (c) {
+          return c.id !== customer.id;
+        });
+        filteredCustomers = filteredCustomers.filter(function (c) {
+          return c.id !== customer.id;
+        });
+        const associatedLocation = locations.find(function (l) {
+          return l && l.currentResident === customer.name;
+        });
+        if (associatedLocation) {
+          associatedLocation.currentResident = null;
+          associatedLocation.status = 'available';
+          associatedLocation.ownerFirstName = '';
+          associatedLocation.ownerLastName = '';
+          associatedLocation.ownerFullName = '';
+          try {
+            await saveSingleLocationToFirestore(associatedLocation);
+          } catch (eLoc) {
+            /* ignore */
+          }
+        }
+        if (typeof window.masterTestLog === 'function') {
+          window.masterTestLog('createCustomer:deletedExisting', {
+            customerId: customer.id,
+            name: customer.name
+          });
+        }
+        return true;
+      }
+
+      function developTestFillCreateModeDefaults(cfg) {
+        cfg = Object.assign({}, cfg || {});
+        if (!cfg.customerNameMatch && cfg.customerName) {
+          cfg.customerNameMatch = cfg.customerName;
+        }
+        if (
+          !cfg.customerCreatedDate &&
+          Array.isArray(cfg.steps) &&
+          cfg.steps[0] &&
+          cfg.steps[0].advanceDate
+        ) {
+          cfg.customerCreatedDate = String(cfg.steps[0].advanceDate);
+        }
+        if (!cfg.customerFirstName && cfg.customerNameMatch) {
+          const parts = String(cfg.customerNameMatch).trim().split(/\s+/).filter(Boolean);
+          if (parts.length) {
+            cfg.customerFirstName = parts[0];
+            cfg.customerLastName = parts.slice(1).join(' ');
+          }
+        }
+        return cfg;
+      }
+
+      function developTestShouldUseCreateMode(cfg) {
+        cfg = cfg || {};
+        if (cfg.customerMode === 'create') return true;
+        if (cfg.customerCreatedDate && String(cfg.customerCreatedDate).trim()) return true;
+        if (
+          cfg.customerFirstName &&
+          cfg.customerLastName &&
+          String(cfg.customerFirstName).trim() &&
+          String(cfg.customerLastName).trim()
+        ) {
+          return true;
+        }
+        return false;
+      }
+
+      /**
+       * Create-mode master tests: remove prior run's customer, set test date to creation date, create fresh account.
+       */
+      window.__developTestEnsureCreateModeCustomer = async function (cfg) {
+        cfg = cfg || {};
+        const accountNumber =
+          String(cfg.accountNumber || cfg.customerId || '').trim() ||
+          'CUS-' + String(Date.now()).slice(-6);
+        const createdRaw = cfg.customerCreatedDate || cfg.newCustomerCreatedDate || '';
+        const createdIso = developTestNormalizeAdvanceDateIso(createdRaw);
+        if (!createdIso) {
+          throw new Error('Create customer test: customer creation date is required.');
+        }
+        await developTestDeleteCustomerSilent(accountNumber);
+        await window.setTestDate(createdIso, {
+          directAnchor: true,
+          skipRunSimulatedDayForAllCustomers: true
+        });
+        const createCfg = Object.assign({}, cfg, {
+          accountNumber: accountNumber,
+          customerCreatedDate: createdIso
+        });
+        const customer = developTestBuildNewMasterTestCustomer(createCfg);
+        customers.push(customer);
+        filteredCustomers = customers.slice();
+        await saveSingleCustomerToFirestore(customer);
+        if (typeof window.masterTestLog === 'function') {
+          window.masterTestLog('createCustomer:created', {
+            customerId: customer.id,
+            name: customer.name,
+            createdDate: customer.createdDate,
+            testDate: testDate,
+            prorateDays: getFirstBillProrateDays(customer)
+          });
+        }
+        return {
+          ok: true,
+          customerId: customer.id,
+          accountNumber: customer.accountNumber,
+          customerName: customer.name,
+          createdDate: customer.createdDate,
+          prorateDays: getFirstBillProrateDays(customer)
+        };
+      };
+
       function developTestEscapeHtml(s) {
         return String(s)
           .replace(/&/g, '&amp;')
@@ -30555,20 +30910,15 @@
        */
       function developTestApplyMasterTestCustomerBillingBaseline(customer) {
         if (!customer) return;
-        const baseSewer = typeof sewerCharge === 'number' && sewerCharge > 0 ? sewerCharge : 170;
-        customer.factor = Math.round((168.36 / baseSewer) * 1000000) / 1000000;
-        if (!Array.isArray(customer.codes)) customer.codes = [];
-        const hasTax = customer.codes.some(function (cc) {
-          return cc && String(cc.name || '').toLowerCase().indexOf('tax') !== -1;
-        });
-        if (!hasTax) {
-          customer.codes.push({ id: 'susan-tax', name: 'Tax Codes', type: 'percentage', amount: 1.45 });
-        }
+        const settingsSewer =
+          typeof sewerCharge === 'number' && sewerCharge > 0 ? sewerCharge : 170;
+        customer.factor = Math.round((168.36 / settingsSewer) * 1000000) / 1000000;
+        customer.codes = [{ id: 'susan-tax', name: 'Tax Codes', type: 'percentage', amount: 1.45 }];
         try {
           console.info('[MasterTest] billing baseline applied', {
             account: customer.accountNumber || customer.id,
             factor: customer.factor,
-            sewerCharge: baseSewer
+            sewerCharge: settingsSewer
           });
         } catch (eBaseLog) {
           /* ignore */
@@ -31296,6 +31646,27 @@
         return { sewer: sewer, tax: tax, pastDue: pastDue, lateFee: lateFee, total: total };
       }
 
+      /** Master-test amount breakdown from the latest closed billing row (prorated first bill, frozen panel). */
+      function masterTestAmountBreakdownFromLastBill(lastBillRow) {
+        if (!lastBillRow) return null;
+        const sp =
+          typeof ledgerTaxCodesAndPucFromBillEntry === 'function'
+            ? ledgerTaxCodesAndPucFromBillEntry(lastBillRow)
+            : { taxCodes: 0, puc: 0 };
+        const sewer =
+          Math.round(Math.max(0, parseFloat(lastBillRow.sewerChargeOnBill || 0)) * 100) / 100;
+        const tax = Math.round((sp.taxCodes + sp.puc) * 100) / 100;
+        const pastDue =
+          Math.round(Math.max(0, parseFloat(lastBillRow.pastDueOnBill || 0)) * 100) / 100;
+        const lateFee =
+          Math.round(Math.max(0, parseFloat(lastBillRow.lateFeeAmount || 0)) * 100) / 100;
+        const total =
+          lastBillRow.netBalanceAfterBill != null && !isNaN(parseFloat(lastBillRow.netBalanceAfterBill))
+            ? Math.round(parseFloat(lastBillRow.netBalanceAfterBill) * 100) / 100
+            : Math.round((sewer + tax + pastDue + lateFee) * 100) / 100;
+        return { sewer, tax, pastDue, lateFee, total };
+      }
+
       /**
        * Compact amount breakdown lines for Susan Master Test (Sewer Charge, Tax Charge, Past Due, Late Fee, Credit, Total amount due).
        * Uses panel total as authoritative, then reconciles sewer + tax so the printed lines sum with
@@ -31495,8 +31866,63 @@
           sewer = 0;
           tax = 0;
         }
+        let usedLastBillFace = false;
         if (
           !depositZeroComposition &&
+          !accountCreditOnly &&
+          lastBillRow &&
+          totalDue > 0.005
+        ) {
+          const billFace = masterTestAmountBreakdownFromLastBill(lastBillRow);
+          if (billFace && billFace.total > 0.005) {
+            const billFaceSum =
+              Math.round((billFace.sewer + billFace.tax + billFace.pastDue + billFace.lateFee) * 100) /
+              100;
+            if (
+              lateFee > 0.005 &&
+              Math.abs(totalDue - (billFace.total + lateFee)) < 0.03
+            ) {
+              sewer = billFace.sewer;
+              tax = billFace.tax;
+              usedLastBillFace = true;
+              try {
+                if (typeof window.masterTestLog === 'function') {
+                  window.masterTestLog('amountBreakdown:useLastBillFacePlusLateFee', {
+                    account: customer.accountNumber || customer.id,
+                    totalDue: totalDue,
+                    sewer: billFace.sewer,
+                    tax: billFace.tax,
+                    lateFee: lateFee
+                  });
+                }
+              } catch (eBillLateLog) {
+                /* ignore */
+              }
+            } else if (
+              Math.abs(totalDue - billFace.total) < 0.03 &&
+              Math.abs(billFaceSum - billFace.total) < 0.03
+            ) {
+              sewer = billFace.sewer;
+              tax = billFace.tax;
+              usedLastBillFace = true;
+              try {
+                if (typeof window.masterTestLog === 'function') {
+                  window.masterTestLog('amountBreakdown:useLastBillFace', {
+                    account: customer.accountNumber || customer.id,
+                    totalDue: totalDue,
+                    sewer: billFace.sewer,
+                    tax: billFace.tax
+                  });
+                }
+              } catch (eBillFaceLog) {
+                /* ignore */
+              }
+            }
+          }
+        }
+        if (
+          !depositZeroComposition &&
+          !usedLastBillFace &&
           typeof ledgerPostPaymentRemainingSnapshotFields === 'function' &&
           totalDue > 0.005
         ) {
@@ -31505,7 +31931,7 @@
           tax = Math.round(
             Math.max(0, totalDue - sewer - pastDue - lateFee + credit) * 100
           ) / 100;
-        } else if (!depositZeroComposition) {
+        } else if (!depositZeroComposition && !usedLastBillFace) {
           const taxCodes = Math.round((parseFloat(calc && calc.totalSurcharge) || 0) * 100) / 100;
           const puc = Math.round((parseFloat(calc && calc.pucSurchargeAmount) || 0) * 100) / 100;
           const taxCharges = Math.round((taxCodes + puc) * 100) / 100;
@@ -32149,6 +32575,27 @@
       }
 
       function developTestMasterTestStepDescription(stepDef) {
+        const lines = [];
+        if (stepDef && stepDef.advanceDateEnabled && stepDef.advanceDate) {
+          lines.push(
+            'Advance to future date: ' + developTestFormatAdvanceDateLabel(stepDef.advanceDate)
+          );
+        }
+        if (stepDef && stepDef.freshStart) {
+          lines.push('Do a fresh start');
+        }
+        if (stepDef && stepDef.billThem) lines.push('Bill them');
+        if (stepDef && stepDef.payEnabled) {
+          const raw =
+            stepDef.payAmount != null ? String(stepDef.payAmount).trim().replace(/[^0-9.]/g, '') : '';
+          const n = parseFloat(raw);
+          let amt = '$0';
+          if (!isNaN(n)) {
+            amt =
+              Math.abs(n - Math.round(n)) < 0.005 ? '$' + String(Math.round(n)) : '$' + n.toFixed(2);
+          }
+          lines.push('Have them pay ' + amt);
+        }
         const caps =
           stepDef && Array.isArray(stepDef.dataCaptures) && stepDef.dataCaptures.length
             ? stepDef.dataCaptures
@@ -32157,7 +32604,6 @@
                 'Log what the amount breakdown shows',
                 'Log View Past Due Details'
               ];
-        const lines = [];
         caps.forEach(function (c) {
           if (c && lines.indexOf(c) === -1) lines.push(c);
         });
@@ -32793,10 +33239,13 @@
        * set simulated date to 2026-01-01 (overlay day-walk when cfg.advanceMode is walk).
        */
       window.__developTestPrepareLiveMasterTest = async function (cfg) {
-        cfg = cfg || {};
+        cfg = developTestFillCreateModeDefaults(cfg || {});
         window.clearMasterTestOfflineMode();
         if (typeof window.masterTestLog === 'function') {
-          window.masterTestLog('livePrep:start', { accountNumber: cfg.accountNumber });
+          window.masterTestLog('livePrep:start', {
+            accountNumber: cfg.accountNumber,
+            customerMode: cfg.customerMode || 'existing'
+          });
         }
         try {
           if (window.__billModuleCustomersReady) {
@@ -32805,6 +33254,36 @@
         } catch (eReady) {
           /* ignore */
         }
+
+        let createMode = developTestShouldUseCreateMode(cfg);
+        if (!createMode) {
+          const preExisting = developTestResolveCustomer(cfg);
+          const acct = String(cfg.accountNumber || cfg.customerId || '').trim();
+          if (!preExisting && acct && acct !== 'CUS-3011000') {
+            cfg = developTestFillCreateModeDefaults(cfg);
+            if (developTestShouldUseCreateMode(cfg)) {
+              createMode = true;
+              cfg.customerMode = 'create';
+              if (typeof window.masterTestLog === 'function') {
+                window.masterTestLog('livePrep:inferCreateMode', {
+                  accountNumber: acct,
+                  customerCreatedDate: cfg.customerCreatedDate,
+                  customerFirstName: cfg.customerFirstName,
+                  customerLastName: cfg.customerLastName
+                });
+              }
+            }
+          }
+        } else {
+          cfg.customerMode = 'create';
+        }
+
+        if (createMode) {
+          const created = await window.__developTestEnsureCreateModeCustomer(cfg);
+          cfg.accountNumber = created.accountNumber;
+          cfg.customerNameMatch = created.customerName;
+        }
+
         const customer = developTestResolveCustomer(cfg);
         if (!customer) {
           throw new Error(
@@ -32841,17 +33320,25 @@
           : null;
         if (td) selectedDrawer = td;
 
-        // Anchor test date without walking the calendar — fresh start runs first inside runSusanMasterTest.
-        await window.setTestDate('2026-01-01', {
-          directAnchor: true,
-          skipRunSimulatedDayForAllCustomers: true
-        });
+        const anchorDate = createMode
+          ? developTestNormalizeAdvanceDateIso(
+              cfg.customerCreatedDate || cfg.newCustomerCreatedDate || ''
+            ) || '2026-01-01'
+          : '2026-01-01';
+        if (!createMode) {
+          await window.setTestDate(anchorDate, {
+            directAnchor: true,
+            skipRunSimulatedDayForAllCustomers: true
+          });
+        }
 
         if (typeof window.masterTestLog === 'function') {
           window.masterTestLog('livePrep:done', {
             customerId: customer.id,
             accountNumber: customer.accountNumber,
-            testDate: testDate
+            testDate: testDate,
+            customerMode: createMode ? 'create' : 'existing',
+            prorateDays: getFirstBillProrateDays(customer)
           });
         }
         return {
@@ -32859,7 +33346,8 @@
           customerId: customer.id,
           accountNumber: customer.accountNumber,
           testDate: testDate,
-          customerCount: Array.isArray(customers) ? customers.length : 0
+          customerCount: Array.isArray(customers) ? customers.length : 0,
+          customerMode: createMode ? 'create' : 'existing'
         };
       };
 
@@ -32965,7 +33453,7 @@
         <div class="mb-4 flex justify-center">
           <img src="PUBS Logo.png" alt="PUBS Logo" class="h-32 w-auto object-contain">
         </div>
-        <h1 class="text-4xl font-bold text-slate-900 dark:text-slate-100 mb-2">PUBS Billing System v1.7</h1>
+        <h1 class="text-4xl font-bold text-slate-900 dark:text-slate-100 mb-2">PUBS Billing System v1.8</h1>
         <p class="text-sm text-slate-500 dark:text-slate-500 mt-2">Please enter your credentials to continue</p>
       </div>
 

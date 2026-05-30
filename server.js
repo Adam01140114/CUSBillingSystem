@@ -106,6 +106,10 @@ app.post('/api/master-test/run', (req, res) => {
     const config = {
       accountNumber: String(body.accountNumber || body.customerId || 'CUS-3011000').trim(),
       customerName: String(body.customerName || '').trim(),
+      customerMode: String(body.customerMode || 'existing').trim() || 'existing',
+      customerFirstName: String(body.customerFirstName || '').trim(),
+      customerLastName: String(body.customerLastName || '').trim(),
+      customerCreatedDate: String(body.customerCreatedDate || '').trim(),
       steps: steps,
       advanceMode: body.advanceMode === 'walk' ? 'walk' : 'instant',
       testSlug: String(body.testSlug || '').trim()
@@ -183,8 +187,12 @@ app.put('/api/master-test/tests/:slug/package', (req, res) => {
     const slug = String(req.params.slug || '').trim();
     masterTestDisk.savePackageToDisk(slug, {
       name: body.name,
+      customerMode: body.customerMode,
       customerName: body.customerName,
       customerId: body.customerId,
+      customerFirstName: body.customerFirstName,
+      customerLastName: body.customerLastName,
+      customerCreatedDate: body.customerCreatedDate,
       stepDefs: body.stepDefs,
       foundationText: body.foundationText
     });
@@ -221,8 +229,12 @@ app.put('/api/master-test/tests/:slug', (req, res) => {
     const slug = String(req.params.slug || '').trim();
     masterTestDisk.savePackageToDisk(slug, {
       name: body.name,
+      customerMode: body.customerMode,
       customerName: body.customerName,
       customerId: body.customerId,
+      customerFirstName: body.customerFirstName,
+      customerLastName: body.customerLastName,
+      customerCreatedDate: body.customerCreatedDate,
       stepDefs: body.stepDefs,
       foundationText: body.foundationText
     });
