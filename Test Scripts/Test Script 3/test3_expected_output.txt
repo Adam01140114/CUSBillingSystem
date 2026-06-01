@@ -31,11 +31,11 @@ Late Fee
 Credit
 Total amount due
 $88.56
-$7.58
+$7.74
 $0
 $0
 $0
-$96.14
+$96.30
 
 View Past Due Details Shows:
 
@@ -75,21 +75,21 @@ $0
 0
 $0
 N/A
-$96.14
+$96.30
 N/A
-$96.14
+$96.30
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $88.56
 $3.59
-$3.99
+$4.15
 0
 $0
 $0
 N/A
 N/A
-$96.14
+$96.30
 
 Amount Breakdown Shows:
 
@@ -100,11 +100,11 @@ Late Fee
 Credit
 Total amount due
 $88.56
-$7.58
+$7.74
 $0
 $0
 $0
-$96.14
+$96.30
 
 View Past Due Details Shows:
 
@@ -151,11 +151,11 @@ Previous_amount
 Late_fee
 Credit
 Total_amount
-$96.14
+$96.30
 $0
 $0
 $0
-$96.14
+$96.30
 
 
 Step 3:
@@ -189,45 +189,45 @@ $0
 0
 $0
 N/A
-$96.14
+$96.30
 N/A
-$96.14
+$96.30
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $88.56
 $3.59
-$3.99
+$4.15
 0
 $0
 $0
 N/A
 N/A
-$96.14
+$96.30
 02/22/2026 12:00 AM
 Charge
 Late Fee
 $88.56
 $3.59
-$3.99
+$4.15
 0
 $0
 $0
 5
 N/A
-$101.14
+101.30
 02/22/2026 12:00 AM
 Status Update
 Current Status
 $88.56
 $3.59
-$3.99
+$4.15
 0
 $5.00
 $0
 N/A
 N/A
-$101.14
+101.30
 
 Amount Breakdown Shows:
 
@@ -238,11 +238,11 @@ Late Fee
 Credit
 Total amount due
 $88.56
-$7.58
+$7.74
 $0
 $5.00
 $0
-$101.14
+$101.30
 
 View Past Due Details Shows:
 
@@ -351,69 +351,69 @@ $0
 0
 $0
 N/A
-$96.14
+$96.30
 N/A
-$96.14
+$96.30
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $88.56
 $3.59
-$3.99
+$4.15
 0
 $0
 $0
 N/A
 N/A
-$96.14
+$96.30
 02/22/2026 12:00 AM
 Charge
 Late Fee
 $88.56
 $3.59
-$3.99
+$4.15
 0
 $0
 $0
 5
 N/A
-$101.14
+101.30
 02/22/2026 12:00 AM
 Status Update
 Current Status
 $88.56
 $3.59
-$3.99
+$4.15
 0
 $5.00
 $0
 N/A
 N/A
-$101.14
+101.30
 03/01/2026 12:00 AM
 Charge
 Billed Customer
-$168.36
-$6.83
-$7.58
+168.36
+6.83
+7.88
 0
 $5.00
 N/A
-$182.77
+183.07
 N/A
-$283.91
+$284.37
 03/01/2026 12:00 AM
 Status Update
 Current Status
 168.36
 6.83
-7.58
-96.14
-$5.00
+7.88
+96.30
+5
 $0
 N/A
 N/A
-$283.91
+$284.37
 
 Amount Breakdown Shows:
 
@@ -424,11 +424,11 @@ Late Fee
 Credit
 Total amount due
 $168.36
-$14.41
-$96.14
+$14.71
+$96.30
 $5.00
 $0
-$283.91
+$284.37
 
 View Past Due Details Shows:
 
@@ -534,11 +534,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$6.83
-$7.58
-$168.36
+6.83
+7.88
+168.36
 $0
-96.14
+96.30
 
 Bill PDF Preview Shows:
 
@@ -547,8 +547,8 @@ Previous_amount
 Late_fee
 Credit
 Total_amount
-$182.77
-$96.14
+$183.07
+$96.30
 $5.00
 $0
-$283.91
+$284.37
