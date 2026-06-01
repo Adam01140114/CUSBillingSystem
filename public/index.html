@@ -5150,6 +5150,13 @@
       return compute21DayLateFeeDollars(customer);
     }
 
+    /** PUC surcharge: percentage of sewer (adjustedServiceCost) only — not tax codes. */
+    function computePucSurchargeAmountForCycle(adjustedServiceCost) {
+      if (!pucSurcharge || pucSurcharge <= 0) return 0;
+      const sewer = Math.max(0, parseFloat(adjustedServiceCost) || 0);
+      return Math.round(sewer * (pucSurcharge / 100) * 100) / 100;
+    }
+
     /** Current-cycle subtotal + PUC only (no late fee, no side effects). */
     function getSubtotalBeforePucAndPucSurcharge(customer, opts) {
       opts = opts || {};
@@ -5184,10 +5191,7 @@
         });
       }
       const subtotalBeforePuc = adjustedServiceCost + totalSurcharge;
-      let pucSurchargeAmount = 0;
-      if (pucSurcharge > 0) {
-        pucSurchargeAmount = subtotalBeforePuc * (pucSurcharge / 100);
-      }
+      const pucSurchargeAmount = computePucSurchargeAmountForCycle(adjustedServiceCost);
       return { subtotalBeforePuc, pucSurchargeAmount, adjustedServiceCost, totalSurcharge };
     }
 
@@ -6977,8 +6981,8 @@
       let subtotalBeforePuc = adjustedServiceCost + totalSurcharge;
 
       let pucSurchargeAmount = 0;
-      if (pucSurcharge > 0 && !(billUiSnapshot && shouldSuppressPostFirstBillFullMonthAccrual(customer))) {
-        pucSurchargeAmount = subtotalBeforePuc * (pucSurcharge / 100);
+      if (!(billUiSnapshot && shouldSuppressPostFirstBillFullMonthAccrual(customer))) {
+        pucSurchargeAmount = computePucSurchargeAmountForCycle(adjustedServiceCost);
       }
       if (billUiSnapshot && shouldSuppressPostFirstBillFullMonthAccrual(customer)) {
         subtotalBeforePuc = 0;
@@ -7665,8 +7669,9 @@
       }
       taxCodeDetails.sort((a, b) => a.name.localeCompare(b.name));
       if (pucSurcharge > 0) {
+        const sewerBase = Math.max(0, parseFloat(calc.adjustedServiceCost) || 0);
         taxCodeDetails.push({
-          name: `PUC SCHG SW (${pucSurcharge.toFixed(2)}% x $${calc.subtotalBeforePuc.toFixed(2)})`,
+          name: `PUC SCHG SW (${pucSurcharge.toFixed(2)}% x $${sewerBase.toFixed(2)})`,
           amount: calc.pucSurchargeAmount
         });
       }
@@ -24054,7 +24059,8 @@
           if (pucSurcharge > 0) {
             const pucRow = document.createElement('div');
             pucRow.className = 'flex justify-between items-center py-2 border-b border-slate-200 dark:border-slate-600 last:border-b-0';
-            const pucDisplayText = `PUC SCHG SW (${pucSurcharge.toFixed(2)}% x $${calc.subtotalBeforePuc.toFixed(2)})`;
+            const sewerBase = Math.max(0, parseFloat(calc.adjustedServiceCost) || 0);
+            const pucDisplayText = `PUC SCHG SW (${pucSurcharge.toFixed(2)}% x $${sewerBase.toFixed(2)})`;
             pucRow.innerHTML = `
               <span class="text-slate-600 dark:text-slate-300">${pucDisplayText}</span>
               <span class="font-medium text-slate-800 dark:text-slate-100">$${(calc.pucSurchargeAmount || 0).toFixed(2)}</span>
