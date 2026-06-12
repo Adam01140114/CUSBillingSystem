@@ -18,22 +18,44 @@ if (!ADMIN_PASSWORD) {
   throw new Error('ADMIN_PASSWORD is not set in the environment. Please add it to your .env file.');
 }
 
-// Firebase Configuration
+// On-prem / system data store
+const systemDataStore = require('./tools/system-data-store.cjs');
+const onPremConfig = systemDataStore.readOnPremConfig();
+const ON_PREM_MODE =
+  onPremConfig.onPremEnabled === true ||
+  process.env.ON_PREM_MODE === '1' ||
+  process.env.ON_PREM_MODE === 'true';
+
+// Firebase Configuration (optional when ON_PREM_MODE=1)
 const requiredFirebaseEnvVars = [
   'FIREBASE_PROJECT_ID',
-  'FIREBASE_PRIVATE_KEY_ID', 
+  'FIREBASE_PRIVATE_KEY_ID',
   'FIREBASE_PRIVATE_KEY',
   'FIREBASE_CLIENT_EMAIL',
   'FIREBASE_CLIENT_ID'
 ];
 
-for (const envVar of requiredFirebaseEnvVars) {
-  if (!process.env[envVar]) {
-    throw new Error(`${envVar} is not set in the environment. Please add it to your .env file.`);
-  }
+const firebaseEnvReady = requiredFirebaseEnvVars.every((envVar) => !!process.env[envVar]);
+if (!firebaseEnvReady && !ON_PREM_MODE) {
+  throw new Error(
+    'Firebase env vars are missing. Set them in .env or enable on-prem mode (ON_PREM_MODE=1) after running npm run export:firebase.'
+  );
 }
-// Stripe package removed
-const admin         = require('firebase-admin');
+
+let admin = null;
+let db = null;
+function loadFirebaseAdmin() {
+  if (!firebaseEnvReady) return null;
+  if (!admin) {
+    try {
+      admin = require('firebase-admin');
+    } catch (e) {
+      console.warn('[firebase] admin SDK unavailable:', e.message);
+      return null;
+    }
+  }
+  return admin;
+}
 const bodyParser    = require('body-parser');
 const fileUpload    = require('express-fileupload');
 const path          = require('path');
@@ -44,8 +66,8 @@ const nodemailer    = require('nodemailer');
 const { spawn }     = require('child_process');
 
 const app = express();
-app.use(bodyParser.json({ limit: '2mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '2mb' }));
+app.use(bodyParser.json({ limit: '64mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '64mb' }));
 const masterTestTextBody = bodyParser.text({ type: 'text/plain', limit: '64mb' });
 app.use(fileUpload());          // parses multipart/form‑data (fields ➜ req.body, files ➜ req.files)
 app.use(cors());
@@ -103,6 +125,9 @@ app.post('/api/master-test/run', (req, res) => {
     }
     const jobId =
       'job-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    const storageModeRaw = String(body.storageMode || 'online').trim().toLowerCase();
+    const storageMode =
+      storageModeRaw === 'onprem' || storageModeRaw === 'on-prem' ? 'onprem' : 'online';
     const config = {
       accountNumber: String(body.accountNumber || body.customerId || 'CUS-3011000').trim(),
       customerName: String(body.customerName || '').trim(),
@@ -112,7 +137,8 @@ app.post('/api/master-test/run', (req, res) => {
       customerCreatedDate: String(body.customerCreatedDate || '').trim(),
       steps: steps,
       advanceMode: body.advanceMode === 'walk' ? 'walk' : 'instant',
-      testSlug: String(body.testSlug || '').trim()
+      testSlug: String(body.testSlug || '').trim(),
+      storageMode: storageMode
     };
     writeMasterTestJobFile(jobId, {
       status: 'queued',
@@ -266,27 +292,223 @@ app.delete('/api/master-test/tests/:slug', (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// Firebase
+// On-prem system data API (before static)
 // ────────────────────────────────────────────────────────────
-// Firebase configuration using environment variables
-const serviceAccount = {
-  type: "service_account",
-  project_id: process.env.FIREBASE_PROJECT_ID,
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-  private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  client_email: process.env.FIREBASE_CLIENT_EMAIL,
-  client_id: process.env.FIREBASE_CLIENT_ID,
-  auth_uri: "https://accounts.google.com/o/oauth2/auth",
-  token_uri: "https://oauth2.googleapis.com/token",
-  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-  client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${process.env.FIREBASE_CLIENT_EMAIL}`
-};
+if (ON_PREM_MODE) {
+  systemDataStore.loadStateFromDisk();
+  console.log('[on-prem] Mode enabled — using data/system_data.json');
+}
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`
+app.get('/api/storage/mode', (req, res) => {
+  const cfg = systemDataStore.readOnPremConfig();
+  const state = systemDataStore.getState();
+  res.json({
+    onPremEnabled:
+      cfg.onPremEnabled === true ||
+      ON_PREM_MODE ||
+      (state.meta && state.meta.onPremEnabled === true) ||
+      (state.settings &&
+        state.settings.toggles &&
+        state.settings.toggles.onPremModeEnabled === true),
+    hasDataFile:
+      fs.existsSync(systemDataStore.JSON_PATH) || fs.existsSync(systemDataStore.XLSX_PATH)
+  });
 });
-const db = admin.firestore();
+
+app.get('/api/system-data', (req, res) => {
+  try {
+    const state = systemDataStore.getState();
+    res.json(systemDataStore.buildClientSnapshot(state));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.put('/api/system-data', (req, res) => {
+  try {
+    if (req.headers['x-onprem-skip-disk'] === '1') {
+      return res.json({ ok: true, skipped: true, reason: 'master-test in-memory only' });
+    }
+    const body = req.body || {};
+    const saved = systemDataStore.applyClientSnapshot(body);
+    res.json({ ok: true, lastSavedAt: saved.meta.lastSavedAt });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.post('/api/system-data/reload-from-disk', (req, res) => {
+  try {
+    const state = systemDataStore.reloadStateFromDisk();
+    res.json({
+      ok: true,
+      customers: state.customers.length,
+      lastSavedAt: state.meta.lastSavedAt
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.post('/api/storage/toggle-onprem', (req, res) => {
+  try {
+    const enabled = !!(req.body && req.body.enabled);
+    systemDataStore.writeOnPremConfig({ onPremEnabled: enabled });
+    const state = systemDataStore.getState();
+    if (state.settings && state.settings.toggles) {
+      state.settings.toggles.onPremModeEnabled = enabled;
+    }
+    state.meta.onPremEnabled = enabled;
+    systemDataStore.saveStateToDisk(state);
+    res.json({ ok: true, onPremEnabled: enabled });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// Online ↔ on-prem sync jobs
+// ────────────────────────────────────────────────────────────
+const syncJobsDir = path.join(__dirname, 'data', '.sync-jobs');
+
+function readSyncJobFile(jobId) {
+  const safe = String(jobId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safe) return null;
+  const fp = path.join(syncJobsDir, safe + '.json');
+  if (!fs.existsSync(fp)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(fp, 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeSyncJobFile(jobId, patch) {
+  const safe = String(jobId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safe) return null;
+  fs.mkdirSync(syncJobsDir, { recursive: true });
+  const fp = path.join(syncJobsDir, safe + '.json');
+  let cur = {};
+  if (fs.existsSync(fp)) {
+    try {
+      cur = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    } catch (e) {
+      cur = {};
+    }
+  }
+  const next = Object.assign({}, cur, patch, { jobId: safe, updatedAt: Date.now() });
+  fs.writeFileSync(fp, JSON.stringify(next, null, 0), 'utf8');
+  return next;
+}
+
+app.post('/api/sync/online-to-onprem', (req, res) => {
+  try {
+    const jobId =
+      'sync-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    const port = process.env.PORT || 8000;
+    const baseUrl = (process.env.BASE_URL || `http://127.0.0.1:${port}`).replace(/\/$/, '');
+    const exportScript = path.join(__dirname, 'tools', 'export-firebase-via-browser.mjs');
+    if (!fs.existsSync(exportScript)) {
+      return res.status(500).json({ ok: false, error: 'Export script missing (tools/export-firebase-via-browser.mjs).' });
+    }
+    writeSyncJobFile(jobId, {
+      status: 'running',
+      progress: 5,
+      message: 'Exporting Firebase data via browser…',
+      direction: 'online-to-onprem',
+      error: null,
+      startedAt: Date.now()
+    });
+    const child = spawn(process.execPath, [exportScript], {
+      cwd: __dirname,
+      detached: true,
+      stdio: 'ignore',
+      env: Object.assign({}, process.env, {
+        BASE_URL: baseUrl,
+        ON_PREM_MODE: '0'
+      })
+    });
+    child.on('error', function (spawnErr) {
+      writeSyncJobFile(jobId, {
+        status: 'failed',
+        progress: 100,
+        message: 'Could not start export',
+        error: spawnErr.message || String(spawnErr)
+      });
+    });
+    child.on('exit', function (code) {
+      if (code === 0) {
+        try {
+          const state = systemDataStore.reloadStateFromDisk();
+          writeSyncJobFile(jobId, {
+            status: 'complete',
+            progress: 100,
+            message: 'Online data synced to on-prem storage.',
+            customers: state.customers.length,
+            locations: state.locations.length,
+            codes: state.codes.length,
+            users: state.users.length,
+            drawers: state.drawers.length,
+            error: null
+          });
+        } catch (reloadErr) {
+          writeSyncJobFile(jobId, {
+            status: 'failed',
+            progress: 100,
+            message: 'Export finished but reload failed',
+            error: reloadErr.message || String(reloadErr)
+          });
+        }
+      } else {
+        writeSyncJobFile(jobId, {
+          status: 'failed',
+          progress: 100,
+          message: 'Firebase export failed',
+          error: 'Export process exited with code ' + code
+        });
+      }
+    });
+    child.unref();
+    res.json({ ok: true, jobId: jobId });
+  } catch (err) {
+    console.error('[sync] online-to-onprem error:', err);
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.get('/api/sync/status/:jobId', (req, res) => {
+  const job = readSyncJobFile(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ ok: false, error: 'Sync job not found' });
+  }
+  res.json({ ok: true, job: job });
+});
+
+// ────────────────────────────────────────────────────────────
+// Firebase (optional in on-prem mode)
+// ────────────────────────────────────────────────────────────
+const firebaseAdmin = loadFirebaseAdmin();
+if (firebaseEnvReady && firebaseAdmin) {
+  admin = firebaseAdmin;
+  const serviceAccount = {
+    type: 'service_account',
+    project_id: process.env.FIREBASE_PROJECT_ID,
+    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+    private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    client_email: process.env.FIREBASE_CLIENT_EMAIL,
+    client_id: process.env.FIREBASE_CLIENT_ID,
+    auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+    token_uri: 'https://oauth2.googleapis.com/token',
+    auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+    client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${process.env.FIREBASE_CLIENT_EMAIL}`
+  };
+
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`
+  });
+  db = admin.firestore();
+}
 
 // ────────────────────────────────────────────────────────────
 // Static files
@@ -373,6 +595,9 @@ app.post('/api/verify-password', (req, res) => {
 // Admin forms data endpoint
 app.get('/api/admin-forms', async (req, res) => {
   try {
+    if (!db) {
+      return res.json({ success: true, forms: [] });
+    }
     console.log('Loading forms for admin console...');
     
     const formsRef = db.collection('forms');

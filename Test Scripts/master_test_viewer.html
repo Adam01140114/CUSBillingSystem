@@ -6379,6 +6379,15 @@
 
     const MASTER_TEST_VIEWER_URL = 'http://localhost:8000/test-scripts/master_test_viewer.html';
 
+    const VIEWER_STORAGE_MODE = (function resolveViewerStorageMode() {
+      const params = new URLSearchParams(window.location.search);
+      const raw = String(params.get('storageMode') || params.get('mode') || 'online')
+        .trim()
+        .toLowerCase();
+      if (raw === 'onprem' || raw === 'on-prem' || raw === 'on_prem') return 'onprem';
+      return 'online';
+    })();
+
     function getMasterTestApiUrl(path) {
       const p = path.charAt(0) === '/' ? path : '/' + path;
       if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
@@ -6529,7 +6538,8 @@
             customerCreatedDate: test.customerCreatedDate || '',
             steps: test.stepDefs,
             advanceMode: 'instant',
-            testSlug: test.slug
+            testSlug: test.slug,
+            storageMode: VIEWER_STORAGE_MODE
           })
         });
         if (!hit.res.ok || !hit.data.ok) {
