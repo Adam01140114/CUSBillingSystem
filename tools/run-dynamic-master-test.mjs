@@ -11,6 +11,8 @@ import { fileURLToPath } from 'url';
 const require = createRequire(import.meta.url);
 const { saveResultsToDisk } = require('./master-test-disk-store.cjs');
 const { buildOnPremInjectPayload, applyOnPremInitScript } = require('./master-test-onprem-payload.cjs');
+const { loadMasterTestCredentials, isConfigured } = require('./master-test-credentials.cjs');
+const { ensurePlaywrightBrowsers } = require('./ensure-playwright-browsers.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
@@ -83,37 +85,35 @@ async function main() {
 
   writeJob(jobFile, { status: 'running', progress: 2, message: 'Launching browser…' });
 
-  const localPath = path.join(repoRoot, 'tools', 'billing-test.local.json');
-  let email = process.env.FIREBASE_TEST_EMAIL || process.env.DEV_TEST_EMAIL;
-  let password = process.env.FIREBASE_TEST_PASSWORD || process.env.DEV_TEST_PASSWORD;
-  let baseUrl = (process.env.BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-
-  if (fs.existsSync(localPath)) {
-    try {
-      const j = JSON.parse(fs.readFileSync(localPath, 'utf8'));
-      email = email || j.email || j.FIREBASE_TEST_EMAIL;
-      password = password || j.password || j.FIREBASE_TEST_PASSWORD;
-      if (!process.env.BASE_URL && (j.baseUrl || j.BASE_URL)) {
-        baseUrl = String(j.baseUrl || j.BASE_URL).replace(/\/$/, '');
-      }
-    } catch (e) {
-      /* ignore */
-    }
-  }
+  const creds = loadMasterTestCredentials(repoRoot);
+  const email = creds.username;
+  const password = creds.password;
+  let baseUrl = (process.env.BASE_URL || creds.baseUrl || 'http://127.0.0.1:8000').replace(/\/$/, '');
 
   const storageMode = config.storageMode === 'onprem' ? 'onprem' : 'online';
   const isOnPrem = storageMode === 'onprem';
 
-  if (!isOnPrem && (!email || !password)) {
+  if (!isOnPrem && !isConfigured({ username: email, password: password })) {
     writeJob(jobFile, {
       status: 'failed',
-      error: 'Missing Firebase credentials (tools/billing-test.local.json)',
+      error:
+        'Missing billing login credentials for online tests. Save username and user code in the Master Tests screen, or copy tools/billing-test.local.example.json to tools/billing-test.local.json.',
       progress: 0
     });
     process.exit(1);
   }
 
   const { chromium } = await loadPlaywright();
+  writeJob(jobFile, { status: 'running', progress: 3, message: 'Preparing test browser…' });
+  const pwReady = await ensurePlaywrightBrowsers(repoRoot);
+  if (!pwReady.ok) {
+    writeJob(jobFile, {
+      status: 'failed',
+      error: pwReady.error || 'Playwright Chromium is not installed.',
+      progress: 0
+    });
+    process.exit(1);
+  }
   const headed = process.env.HEADED === '1' || process.env.HEADED === 'true';
   const onPremInjectPayload = isOnPrem ? buildOnPremInjectPayload({ includeSusan: false }) : null;
   const scenario = {
@@ -141,7 +141,36 @@ async function main() {
         ? 900000
         : 300000;
 
-  const browser = await chromium.launch({ headless: !headed });
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: !headed });
+  } catch (launchErr) {
+    const launchMsg = launchErr && launchErr.message ? launchErr.message : String(launchErr);
+    const retry = await ensurePlaywrightBrowsers(repoRoot);
+    if (retry.ok) {
+      try {
+        browser = await chromium.launch({ headless: !headed });
+      } catch (retryErr) {
+        writeJob(jobFile, {
+          status: 'failed',
+          progress: 0,
+          error:
+            'Could not launch Playwright Chromium after install attempt: ' +
+            (retryErr && retryErr.message ? retryErr.message : String(retryErr))
+        });
+        process.exit(1);
+      }
+    } else {
+      writeJob(jobFile, {
+        status: 'failed',
+        progress: 0,
+        error: launchMsg.indexOf("Executable doesn't exist") !== -1
+          ? 'Playwright Chromium is missing. Restart npm start and run the test again, or run: npm run playwright:install'
+          : launchMsg
+      });
+      process.exit(1);
+    }
+  }
   const page = await browser.newPage();
   page.setDefaultTimeout(300000);
   let progressTimer = null;

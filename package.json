@@ -23,7 +23,10 @@
     "test:onprem:3": "node tools/run-master-tests-onprem.mjs 3",
     "test:onprem:all": "node tools/run-master-tests-onprem.mjs all",
     "format:validation-report": "node tools/format-validation-report.mjs",
-    "verify:past-due-resolve": "node tools/verify-past-due-entry-resolve.mjs"
+    "verify:past-due-resolve": "node tools/verify-past-due-entry-resolve.mjs",
+    "postinstall": "node tools/ensure-playwright-browsers.cjs --install-if-missing",
+    "playwright:install": "node tools/ensure-playwright-browsers.cjs --install",
+    "test:master:playwright-smoke": "node tools/verify-master-test-playwright.mjs"
   },
   "dependencies": {
     "body-parser": "^1.20.2",

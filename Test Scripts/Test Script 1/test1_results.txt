@@ -1,7 +1,8 @@
 Step 1:
 
 Description: 
-Do a fresh start and then set the test date to 1/1/26
+Advance to future date: 1/1/26
+Do a fresh start
 Log what the payments/charges table shows
 Log what the amount breakdown shows
 Log View Past Due Details
@@ -24,13 +25,13 @@ Balance After
 Payment
 Fresh start
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 $0
-$178.36
+$178.38
 $0
 01/01/2026 12:00 AM
 Status Update
@@ -126,13 +127,13 @@ Balance After
 Payment
 Fresh start
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 $0
-$178.36
+$178.38
 $0
 01/01/2026 12:00 AM
 Status Update
@@ -155,21 +156,21 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 
 Amount Breakdown Shows:
 
@@ -180,11 +181,11 @@ Late Fee
 Credit
 Total amount due
 $168.36
-$10.00
+$10.02
 $0
 $0
 $0
-$178.36
+$178.38
 
 View Past Due Details Shows:
 
@@ -267,11 +268,11 @@ Previous_amount
 Late_fee
 Credit
 Total_amount
-$178.36
+$178.38
 $0
 $0
 $0
-$178.36
+$178.38
 
 
 Step 3:
@@ -302,13 +303,13 @@ Balance After
 Payment
 Fresh start
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 $0
-$178.36
+$178.38
 $0
 01/01/2026 12:00 AM
 Status Update
@@ -331,69 +332,69 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 01/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 02/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 N/A
-$178.36
+$178.38
 N/A
-$361.72
+$361.76
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 N/A
 N/A
-$361.72
+$361.76
 
 Amount Breakdown Shows:
 
@@ -404,11 +405,11 @@ Late Fee
 Credit
 Total amount due
 $168.36
-$10.00
-$178.36
+$10.02
+$178.38
 $5.00
 $0
-$361.72
+$361.76
 
 View Past Due Details Shows:
 
@@ -550,11 +551,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 Bill PDF Preview Shows:
 
@@ -563,11 +564,11 @@ Previous_amount
 Late_fee
 Credit
 Total_amount
-$178.36
-$178.36
+$178.38
+$178.38
 $5.00
 $0
-$361.72
+$361.76
 
 
 Step 4:
@@ -598,13 +599,13 @@ Balance After
 Payment
 Fresh start
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 $0
-$178.36
+$178.38
 $0
 01/01/2026 12:00 AM
 Status Update
@@ -627,117 +628,117 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 01/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 02/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 N/A
-$178.36
+$178.38
 N/A
-$361.72
+$361.76
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 N/A
 N/A
-$361.72
+$361.76
 02/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 5
 N/A
-$366.72
+$366.76
 02/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 $0
 N/A
 N/A
-$366.72
+$366.76
 03/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 N/A
-$178.36
+$178.38
 N/A
-$545.08
+$545.14
 03/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-361.72
+361.76
 $5.00
 $0
 N/A
 N/A
-$545.08
+$545.14
 
 Amount Breakdown Shows:
 
@@ -748,11 +749,11 @@ Late Fee
 Credit
 Total amount due
 $168.36
-$10.00
-$361.72
+$10.02
+$361.76
 $5.00
 $0
-$545.08
+$545.14
 
 View Past Due Details Shows:
 
@@ -894,11 +895,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 8]
 [ID PD-S4-0009]
@@ -912,11 +913,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 9]
 [ID PD-S4-0010]
@@ -930,11 +931,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 10]
 [ID PD-S4-0011]
@@ -948,11 +949,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 11]
 [ID PD-S4-0012]
@@ -964,13 +965,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 Bill PDF Preview Shows:
 
@@ -979,11 +980,11 @@ Previous_amount
 Late_fee
 Credit
 Total_amount
-$178.36
-$361.72
+$178.38
+$361.76
 $5.00
 $0
-$545.08
+$545.14
 
 
 Step 5:
@@ -1014,13 +1015,13 @@ Balance After
 Payment
 Fresh start
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 $0
-$178.36
+$178.38
 $0
 01/01/2026 12:00 AM
 Status Update
@@ -1043,128 +1044,128 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 01/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 02/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 N/A
-$178.36
+$178.38
 N/A
-$361.72
+$361.76
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 N/A
 N/A
-$361.72
+$361.76
 02/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 5
 N/A
-$366.72
+$366.76
 02/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 $0
 N/A
 N/A
-$366.72
+$366.76
 03/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 N/A
-$178.36
+$178.38
 N/A
-$545.08
+$545.14
 03/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-361.72
+361.76
 $5.00
 $0
 N/A
 N/A
-$545.08
+$545.14
 03/02/2026 12:00 AM
 Payment
 Security deposit
 168.36
-2.42
+2.44
 7.58
-361.72
+361.76
 $5.00
 $0
 N/A
-$545.08
+$545.14
 $0
 03/02/2026 12:00 AM
 Status Update
@@ -1187,21 +1188,21 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 
 Amount Breakdown Shows:
 
@@ -1212,11 +1213,11 @@ Late Fee
 Credit
 Total amount due
 $168.36
-$10.00
+$10.02
 $0
 $0
 $0
-$178.36
+$178.38
 
 View Past Due Details Shows:
 
@@ -1358,11 +1359,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 8]
 [ID PD-S5-0009]
@@ -1376,11 +1377,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 9]
 [ID PD-S5-0010]
@@ -1394,11 +1395,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 10]
 [ID PD-S5-0011]
@@ -1412,11 +1413,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 11]
 [ID PD-S5-0012]
@@ -1428,13 +1429,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 12]
 [ID PD-S5-0013]
@@ -1446,13 +1447,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 13]
 [ID PD-S5-0014]
@@ -1515,11 +1516,11 @@ Previous_amount
 Late_fee
 Credit
 Total_amount
-$178.36
+$178.38
 $0
 $0
 $0
-$178.36
+$178.38
 
 
 Step 6:
@@ -1548,13 +1549,13 @@ Balance After
 Payment
 Fresh start
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 $0
-$178.36
+$178.38
 $0
 01/01/2026 12:00 AM
 Status Update
@@ -1577,128 +1578,128 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 01/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 02/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 N/A
-$178.36
+$178.38
 N/A
-$361.72
+$361.76
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 N/A
 N/A
-$361.72
+$361.76
 02/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 5
 N/A
-$366.72
+$366.76
 02/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 $0
 N/A
 N/A
-$366.72
+$366.76
 03/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 N/A
-$178.36
+$178.38
 N/A
-$545.08
+$545.14
 03/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-361.72
+361.76
 $5.00
 $0
 N/A
 N/A
-$545.08
+$545.14
 03/02/2026 12:00 AM
 Payment
 Security deposit
 168.36
-2.42
+2.44
 7.58
-361.72
+361.76
 $5.00
 $0
 N/A
-$545.08
+$545.14
 $0
 03/02/2026 12:00 AM
 Status Update
@@ -1721,45 +1722,45 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 03/23/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 03/23/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 
 Amount Breakdown Shows:
 
@@ -1770,11 +1771,11 @@ Late Fee
 Credit
 Total amount due
 $168.36
-$10.00
+$10.02
 $0
 $5.00
 $0
-$183.36
+$183.38
 
 View Past Due Details Shows:
 
@@ -1916,11 +1917,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 8]
 [ID PD-S6-0009]
@@ -1934,11 +1935,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 9]
 [ID PD-S6-0010]
@@ -1952,11 +1953,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 10]
 [ID PD-S6-0011]
@@ -1970,11 +1971,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 11]
 [ID PD-S6-0012]
@@ -1986,13 +1987,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 12]
 [ID PD-S6-0013]
@@ -2004,13 +2005,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 13]
 [ID PD-S6-0014]
@@ -2129,13 +2130,13 @@ Balance After
 Payment
 Fresh start
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 $0
-$178.36
+$178.38
 $0
 01/01/2026 12:00 AM
 Status Update
@@ -2158,128 +2159,128 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 01/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 02/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 N/A
-$178.36
+$178.38
 N/A
-$361.72
+$361.76
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 N/A
 N/A
-$361.72
+$361.76
 02/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 5
 N/A
-$366.72
+$366.76
 02/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 $0
 N/A
 N/A
-$366.72
+$366.76
 03/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 N/A
-$178.36
+$178.38
 N/A
-$545.08
+$545.14
 03/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-361.72
+361.76
 $5.00
 $0
 N/A
 N/A
-$545.08
+$545.14
 03/02/2026 12:00 AM
 Payment
 Security deposit
 168.36
-2.42
+2.44
 7.58
-361.72
+361.76
 $5.00
 $0
 N/A
-$545.08
+$545.14
 $0
 03/02/2026 12:00 AM
 Status Update
@@ -2302,69 +2303,69 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 03/23/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 03/23/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 04/01/2026 12:00 AM
 Payment
 Check
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 $10.00
-$173.36
+$173.38
 04/01/2026 12:00 AM
 Status Update
 Current Status
-$163.36
-$2.42
-$2.58
+$168.36
+$0
+$0.02
 0
 $5.00
 $0
 N/A
 N/A
-$173.36
+$173.38
 
 Amount Breakdown Shows:
 
@@ -2374,12 +2375,12 @@ Past Due
 Late Fee
 Credit
 Total amount due
-$163.36
-$5.00
+$168.36
+$0.02
 $0
 $5.00
 $0
-$173.36
+$173.38
 
 View Past Due Details Shows:
 
@@ -2521,11 +2522,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 8]
 [ID PD-S7-0009]
@@ -2539,11 +2540,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 9]
 [ID PD-S7-0010]
@@ -2557,11 +2558,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 10]
 [ID PD-S7-0011]
@@ -2575,11 +2576,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 11]
 [ID PD-S7-0012]
@@ -2591,13 +2592,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 12]
 [ID PD-S7-0013]
@@ -2609,13 +2610,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 13]
 [ID PD-S7-0014]
@@ -2771,13 +2772,13 @@ Balance After
 Payment
 Fresh start
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 $0
-$178.36
+$178.38
 $0
 01/01/2026 12:00 AM
 Status Update
@@ -2800,128 +2801,128 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 01/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 02/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 N/A
-$178.36
+$178.38
 N/A
-$361.72
+$361.76
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 N/A
 N/A
-$361.72
+$361.76
 02/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 5
 N/A
-$366.72
+$366.76
 02/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 $0
 N/A
 N/A
-$366.72
+$366.76
 03/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 N/A
-$178.36
+$178.38
 N/A
-$545.08
+$545.14
 03/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-361.72
+361.76
 $5.00
 $0
 N/A
 N/A
-$545.08
+$545.14
 03/02/2026 12:00 AM
 Payment
 Security deposit
 168.36
-2.42
+2.44
 7.58
-361.72
+361.76
 $5.00
 $0
 N/A
-$545.08
+$545.14
 $0
 03/02/2026 12:00 AM
 Status Update
@@ -2944,93 +2945,93 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 03/23/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 03/23/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 04/01/2026 12:00 AM
 Payment
 Check
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 $10.00
-$173.36
-04/01/2026 12:00 AM
-Status Update
-Current Status
-$163.36
-$2.42
-$2.58
-0
-$5.00
-$0
-N/A
-N/A
-$173.36
-04/01/2026 12:00 AM
-Charge
-Billed Customer
-$0
-$0
-$0
-0
-$0
-10
-$178.36
-N/A
-$341.72
+$173.38
 04/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
 $0
+$0.02
+0
+$5.00
+$0
+N/A
+N/A
+$173.38
+04/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0
 $0.13
 0
-$0
+$5.00
+N/A
+$178.38
+N/A
+$351.76
+04/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+168.38
+$5.00
 $0
 N/A
 N/A
-$341.72
+$351.76
 
 Amount Breakdown Shows:
 
@@ -3041,11 +3042,11 @@ Late Fee
 Credit
 Total amount due
 $168.36
-$10.00
-$168.36
+$10.02
+$168.38
 $5.00
 $0
-$351.72
+$351.76
 
 View Past Due Details Shows:
 
@@ -3187,11 +3188,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 8]
 [ID PD-S8-0009]
@@ -3205,11 +3206,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 9]
 [ID PD-S8-0010]
@@ -3223,11 +3224,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 10]
 [ID PD-S8-0011]
@@ -3241,11 +3242,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 11]
 [ID PD-S8-0012]
@@ -3257,13 +3258,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 12]
 [ID PD-S8-0013]
@@ -3275,13 +3276,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 13]
 [ID PD-S8-0014]
@@ -3440,10 +3441,10 @@ Total (Past Due line)
 $0
 $0
 $0
+$0.13
+$168.36
 $0
-$0
-$10
-0
+$168.38
 
 Bill PDF Preview Shows:
 
@@ -3452,11 +3453,11 @@ Previous_amount
 Late_fee
 Credit
 Total_amount
-$178.36
-$168.36
+$178.38
+$168.38
 $5.00
 $0
-$351.72
+$351.76
 
 
 Step 9:
@@ -3487,13 +3488,13 @@ Balance After
 Payment
 Fresh start
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 $0
-$178.36
+$178.38
 $0
 01/01/2026 12:00 AM
 Status Update
@@ -3516,128 +3517,128 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 01/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 02/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 N/A
-$178.36
+$178.38
 N/A
-$361.72
+$361.76
 02/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 N/A
 N/A
-$361.72
+$361.76
 02/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $5.00
 $0
 5
 N/A
-$366.72
+$366.76
 02/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 $0
 N/A
 N/A
-$366.72
+$366.76
 03/01/2026 12:00 AM
 Charge
 Billed Customer
 $168.36
-$2.42
+$2.44
 $7.58
-178.36
+178.38
 $10.00
 N/A
-$178.36
+$178.38
 N/A
-$545.08
+$545.14
 03/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
-361.72
+361.76
 $5.00
 $0
 N/A
 N/A
-$545.08
+$545.14
 03/02/2026 12:00 AM
 Payment
 Security deposit
 168.36
-2.42
+2.44
 7.58
-361.72
+361.76
 $5.00
 $0
 N/A
-$545.08
+$545.14
 $0
 03/02/2026 12:00 AM
 Status Update
@@ -3660,128 +3661,128 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 03/23/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 5
 N/A
-$183.36
+$183.38
 03/23/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 N/A
-$183.36
+$183.38
 04/01/2026 12:00 AM
 Payment
 Check
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $5.00
 $0
 N/A
 $10.00
-$173.36
-04/01/2026 12:00 AM
-Status Update
-Current Status
-$163.36
-$2.42
-$2.58
-0
-$5.00
-$0
-N/A
-N/A
-$173.36
-04/01/2026 12:00 AM
-Charge
-Billed Customer
-$0
-$0
-$0
-0
-$0
-10
-$178.36
-N/A
-$341.72
+$173.38
 04/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
 $0
+$0.02
+0
+$5.00
+$0
+N/A
+N/A
+$173.38
+04/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0
 $0.13
 0
-$0
+$5.00
+N/A
+$178.38
+N/A
+$351.76
+04/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+168.38
+$5.00
 $0
 N/A
 N/A
-$341.72
+$351.76
 04/22/2026 12:00 AM
 Charge
 Late Fee
 $168.36
-$0
-$0.13
-0
-$0
+$2.44
+$7.58
+168.38
+$5.00
 $0
 5
 N/A
-$346.72
+$356.76
 04/22/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$0
-$0.13
-0
-$5.00
+$2.44
+$7.58
+168.38
+$10.00
 $0
 N/A
 N/A
-$346.72
+$356.76
 05/01/2026 12:00 AM
 Payment
 Security deposit
 168.36
-2.42
+2.44
 7.58
-168.36
+168.38
 $10.00
-10
+$0
 N/A
-$356.72
+$356.76
 $0
 05/01/2026 12:00 AM
 Status Update
@@ -3804,21 +3805,21 @@ $0
 0
 $0
 N/A
-$178.36
+$178.38
 N/A
-$178.36
+$178.38
 05/01/2026 12:00 AM
 Status Update
 Current Status
 $168.36
-$2.42
+$2.44
 $7.58
 0
 $0
 $0
 N/A
 N/A
-$178.36
+$178.38
 
 Amount Breakdown Shows:
 
@@ -3829,11 +3830,11 @@ Late Fee
 Credit
 Total amount due
 $168.36
-$10.00
+$10.02
 $0
 $0
 $0
-$178.36
+$178.38
 
 View Past Due Details Shows:
 
@@ -3975,11 +3976,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 8]
 [ID PD-S9-0009]
@@ -3993,11 +3994,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 9]
 [ID PD-S9-0010]
@@ -4011,11 +4012,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 10]
 [ID PD-S9-0011]
@@ -4029,11 +4030,11 @@ Credit
 Total (Past Due line)
 $0
 $0
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$178.36
+$178.38
 
 [ROW 11]
 [ID PD-S9-0012]
@@ -4045,13 +4046,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 12]
 [ID PD-S9-0013]
@@ -4063,13 +4064,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.36
+$178.38
 5
-$2.42
+$2.44
 $7.58
 $168.36
 $0
-$361.72
+$361.76
 
 [ROW 13]
 [ID PD-S9-0014]
@@ -4228,10 +4229,10 @@ Total (Past Due line)
 $0
 $0
 $0
+$0.13
+$168.36
 $0
-$0
-$10
-0
+$168.38
 
 [ROW 22]
 [ID PD-S9-0023]
@@ -4246,10 +4247,10 @@ Total (Past Due line)
 $0
 $0
 $0
+$0.13
+$168.36
 $0
-$0
-$0
-0
+$168.38
 
 [ROW 23]
 [ID PD-S9-0024]
@@ -4264,10 +4265,10 @@ Total (Past Due line)
 $0
 $0
 $0
+$0.13
+$168.36
 $0
-$0
-$10
-0
+$168.38
 
 [ROW 24]
 [ID PD-S9-0025]
@@ -4285,7 +4286,7 @@ $0
 $0.13
 $168.36
 $0
-$168.36
+$168.38
 
 [ROW 25]
 [ID PD-S9-0026]
@@ -4348,8 +4349,8 @@ Previous_amount
 Late_fee
 Credit
 Total_amount
-$178.36
+$178.38
 $0
 $0
 $0
-$178.36
+$178.38

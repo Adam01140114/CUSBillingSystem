@@ -76,6 +76,8 @@ app.use(cors());
 // Master test runner (viewer → Playwright) — before static so POST is never swallowed
 // ────────────────────────────────────────────────────────────
 const masterTestJobsDir = path.join(__dirname, 'Test Scripts', '.master-test-jobs');
+const masterTestCredentials = require('./tools/master-test-credentials.cjs');
+const playwrightBrowsers = require('./tools/ensure-playwright-browsers.cjs');
 
 function readMasterTestJobFile(jobId) {
   const safe = String(jobId || '').replace(/[^a-zA-Z0-9_-]/g, '');
@@ -109,25 +111,84 @@ function writeMasterTestJobFile(jobId, patch) {
 
 app.get('/api/master-test/ping', (req, res) => {
   const runnerPath = path.join(__dirname, 'tools', 'run-dynamic-master-test.mjs');
+  const credStatus = masterTestCredentials.credentialsStatus(__dirname);
+  const playwrightStatus = playwrightBrowsers.getPlaywrightStatus(__dirname);
   res.json({
     ok: true,
     runnerInstalled: fs.existsSync(runnerPath),
-    jobsDir: masterTestJobsDir
+    jobsDir: masterTestJobsDir,
+    credentials: credStatus,
+    playwright: playwrightStatus
   });
 });
 
-app.post('/api/master-test/run', (req, res) => {
+app.get('/api/master-test/credentials/status', (req, res) => {
+  try {
+    res.json({ ok: true, credentials: masterTestCredentials.credentialsStatus(__dirname) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.put('/api/master-test/credentials', (req, res) => {
+  try {
+    const body = req.body || {};
+    masterTestCredentials.saveMasterTestCredentials(__dirname, {
+      username: body.username || body.email,
+      password: body.password || body.userCode,
+      baseUrl: body.baseUrl
+    });
+    res.json({
+      ok: true,
+      credentials: masterTestCredentials.credentialsStatus(__dirname)
+    });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.post('/api/master-test/run', async (req, res) => {
   try {
     const body = req.body || {};
     const steps = body.steps;
     if (!Array.isArray(steps) || !steps.length) {
       return res.status(400).json({ ok: false, error: 'At least one step is required.' });
     }
+
+    const playwrightReady = await playwrightBrowsers.ensurePlaywrightBrowsers(__dirname);
+    if (!playwrightReady.ok) {
+      return res.status(503).json({
+        ok: false,
+        needsPlaywrightInstall: true,
+        error: playwrightReady.error || 'Playwright Chromium is not installed.'
+      });
+    }
+
     const jobId =
       'job-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
     const storageModeRaw = String(body.storageMode || 'online').trim().toLowerCase();
     const storageMode =
       storageModeRaw === 'onprem' || storageModeRaw === 'on-prem' ? 'onprem' : 'online';
+    let runnerCreds = masterTestCredentials.loadMasterTestCredentials(__dirname);
+    const bodyUsername = String(body.testUsername || body.username || '').trim();
+    const bodyPassword = String(body.testPassword || body.userCode || body.password || '').trim();
+    if (bodyUsername && bodyPassword) {
+      runnerCreds = {
+        username: bodyUsername,
+        password: bodyPassword,
+        baseUrl: runnerCreds.baseUrl,
+        source: 'request',
+        configured: true
+      };
+    }
+    if (storageMode === 'online' && !masterTestCredentials.isConfigured(runnerCreds)) {
+      return res.status(400).json({
+        ok: false,
+        needsCredentials: true,
+        error:
+          'Online master tests need billing login credentials. Enter your username and user code in the test viewer, or create tools/billing-test.local.json from tools/billing-test.local.example.json.'
+      });
+    }
     const config = {
       accountNumber: String(body.accountNumber || body.customerId || 'CUS-3011000').trim(),
       customerName: String(body.customerName || '').trim(),
@@ -159,10 +220,15 @@ app.post('/api/master-test/run', (req, res) => {
       cwd: __dirname,
       detached: true,
       stdio: 'ignore',
-      env: Object.assign({}, process.env, {
-        MASTER_TEST_JOB_FILE: jobFile,
-        MASTER_TEST_CONFIG: JSON.stringify(config)
-      })
+      env: Object.assign(
+        {},
+        process.env,
+        {
+          MASTER_TEST_JOB_FILE: jobFile,
+          MASTER_TEST_CONFIG: JSON.stringify(config)
+        },
+        masterTestCredentials.credentialsToRunnerEnv(runnerCreds)
+      )
     });
     child.on('error', function (spawnErr) {
       writeMasterTestJobFile(jobId, {
@@ -1729,6 +1795,23 @@ function formatFileSize(bytes) {
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  const pwStatus = playwrightBrowsers.getPlaywrightStatus(__dirname);
+  if (!pwStatus.ready) {
+    console.log('[master-test] Playwright Chromium missing — downloading in background (first-time setup)…');
+    playwrightBrowsers
+      .ensurePlaywrightBrowsers(__dirname)
+      .then(function (result) {
+        if (result.ok) {
+          console.log('[master-test] Playwright Chromium ready.');
+        } else {
+          console.warn('[master-test] Playwright Chromium setup failed:', result.error || 'unknown error');
+          console.warn('[master-test] Run manually: npm run playwright:install');
+        }
+      })
+      .catch(function (err) {
+        console.warn('[master-test] Playwright Chromium setup failed:', err.message || String(err));
+      });
+  }
   if (process.env.DEV_BILLING_SCENARIO === '1') {
     const base = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
     console.log('\n[DEV_BILLING_SCENARIO] Browser automation (login first, then open):\n');
