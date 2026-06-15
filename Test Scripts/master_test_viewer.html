@@ -951,79 +951,6 @@
     .test1-root .step-card {
       margin-bottom: 1rem;
     }
-    .master-test-credentials {
-      margin: 0.65rem 0 0;
-      padding: 0.75rem 0.9rem;
-      border-radius: 8px;
-      border: 1px solid rgba(96, 165, 250, 0.45);
-      background: rgba(59, 130, 246, 0.1);
-      color: var(--text);
-      font-size: 0.85rem;
-    }
-    .master-test-credentials.hidden {
-      display: none !important;
-    }
-    .master-test-credentials h2 {
-      margin: 0 0 0.35rem;
-      font-size: 0.95rem;
-      color: #bfdbfe;
-    }
-    .master-test-credentials p {
-      margin: 0 0 0.65rem;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-    .master-test-credentials-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 0.65rem;
-      align-items: end;
-    }
-    .master-test-credentials label {
-      display: block;
-      margin-bottom: 0.25rem;
-      font-size: 0.78rem;
-      color: var(--muted);
-    }
-    .master-test-credentials input {
-      width: 100%;
-      box-sizing: border-box;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: rgba(15, 23, 42, 0.35);
-      color: var(--text);
-      padding: 0.45rem 0.55rem;
-      font-size: 0.85rem;
-    }
-    .master-test-credentials-actions {
-      display: flex;
-      align-items: center;
-      gap: 0.65rem;
-      flex-wrap: wrap;
-      margin-top: 0.65rem;
-    }
-    .master-test-credentials button {
-      border-radius: 8px;
-      border: 1px solid rgba(96, 165, 250, 0.55);
-      background: rgba(37, 99, 235, 0.35);
-      color: #dbeafe;
-      padding: 0.45rem 0.85rem;
-      font-size: 0.85rem;
-      cursor: pointer;
-    }
-    .master-test-credentials button:hover {
-      background: rgba(37, 99, 235, 0.5);
-    }
-    .master-test-credentials-status {
-      font-size: 0.8rem;
-      color: #86efac;
-    }
-    .master-test-credentials-status.warn {
-      color: #fde68a;
-    }
-    .master-test-credentials-status.error {
-      color: #fecaca;
-    }
   </style>
 </head>
 <body>
@@ -1031,28 +958,6 @@
     <h1>Master Test viewer</h1>
     <p>Tests are stored on disk under <code>Test Scripts/Test Script N/</code> (not cookies or browser storage). Use <strong>Create New Test</strong> or <strong>Import Test</strong> to add tests, <strong>Import Data</strong> to load files, and <strong>Run All Tests</strong> to run every test. Requires <code>npm start</code>. Double-click a test title to edit steps; double-click cells to edit results.</p>
     <p id="masterTestApiBanner" class="hidden" style="margin:0.65rem 0 0;padding:0.55rem 0.75rem;border-radius:8px;border:1px solid rgba(251,191,36,0.45);background:rgba(251,191,36,0.12);color:#fde68a;font-size:0.85rem"></p>
-    <section id="masterTestCredentialsPanel" class="master-test-credentials hidden" aria-live="polite">
-      <h2>Online test login</h2>
-      <p>
-        Master tests run in a separate browser and sign in with the same <strong>username</strong> and
-        <strong>user code</strong> as the billing app login screen. Save them once here (stored locally in
-        <code>tools/billing-test.local.json</code>, gitignored).
-      </p>
-      <div class="master-test-credentials-grid">
-        <div>
-          <label for="mtvCredUsername">Username</label>
-          <input id="mtvCredUsername" type="text" autocomplete="username" placeholder="e.g. rich" />
-        </div>
-        <div>
-          <label for="mtvCredUserCode">User code</label>
-          <input id="mtvCredUserCode" type="password" autocomplete="current-password" placeholder="Billing login code" />
-        </div>
-      </div>
-      <div class="master-test-credentials-actions">
-        <button type="button" id="mtvCredSaveBtn">Save test login</button>
-        <span id="mtvCredStatus" class="master-test-credentials-status warn">Not configured</span>
-      </div>
-    </section>
   </header>
   <div class="header-actions">
     <button type="button" id="btnImportDataHeader">Import Data</button>
@@ -6471,170 +6376,8 @@
     let activeEditorIsExpected = false;
     const activeTestRuns = {};
     let masterTestApiAvailable = null;
-    let masterTestCredentialsConfigured = false;
-    let masterTestPlaywrightReady = false;
-
-    function getMasterTestCredentialInputs() {
-      return {
-        username: String((document.getElementById('mtvCredUsername') || {}).value || '').trim(),
-        userCode: String((document.getElementById('mtvCredUserCode') || {}).value || '').trim()
-      };
-    }
-
-    function setMasterTestCredentialStatus(message, tone) {
-      const el = document.getElementById('mtvCredStatus');
-      if (!el) return;
-      el.textContent = message || '';
-      el.classList.remove('warn', 'error');
-      if (tone) el.classList.add(tone);
-    }
-
-    function updateMasterTestCredentialsPanel(credentials) {
-      const panel = document.getElementById('masterTestCredentialsPanel');
-      if (!panel) return;
-      const showPanel = VIEWER_STORAGE_MODE === 'online';
-      panel.classList.toggle('hidden', !showPanel);
-      if (!showPanel) return;
-
-      masterTestCredentialsConfigured = !!(credentials && credentials.configured);
-      if (masterTestCredentialsConfigured) {
-        const hint = credentials.usernameHint ? ' (' + credentials.usernameHint + ')' : '';
-        setMasterTestCredentialStatus('Saved for online tests' + hint, '');
-      } else {
-        setMasterTestCredentialStatus('Required before running online tests', 'warn');
-      }
-    }
-
-    function updateMasterTestPlaywrightBanner(playwright) {
-      const banner = document.getElementById('masterTestApiBanner');
-      if (!banner || !playwright) return;
-      if (playwright.ready) {
-        if (masterTestApiAvailable) {
-          banner.classList.add('hidden');
-        }
-        masterTestPlaywrightReady = true;
-        return;
-      }
-      masterTestPlaywrightReady = false;
-      banner.classList.remove('hidden');
-      banner.textContent =
-        'Preparing Playwright Chromium for master tests. The first run may take a few minutes while the test browser downloads. You can also run: npm run playwright:install';
-    }
-
-    async function ensureMasterTestPlaywrightReady(options) {
-      options = options || {};
-      if (masterTestPlaywrightReady) return { ok: true };
-      try {
-        const hit = await fetchMasterTestApi('/api/master-test/ping', { cache: 'no-store' });
-        const playwright = hit.data && hit.data.playwright ? hit.data.playwright : null;
-        updateMasterTestPlaywrightBanner(playwright || { ready: false });
-        if (playwright && playwright.ready) return { ok: true };
-      } catch (e) {
-        /* fall through to run attempt */
-      }
-      if (options.waitForServerInstall) {
-        updateTestRunProgress('test-1', 2, 'Downloading Playwright Chromium…');
-        for (let attempt = 0; attempt < 120; attempt++) {
-          await sleep(3000);
-          try {
-            const hit = await fetchMasterTestApi('/api/master-test/ping', { cache: 'no-store' });
-            const playwright = hit.data && hit.data.playwright ? hit.data.playwright : null;
-            updateMasterTestPlaywrightBanner(playwright || { ready: false });
-            if (playwright && playwright.ready) return { ok: true };
-          } catch (e) {
-            /* keep waiting */
-          }
-        }
-      }
-      return {
-        ok: false,
-        error:
-          'Playwright Chromium is still downloading or failed to install. Wait a minute and try again, or run: npm run playwright:install'
-      };
-    }
-
-    async function refreshMasterTestCredentialsStatus() {
-      if (VIEWER_STORAGE_MODE !== 'online') {
-        updateMasterTestCredentialsPanel({ configured: true });
-        return { configured: true };
-      }
-      try {
-        const hit = await fetchMasterTestApi('/api/master-test/credentials/status', { cache: 'no-store' });
-        const credentials =
-          hit.data && hit.data.credentials ? hit.data.credentials : { configured: false };
-        updateMasterTestCredentialsPanel(credentials);
-        return credentials;
-      } catch (e) {
-        updateMasterTestCredentialsPanel({ configured: false });
-        setMasterTestCredentialStatus('Could not read credential status', 'error');
-        return { configured: false };
-      }
-    }
-
-    async function saveMasterTestCredentialsFromForm() {
-      const inputs = getMasterTestCredentialInputs();
-      if (!inputs.username || !inputs.userCode) {
-        setMasterTestCredentialStatus('Enter username and user code', 'warn');
-        return false;
-      }
-      setMasterTestCredentialStatus('Saving…', 'warn');
-      try {
-        const hit = await fetchMasterTestApi('/api/master-test/credentials', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: inputs.username,
-            userCode: inputs.userCode,
-            baseUrl: window.location.origin || 'http://127.0.0.1:8000'
-          })
-        });
-        if (!hit.res.ok || !hit.data.ok) {
-          throw new Error((hit.data && hit.data.error) || 'Could not save test login');
-        }
-        const credInput = document.getElementById('mtvCredUserCode');
-        if (credInput) credInput.value = '';
-        await refreshMasterTestCredentialsStatus();
-        return true;
-      } catch (err) {
-        setMasterTestCredentialStatus(err.message || String(err), 'error');
-        return false;
-      }
-    }
-
-    async function ensureMasterTestCredentialsReady(options) {
-      options = options || {};
-      if (VIEWER_STORAGE_MODE !== 'online') return { ok: true };
-      const status = await refreshMasterTestCredentialsStatus();
-      if (status && status.configured) return { ok: true };
-      const inputs = getMasterTestCredentialInputs();
-      if (inputs.username && inputs.userCode) {
-        if (options.autoSave !== false) {
-          const saved = await saveMasterTestCredentialsFromForm();
-          if (saved) return { ok: true };
-        }
-        return {
-          ok: true,
-          testUsername: inputs.username,
-          testPassword: inputs.userCode
-        };
-      }
-      return {
-        ok: false,
-        error:
-          'Online tests need billing login credentials. Enter your username and user code in “Online test login”, then click Save test login.'
-      };
-    }
 
     const MASTER_TEST_VIEWER_URL = 'http://localhost:8000/test-scripts/master_test_viewer.html';
-
-    const VIEWER_STORAGE_MODE = (function resolveViewerStorageMode() {
-      const params = new URLSearchParams(window.location.search);
-      const raw = String(params.get('storageMode') || params.get('mode') || 'online')
-        .trim()
-        .toLowerCase();
-      if (raw === 'onprem' || raw === 'on-prem' || raw === 'on_prem') return 'onprem';
-      return 'online';
-    })();
 
     function getMasterTestApiUrl(path) {
       const p = path.charAt(0) === '/' ? path : '/' + path;
@@ -6774,39 +6517,25 @@
       updateTestRunProgress(test.slug, 0, 'Starting test…');
       let jobId = null;
       try {
-        const credsReady = await ensureMasterTestCredentialsReady({ autoSave: false });
-        if (!credsReady.ok) {
-          throw new Error(credsReady.error);
-        }
-        const pwReady = await ensureMasterTestPlaywrightReady({ waitForServerInstall: true });
-        if (!pwReady.ok) {
-          throw new Error(pwReady.error);
-        }
-        const runBody = {
-          accountNumber: test.customerId,
-          customerName: test.customerName,
-          customerMode: test.customerMode || 'existing',
-          customerFirstName: test.customerFirstName || '',
-          customerLastName: test.customerLastName || '',
-          customerCreatedDate: test.customerCreatedDate || '',
-          steps: test.stepDefs,
-          advanceMode: 'instant',
-          testSlug: test.slug,
-          storageMode: VIEWER_STORAGE_MODE
-        };
-        if (credsReady.testUsername && credsReady.testPassword) {
-          runBody.testUsername = credsReady.testUsername;
-          runBody.testPassword = credsReady.testPassword;
-        }
         const hit = await fetchMasterTestApi('/api/master-test/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(runBody)
+          body: JSON.stringify({
+            accountNumber: test.customerId,
+            customerName: test.customerName,
+            customerMode: test.customerMode || 'existing',
+            customerFirstName: test.customerFirstName || '',
+            customerLastName: test.customerLastName || '',
+            customerCreatedDate: test.customerCreatedDate || '',
+            steps: test.stepDefs,
+            advanceMode: 'instant',
+            testSlug: test.slug
+          })
         });
         if (!hit.res.ok || !hit.data.ok) {
           throw new Error(
             (hit.data && hit.data.error) ||
-              'Could not start test. Run npm start (port 8000), configure online test login, and open ' +
+              'Could not start test. Run npm start (port 8000), configure tools/billing-test.local.json, and open ' +
                 MASTER_TEST_VIEWER_URL
           );
         }
@@ -6907,16 +6636,6 @@
         alert(
           'Test runner API is not ready. Run npm start and open ' + MASTER_TEST_VIEWER_URL
         );
-        return;
-      }
-      const credsReady = await ensureMasterTestCredentialsReady({ autoSave: false });
-      if (!credsReady.ok) {
-        alert(credsReady.error);
-        return;
-      }
-      const pwReady = await ensureMasterTestPlaywrightReady({ waitForServerInstall: true });
-      if (!pwReady.ok) {
-        alert(pwReady.error);
         return;
       }
       const queue = await buildRunAllTestsQueue();
@@ -8278,14 +7997,6 @@
               'Test runner API is not ready. Run npm start and open ' + MASTER_TEST_VIEWER_URL;
           }
         }
-        if (hit.data && hit.data.credentials) {
-          updateMasterTestCredentialsPanel(hit.data.credentials);
-        } else {
-          await refreshMasterTestCredentialsStatus();
-        }
-        if (hit.data && hit.data.playwright) {
-          updateMasterTestPlaywrightBanner(hit.data.playwright);
-        }
         if (runAllBtn) runAllBtn.disabled = !masterTestApiAvailable;
       } catch (e) {
         masterTestApiAvailable = false;
@@ -8293,23 +8004,11 @@
           banner.classList.remove('hidden');
           banner.textContent = e.message || String(e);
         }
-        updateMasterTestCredentialsPanel({ configured: false });
         if (runAllBtn) runAllBtn.disabled = true;
       }
     }
 
-    function wireMasterTestCredentialsPanel() {
-      const saveBtn = document.getElementById('mtvCredSaveBtn');
-      if (saveBtn && saveBtn.dataset.wired !== '1') {
-        saveBtn.dataset.wired = '1';
-        saveBtn.addEventListener('click', function () {
-          saveMasterTestCredentialsFromForm();
-        });
-      }
-    }
-
     async function initMasterTestViewer() {
-      wireMasterTestCredentialsPanel();
       await checkMasterTestApiOnLoad();
       try {
         await loadAllCustomTestsFromDisk();

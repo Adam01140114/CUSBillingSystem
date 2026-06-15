@@ -16,17 +16,8 @@
     "test_script2": "node \"Test Scripts/Test Script 2/run_test2.mjs\"",
     "test:master:susan": "node \"Test Scripts/Test Script 1/test1_script.mjs\"",
     "test:master:susan:offline": "node tools/run-master-test-offline.mjs",
-    "export:firebase": "node tools/export-firebase-to-system-data.cjs",
-    "start:onprem": "ON_PREM_MODE=1 node server.js",
-    "test:onprem:1": "node tools/run-master-tests-onprem.mjs 1",
-    "test:onprem:2": "node tools/run-master-tests-onprem.mjs 2",
-    "test:onprem:3": "node tools/run-master-tests-onprem.mjs 3",
-    "test:onprem:all": "node tools/run-master-tests-onprem.mjs all",
     "format:validation-report": "node tools/format-validation-report.mjs",
-    "verify:past-due-resolve": "node tools/verify-past-due-entry-resolve.mjs",
-    "postinstall": "node tools/ensure-playwright-browsers.cjs --install-if-missing",
-    "playwright:install": "node tools/ensure-playwright-browsers.cjs --install",
-    "test:master:playwright-smoke": "node tools/verify-master-test-playwright.mjs"
+    "verify:past-due-resolve": "node tools/verify-past-due-entry-resolve.mjs"
   },
   "dependencies": {
     "body-parser": "^1.20.2",

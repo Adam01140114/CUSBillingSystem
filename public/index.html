@@ -7,7 +7,6 @@
     content="width=device-width, initial-scale=1, viewport-fit=cover"
   />
   <title>PUBS Billing System V1.0 - Admin Portal</title>
-  <script src="onprem-bridge.js"></script>
   <!-- Tailwind CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- SheetJS for Excel parsing -->
@@ -196,418 +195,6 @@
     // Payment processing tracking
     window.paymentProcessingSessions = [];
     window.currentPaymentProcessing = null;
-    window.__billingCyclesCache = [];
-    window.__lastTogglesSettings = {};
-
-    window.onPremBuildSnapshot = function onPremBuildSnapshot() {
-      const toggles = window.__lastTogglesSettings || {};
-      toggles.testDate = testDate || toggles.testDate || null;
-      toggles.lateFeeTimerDays = getLateFeeTimerDays();
-      toggles.depositWithdrawDelinquencyDays = getDepositWithdrawDelinquencyDays();
-      toggles.autoApplyLateFees = autoApplyLateFees;
-      toggles.lateFeeGraceAmountEnabled = lateFeeGraceAmountEnabled;
-      toggles.lateFeeGraceAmountDollars = getLateFeeGraceAmountDollars();
-      toggles.freshStartUseSetDate = freshStartUseSetDate;
-      toggles.freshStartSetDate = freshStartSetDateYmd || null;
-      toggles.freshStartSingleCustomerEnabled = freshStartSingleCustomerEnabled;
-      toggles.freshStartSingleCustomerId = freshStartSingleCustomerId || null;
-      toggles.onPremModeEnabled = window.isOnPremStorage ? window.isOnPremStorage() : false;
-      window.__lastTogglesSettings = toggles;
-      return {
-        customers: customers,
-        locations: locations,
-        codes: codes,
-        users: users,
-        drawers: drawers,
-        paymentProcessingSessions: window.paymentProcessingSessions || [],
-        billingCycles: window.__billingCyclesCache || [],
-        settings: {
-          sewerCharge: { value: sewerCharge },
-          lateFee: { mode: lateFeeMode, flatPerCycle: lateFeeFlat, percent: lateFeePercent },
-          pucSurcharge: { value: pucSurcharge },
-          toggles: toggles,
-          paymentHierarchy: {
-            order: window.paymentHierarchyOrder || window.PAYMENT_HIERARCHY_DEFAULT,
-            updatedAt: new Date().toISOString()
-          },
-          deletedCodeNames: { names: Array.from(deletedCodeNames) }
-        },
-        meta: { onPremEnabled: true, lastSavedAt: new Date().toISOString() }
-      };
-    };
-
-    window.onPremApplyState = function onPremApplyState(state) {
-      if (!state) return;
-      if (Array.isArray(state.customers)) {
-        customers.length = 0;
-        state.customers.forEach((c) => customers.push(c));
-        filteredCustomers = customers.slice();
-      }
-      if (Array.isArray(state.locations)) {
-        locations.length = 0;
-        state.locations.forEach((l) => locations.push(l));
-        filteredLocations = locations.slice();
-      }
-      if (Array.isArray(state.codes)) {
-        codes.length = 0;
-        state.codes.forEach((c) => codes.push(c));
-      }
-      if (Array.isArray(state.users)) {
-        users.length = 0;
-        state.users.forEach((u) => users.push(u));
-        filteredUsers = users.slice();
-      }
-      if (Array.isArray(state.drawers)) {
-        drawers.length = 0;
-        state.drawers.forEach((d) => drawers.push(d));
-      }
-      window.paymentProcessingSessions = Array.isArray(state.paymentProcessingSessions)
-        ? state.paymentProcessingSessions
-        : [];
-      window.__billingCyclesCache = Array.isArray(state.billingCycles) ? state.billingCycles : [];
-      const settings = state.settings || {};
-      if (settings.sewerCharge && settings.sewerCharge.value != null) sewerCharge = settings.sewerCharge.value;
-      if (settings.lateFee) {
-        lateFeeMode = settings.lateFee.mode || 'flat';
-        lateFeeFlat = settings.lateFee.flatPerCycle != null ? settings.lateFee.flatPerCycle : lateFeeFlat;
-        lateFeePercent = settings.lateFee.percent != null ? settings.lateFee.percent : lateFeePercent;
-      }
-      if (settings.pucSurcharge && settings.pucSurcharge.value != null) pucSurcharge = settings.pucSurcharge.value;
-      if (settings.paymentHierarchy && Array.isArray(settings.paymentHierarchy.order)) {
-        window.paymentHierarchyOrder = normalizePaymentHierarchyOrder(settings.paymentHierarchy.order);
-      }
-      if (settings.deletedCodeNames && Array.isArray(settings.deletedCodeNames.names)) {
-        deletedCodeNames = new Set(settings.deletedCodeNames.names);
-      }
-      if (settings.toggles) {
-        window.__lastTogglesSettings = settings.toggles;
-        if (settings.toggles.testDate) testDate = settings.toggles.testDate;
-        if (settings.toggles.lateFeeTimerDays != null) lateFeeTimerDays = parseInt(settings.toggles.lateFeeTimerDays, 10) || 21;
-        if (settings.toggles.depositWithdrawDelinquencyDays != null) {
-          depositWithdrawDelinquencyDays = parseInt(settings.toggles.depositWithdrawDelinquencyDays, 10) || 60;
-        }
-        if (settings.toggles.autoApplyLateFees != null) autoApplyLateFees = !!settings.toggles.autoApplyLateFees;
-        if (settings.toggles.onPremModeEnabled != null) window.__ON_PREM_MODE = !!settings.toggles.onPremModeEnabled;
-      }
-      if (state.meta && state.meta.onPremEnabled != null) window.__ON_PREM_MODE = !!state.meta.onPremEnabled;
-    };
-
-    window.exportAllFirestoreCollections = async function exportAllFirestoreCollections() {
-      try {
-        if (window.firebaseAuth && !window.firebaseAuth.getCurrentUser()) {
-          await window.firebaseAuth.signInAnonymously();
-        }
-      } catch (e) {
-        /* continue — rules may still allow reads */
-      }
-      const collections = [
-        'customers',
-        'locations',
-        'codes',
-        'users',
-        'drawers',
-        'paymentProcessingSessions',
-        'billingCycles'
-      ];
-      const out = {};
-      for (const colName of collections) {
-        const snap = await getDocs(collection(db, colName));
-        out[colName] = [];
-        snap.forEach((docSnap) => {
-          out[colName].push({ id: docSnap.id, ...docSnap.data() });
-        });
-      }
-      const settingsDocs = ['sewerCharge', 'lateFee', 'pucSurcharge', 'toggles', 'paymentHierarchy', 'deletedCodeNames'];
-      out.settings = {};
-      for (const docId of settingsDocs) {
-        const docSnap = await getDoc(doc(db, 'settings', docId));
-        if (docSnap.exists()) out.settings[docId] = docSnap.data();
-      }
-      return out;
-    };
-
-    window.exportBillingSnapshotForOnPrem = async function exportBillingSnapshotForOnPrem() {
-      let billingCycles = window.__billingCyclesCache || [];
-      if (!(window.isOnPremStorage && window.isOnPremStorage())) {
-        try {
-          const billingCyclesRef = collection(db, 'billingCycles');
-          const snapshot = await getDocs(billingCyclesRef);
-          billingCycles = [];
-          snapshot.forEach((docSnap) => {
-            billingCycles.push({ id: docSnap.id, ...docSnap.data() });
-          });
-        } catch (e) {
-          /* keep cache */
-        }
-      }
-      const snap = window.onPremBuildSnapshot();
-      snap.billingCycles = billingCycles;
-      snap.meta = Object.assign({}, snap.meta || {}, {
-        exportedAt: new Date().toISOString(),
-        onPremEnabled: true
-      });
-      return snap;
-    };
-
-    window.toggleOnPremMode = async function toggleOnPremMode(enabled) {
-      const next = !!enabled;
-      if (next && !confirm('Enable on-prem mode? Firebase will no longer be used for data storage. Ensure you have exported data first (npm run export:firebase).')) {
-        const cb = document.getElementById('toggleOnPremMode');
-        if (cb) cb.checked = false;
-        return;
-      }
-      try {
-        const res = await fetch('/api/storage/toggle-onprem', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: next })
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.error || 'Toggle failed');
-        window.__ON_PREM_MODE = next;
-        alert(next ? 'On-prem mode enabled. Reloading…' : 'Firebase mode enabled. Reloading…');
-        window.location.reload();
-      } catch (e) {
-        alert('Could not change storage mode: ' + (e.message || e));
-        const cb = document.getElementById('toggleOnPremMode');
-        if (cb) cb.checked = !next;
-      }
-    };
-
-    function setSyncStorageStatus(message, isError) {
-      const el = document.getElementById('syncStorageStatus');
-      if (!el) return;
-      el.textContent = message || '';
-      el.classList.remove('text-red-600', 'dark:text-red-400', 'text-slate-600', 'dark:text-slate-300');
-      if (isError) {
-        el.classList.add('text-red-600', 'dark:text-red-400');
-      } else {
-        el.classList.add('text-slate-600', 'dark:text-slate-300');
-      }
-    }
-
-    async function pollSyncJobUntilDone(jobId, onProgress) {
-      const maxAttempts = 600;
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const res = await fetch('/api/sync/status/' + encodeURIComponent(jobId), { cache: 'no-store' });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-          throw new Error((data && data.error) || 'Could not read sync status');
-        }
-        const job = data.job || {};
-        if (typeof onProgress === 'function') onProgress(job);
-        if (job.status === 'complete') return job;
-        if (job.status === 'failed') {
-          throw new Error(job.error || job.message || 'Sync failed');
-        }
-        await new Promise(function (resolve) {
-          setTimeout(resolve, 2000);
-        });
-      }
-      throw new Error('Sync timed out');
-    }
-
-    async function ensureFirebaseAuthForDataSync() {
-      if (window.firebaseAuth && window.firebaseAuth.getCurrentUser()) return;
-      if (!window.firebaseAuth) {
-        throw new Error('Firebase is not available in this session.');
-      }
-      const anon = await window.firebaseAuth.signInAnonymously();
-      if (anon && anon.success) return;
-      throw new Error(
-        (anon && anon.error) || 'Could not sign in to Firebase. Log in and try again.'
-      );
-    }
-
-    async function replaceFirestoreCollectionFromSnapshot(colName, items, onProgress) {
-      const colRef = collection(db, colName);
-      const existingSnap = await getDocs(colRef);
-      const toDelete = [];
-      existingSnap.forEach(function (docSnap) {
-        toDelete.push(docSnap);
-      });
-      for (let i = 0; i < toDelete.length; i += 500) {
-        const batch = writeBatch(db);
-        toDelete.slice(i, i + 500).forEach(function (docSnap) {
-          batch.delete(docSnap.ref);
-        });
-        await batch.commit();
-        if (onProgress) {
-          onProgress(colName, 'deleting', Math.min(i + 500, toDelete.length), toDelete.length);
-        }
-        if (i + 500 < toDelete.length) {
-          await new Promise(function (resolve) {
-            setTimeout(resolve, 80);
-          });
-        }
-      }
-      const list = Array.isArray(items) ? items.filter(Boolean) : [];
-      for (let i = 0; i < list.length; i += 500) {
-        const batch = writeBatch(db);
-        const chunk = list.slice(i, Math.min(i + 500, list.length));
-        chunk.forEach(function (item) {
-          const docId = String(item.id || '').trim();
-          if (!docId) return;
-          batch.set(doc(colRef, docId), item);
-        });
-        await batch.commit();
-        if (onProgress) {
-          onProgress(colName, 'writing', Math.min(i + 500, list.length), list.length);
-        }
-        if (i + 500 < list.length) {
-          await new Promise(function (resolve) {
-            setTimeout(resolve, 80);
-          });
-        }
-      }
-    }
-
-    window.importSystemDataSnapshotToFirestore = async function importSystemDataSnapshotToFirestore(
-      snapshot,
-      onProgress
-    ) {
-      if (!snapshot || typeof snapshot !== 'object') {
-        throw new Error('Invalid system data snapshot');
-      }
-      await ensureFirebaseAuthForDataSync();
-      const settings = snapshot.settings || {};
-      const toggles = Object.assign({}, settings.toggles || {});
-      toggles.onPremModeEnabled = false;
-      settings.toggles = toggles;
-
-      const collections = [
-        ['customers', snapshot.customers],
-        ['locations', snapshot.locations],
-        ['codes', snapshot.codes],
-        ['users', snapshot.users],
-        ['drawers', snapshot.drawers],
-        ['paymentProcessingSessions', snapshot.paymentProcessingSessions],
-        ['billingCycles', snapshot.billingCycles]
-      ];
-
-      for (const entry of collections) {
-        const colName = entry[0];
-        const items = entry[1];
-        if (onProgress) onProgress('Syncing ' + colName + '…');
-        await replaceFirestoreCollectionFromSnapshot(colName, items, function (name, phase, done, total) {
-          if (onProgress) {
-            onProgress(name + ': ' + phase + ' ' + done + '/' + total);
-          }
-        });
-      }
-
-      const settingsDocs = [
-        ['sewerCharge', settings.sewerCharge],
-        ['lateFee', settings.lateFee],
-        ['pucSurcharge', settings.pucSurcharge],
-        ['toggles', settings.toggles],
-        ['paymentHierarchy', settings.paymentHierarchy],
-        ['deletedCodeNames', settings.deletedCodeNames]
-      ];
-      for (const pair of settingsDocs) {
-        const docId = pair[0];
-        const payload = pair[1];
-        if (payload == null) continue;
-        if (onProgress) onProgress('Syncing settings/' + docId + '…');
-        await setDoc(doc(db, 'settings', docId), payload);
-      }
-    };
-
-    window.syncOnlineDataToOnPrem = async function syncOnlineDataToOnPrem() {
-      if (
-        !confirm(
-          'Replace local on-prem data (system_data.json) with the current Firebase data? This cannot be undone without another sync.'
-        )
-      ) {
-        return;
-      }
-      setSyncStorageStatus('Starting online → on-prem sync…');
-      try {
-        const res = await fetch('/api/sync/online-to-onprem', { method: 'POST' });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-          throw new Error((data && data.error) || 'Could not start sync');
-        }
-        const job = await pollSyncJobUntilDone(data.jobId, function (j) {
-          setSyncStorageStatus(j.message || 'Syncing…');
-        });
-        const summary =
-          'Sync complete. Customers: ' +
-          (job.customers != null ? job.customers : '?') +
-          ', locations: ' +
-          (job.locations != null ? job.locations : '?') +
-          '.';
-        setSyncStorageStatus(summary);
-        if (
-          confirm(
-            summary +
-              ' Reload the app now to load the updated on-prem data?'
-          )
-        ) {
-          window.location.reload();
-        }
-      } catch (e) {
-        setSyncStorageStatus('Sync failed: ' + (e.message || e), true);
-        alert('Sync online → on-prem failed: ' + (e.message || e));
-      }
-    };
-
-    window.syncOnPremDataToOnline = async function syncOnPremDataToOnline() {
-      if (
-        !confirm(
-          'Replace ALL Firebase data with the current on-prem system data? This overwrites online collections and settings.'
-        )
-      ) {
-        return;
-      }
-      setSyncStorageStatus('Preparing on-prem snapshot…');
-      try {
-        if (window.isOnPremStorage && window.isOnPremStorage()) {
-          await window.onPremFlushSave();
-        }
-        let snapshot = null;
-        if (window.isOnPremStorage && window.isOnPremStorage() && typeof window.onPremBuildSnapshot === 'function') {
-          snapshot = window.onPremBuildSnapshot();
-        } else {
-          const res = await fetch('/api/system-data', { cache: 'no-store' });
-          if (!res.ok) throw new Error('Could not load on-prem system data (' + res.status + ')');
-          snapshot = await res.json();
-        }
-        if (!snapshot || !Array.isArray(snapshot.customers)) {
-          throw new Error('On-prem data is empty or unavailable');
-        }
-        await importSystemDataSnapshotToFirestore(snapshot, function (msg) {
-          setSyncStorageStatus(msg);
-        });
-        const doneMsg =
-          'On-prem data pushed to Firebase (' +
-          snapshot.customers.length +
-          ' customers). Online mode toggle was cleared in Firebase settings.';
-        setSyncStorageStatus(doneMsg);
-        alert(doneMsg);
-      } catch (e) {
-        setSyncStorageStatus('Sync failed: ' + (e.message || e), true);
-        alert('Sync on-prem → online failed: ' + (e.message || e));
-      }
-    };
-
-    window.refreshSettingsTestingIframe = function refreshSettingsTestingIframe() {
-      const iframe = document.getElementById('settingsTestingIframe');
-      const badge = document.getElementById('settingsTestingModeBadge');
-      if (!iframe) return;
-      const mode = window.isOnPremStorage && window.isOnPremStorage() ? 'onprem' : 'online';
-      const label = mode === 'onprem' ? 'On-prem (local system_data)' : 'Online (Firebase)';
-      if (badge) badge.textContent = 'Test runner storage: ' + label;
-      const nextSrc =
-        '/test-scripts/master_test_viewer.html?storageMode=' +
-        encodeURIComponent(mode) +
-        '&embed=1&ts=' +
-        Date.now();
-      if (iframe.dataset.storageMode !== mode) {
-        iframe.src = nextSrc;
-        iframe.dataset.storageMode = mode;
-      }
-    };
 
     function logBatch(message, data) {
       const payload = data !== undefined ? data : '';
@@ -735,10 +322,6 @@
 
     // Firestore functions
     async function saveLocationsToFirestore(progressCallback) {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        window.onPremScheduleSave();
-        return;
-      }
       try {
         const locationsRef = collection(db, 'locations');
         // Clear existing locations first
@@ -775,11 +358,6 @@
     }
 
     async function loadLocationsFromFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        filteredLocations = [...locations];
-        updateLocationsTable();
-        return;
-      }
       try {
 
         const effectiveUser = window.getEffectiveUser ? window.getEffectiveUser() : null;
@@ -813,19 +391,6 @@
 
     // Load drawers from Firestore
     async function loadDrawersFromFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        if (window.__MASTER_TEST_OFFLINE_DRAWER) {
-          const injected = JSON.parse(JSON.stringify(window.__MASTER_TEST_OFFLINE_DRAWER));
-          drawers = [injected];
-        }
-        try {
-          if (typeof syncSystemTestingDrawerFromToggle === 'function') {
-            await syncSystemTestingDrawerFromToggle({ reason: 'onPremLoadDrawers' });
-          }
-        } catch (e) { /* ignore */ }
-        await updateSettingsDrawersTable();
-        return;
-      }
       try {
         if (window.__MASTER_TEST_OFFLINE_DRAWER) {
           const injected = JSON.parse(JSON.stringify(window.__MASTER_TEST_OFFLINE_DRAWER));
@@ -907,10 +472,6 @@
     // Save drawers to Firestore
     async function saveDrawersToFirestore() {
       if (window.__MASTER_TEST_SKIP_FIRESTORE_PERSIST) return;
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        window.onPremScheduleSave();
-        return;
-      }
       try {
 
         const drawersRef = collection(db, 'drawers');
@@ -1120,10 +681,6 @@
 
     // Save all customers to Firestore (used for imports - replaces all customers)
     async function saveAllCustomersToFirestore(progressCallback) {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        await window.onPremFlushSave();
-        return;
-      }
       try {
 
         const customersRef = collection(db, 'customers');
@@ -1193,10 +750,6 @@
 
     // Save/update customers to Firestore (used for regular updates - updates existing customers)
     async function saveCustomersToFirestore(progressCallback) {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        await window.onPremFlushSave();
-        return;
-      }
       try {
 
         const customersRef = collection(db, 'customers');
@@ -1274,19 +827,6 @@
         }
         return;
       }
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        if (customer && customer.id) {
-          if (typeof syncPastDueCompositionToPastDueField === 'function') {
-            syncPastDueCompositionToPastDueField(customer);
-          }
-          const idx = customers.findIndex((c) => c && c.id === customer.id);
-          if (idx >= 0) customers[idx] = customer;
-          else customers.push(customer);
-          filteredCustomers = customers.slice();
-        }
-        window.onPremScheduleSave();
-        return;
-      }
       if (!customer || !customer.id) {
         throw new Error('Customer object with valid id is required');
       }
@@ -1302,23 +842,12 @@
       if (!location || !location.id) {
         throw new Error('Location object with valid id is required');
       }
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        window.onPremScheduleSave();
-        return;
-      }
       const locationsRef = collection(db, 'locations');
       const locationRef = doc(locationsRef, location.id);
       await setDoc(locationRef, location);
     }
 
     async function loadCustomersFromFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        filteredCustomers = [...customers];
-        updateCustomerTable();
-        populatePaymentCustomerSelect();
-        if (typeof syncFreshStartSetDateUiFromGlobals === 'function') syncFreshStartSetDateUiFromGlobals();
-        return;
-      }
       try {
         if (window.__MASTER_TEST_PENDING_CUSTOMER) {
           const injected = JSON.parse(JSON.stringify(window.__MASTER_TEST_PENDING_CUSTOMER));
@@ -1411,10 +940,6 @@
     }
 
     async function saveCodesToFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        window.onPremScheduleSave();
-        return;
-      }
       try {
 
         const codesRef = collection(db, 'codes');
@@ -1466,10 +991,6 @@
     }
 
     async function loadCodesFromFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        updateCodesTable();
-        return;
-      }
       try {
         // First, load deleted code names to prevent recreation
         try {
@@ -1508,10 +1029,6 @@
     }
 
     async function saveUsersToFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        window.onPremScheduleSave();
-        return;
-      }
       try {
         const usersRef = collection(db, 'users');
         const existingUsers = await getDocs(usersRef);
@@ -1530,12 +1047,6 @@
     }
 
     async function loadUsersFromFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        filteredUsers = [...users];
-        if (typeof updateSettingsUsersTable === 'function') updateSettingsUsersTable();
-        if (typeof populateBatchStartUserSelect === 'function') populateBatchStartUserSelect();
-        return;
-      }
 
       try {
         if (window.__MASTER_TEST_OFFLINE_USERS && Array.isArray(window.__MASTER_TEST_OFFLINE_USERS)) {
@@ -1588,11 +1099,6 @@
     let hierarchyLoadVersion = 0;
 
     async function loadHierarchyOrder() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        renderHierarchyList();
-        hierarchyLoaded = true;
-        return;
-      }
       try {
         const loadVersion = ++hierarchyLoadVersion;
         const hierarchyRef = doc(db, 'settings', 'paymentHierarchy');
@@ -1621,12 +1127,6 @@
     }
 
     window.saveHierarchyOrder = async function(options = {}) {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        hierarchyIsDirty = false;
-        window.onPremScheduleSave();
-        if (!options.silent) alert('Hierarchy order saved successfully!');
-        return;
-      }
       try {
         const hierarchyRef = doc(db, 'settings', 'paymentHierarchy');
         await setDoc(hierarchyRef, {
@@ -1785,10 +1285,6 @@
 
     // Load sewer charge from Firestore
     async function loadSewerChargeFromFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        updateSewerChargeDisplay();
-        return;
-      }
       try {
         const settingsRef = doc(db, 'settings', 'sewerCharge');
         const settingsDoc = await getDoc(settingsRef);
@@ -1813,10 +1309,6 @@
 
     // Save sewer charge to Firestore
     async function saveSewerChargeToFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        window.onPremScheduleSave();
-        return;
-      }
       try {
         const settingsRef = doc(db, 'settings', 'sewerCharge');
         await setDoc(settingsRef, { value: sewerCharge });
@@ -1828,10 +1320,6 @@
 
     // Load late fee from Firestore
     async function loadLateFeeFromFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        updateLateFeeDisplay();
-        return;
-      }
       try {
         if (window.__MASTER_TEST_OFFLINE_BILLING_GLOBALS) {
           const g = window.__MASTER_TEST_OFFLINE_BILLING_GLOBALS;
@@ -1882,10 +1370,6 @@
 
     // Save late fee to Firestore
     async function saveLateFeeToFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        window.onPremScheduleSave();
-        return;
-      }
       try {
         const settingsRef = doc(db, 'settings', 'lateFee');
         await setDoc(settingsRef, {
@@ -1901,10 +1385,6 @@
 
     // Load PUC Surcharge from Firestore
     async function loadPucSurchargeFromFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        updatePucSurchargeDisplay();
-        return;
-      }
       try {
         if (window.__MASTER_TEST_OFFLINE_BILLING_GLOBALS && window.__MASTER_TEST_OFFLINE_BILLING_GLOBALS.pucSurcharge != null) {
           pucSurcharge = parseFloat(window.__MASTER_TEST_OFFLINE_BILLING_GLOBALS.pucSurcharge) || 0;
@@ -1934,10 +1414,6 @@
 
     // Save PUC Surcharge to Firestore
     async function savePucSurchargeToFirestore() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        window.onPremScheduleSave();
-        return;
-      }
       try {
         const settingsRef = doc(db, 'settings', 'pucSurcharge');
         await setDoc(settingsRef, { value: pucSurcharge });
@@ -1949,34 +1425,6 @@
 
     // Load toggles settings from Firestore
     async function loadTogglesSettings() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        const data = Object.assign(
-          {},
-          window.__lastTogglesSettings || {},
-          window.__MASTER_TEST_OFFLINE_TOGGLES || {}
-        );
-        const settings = Object.assign({
-          askUserCodePerTransaction: false,
-          skipPOSInitialRegisterCount: false,
-          testingDrawerEnabled: false,
-          afterHoursLogoutEnabled: false,
-          afterHoursStartTime: '17:00',
-          afterHoursEndTime: '09:00',
-          posDoesntCloseOut: false,
-          useUsernameInsteadOfUserCode: false,
-          autoApplyLateFees: true,
-          lateFeeTimerDays: getLateFeeTimerDays(),
-          depositWithdrawDelinquencyDays: getDepositWithdrawDelinquencyDays(),
-          lateFeeGraceAmountEnabled: lateFeeGraceAmountEnabled,
-          lateFeeGraceAmountDollars: getLateFeeGraceAmountDollars(),
-          onPremModeEnabled: true
-        }, data);
-        const onPremCb = document.getElementById('toggleOnPremMode');
-        if (onPremCb) onPremCb.checked = true;
-        if (typeof syncFreshStartSetDateUiFromGlobals === 'function') syncFreshStartSetDateUiFromGlobals();
-        refreshLateFeeTimerTestButtonUi();
-        return settings;
-      }
       try {
         if (window.__MASTER_TEST_OFFLINE_TOGGLES) {
           const data = window.__MASTER_TEST_OFFLINE_TOGGLES;
@@ -2208,52 +1656,6 @@
 
     // Save toggles settings to Firestore
     async function saveTogglesSettings() {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        const toggleCheckbox = document.getElementById('toggleUserCodePerTransaction');
-        const skipInitialCountCheckbox = document.getElementById('toggleSkipPOSInitialCount');
-        const testingDrawerCheckbox = document.getElementById('toggleTestingDrawerEnabled');
-        const afterHoursCheckbox = document.getElementById('toggleAfterHoursLogout');
-        const afterHoursStartTimeInput = document.getElementById('afterHoursStartTime');
-        const afterHoursEndTimeInput = document.getElementById('afterHoursEndTime');
-        const posDoesntCloseOutCheckbox = document.getElementById('togglePOSDoesntCloseOut');
-        const useUsernameInsteadOfUserCodeCheckbox = document.getElementById('toggleUseUsernameInsteadOfUserCode');
-        const autoApplyLateFeesCheckbox = document.getElementById('toggleAutoApplyLateFees');
-        const lateFeeTimerDaysInput = document.getElementById('toggleLateFeeTimerDays');
-        const depositWithdrawDaysInput = document.getElementById('toggleDepositWithdrawDelinquencyDays');
-        const lateFeeGraceAmtToggle = document.getElementById('toggleLateFeeGraceAmountEnabled');
-        const lateFeeGraceAmtInput = document.getElementById('toggleLateFeeGraceAmountDollars');
-        const onPremCb = document.getElementById('toggleOnPremMode');
-        window.__lastTogglesSettings = {
-          askUserCodePerTransaction: toggleCheckbox ? toggleCheckbox.checked : false,
-          skipPOSInitialRegisterCount: skipInitialCountCheckbox ? skipInitialCountCheckbox.checked : false,
-          testingDrawerEnabled: testingDrawerCheckbox ? testingDrawerCheckbox.checked : false,
-          afterHoursLogoutEnabled: afterHoursCheckbox ? afterHoursCheckbox.checked : false,
-          afterHoursStartTime: afterHoursStartTimeInput ? afterHoursStartTimeInput.value : '17:00',
-          afterHoursEndTime: afterHoursEndTimeInput ? afterHoursEndTimeInput.value : '09:00',
-          posDoesntCloseOut: posDoesntCloseOutCheckbox ? posDoesntCloseOutCheckbox.checked : false,
-          useUsernameInsteadOfUserCode: useUsernameInsteadOfUserCodeCheckbox ? useUsernameInsteadOfUserCodeCheckbox.checked : false,
-          autoApplyLateFees: autoApplyLateFeesCheckbox ? autoApplyLateFeesCheckbox.checked : true,
-          lateFeeTimerDays: lateFeeTimerDaysInput ? parseInt(lateFeeTimerDaysInput.value, 10) || 21 : getLateFeeTimerDays(),
-          depositWithdrawDelinquencyDays: depositWithdrawDaysInput ? parseInt(depositWithdrawDaysInput.value, 10) || 60 : getDepositWithdrawDelinquencyDays(),
-          lateFeeGraceAmountEnabled: lateFeeGraceAmtToggle ? lateFeeGraceAmtToggle.checked : false,
-          lateFeeGraceAmountDollars: lateFeeGraceAmtInput ? parseFloat(lateFeeGraceAmtInput.value) || 0 : 0,
-          testDate: testDate,
-          freshStartUseSetDate: freshStartUseSetDate,
-          freshStartSetDate: freshStartSetDateYmd || null,
-          freshStartSingleCustomerEnabled: freshStartSingleCustomerEnabled,
-          freshStartSingleCustomerId: freshStartSingleCustomerId || null,
-          onPremModeEnabled: onPremCb ? onPremCb.checked : true
-        };
-        autoApplyLateFees = window.__lastTogglesSettings.autoApplyLateFees;
-        window.onPremScheduleSave();
-        try {
-          if (typeof syncSystemTestingDrawerFromToggle === 'function') {
-            await syncSystemTestingDrawerFromToggle({ reason: 'saveTogglesSettingsOnPrem' });
-          }
-        } catch (e) { /* ignore */ }
-        refreshLateFeeTimerTestButtonUi();
-        return;
-      }
       try {
         const toggleCheckbox = document.getElementById('toggleUserCodePerTransaction');
         const skipInitialCountCheckbox = document.getElementById('toggleSkipPOSInitialCount');
@@ -2533,15 +1935,6 @@
     };
 
     async function savePaymentProcessingSessionToFirestore(session) {
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        if (session && session.id) {
-          const idx = (window.paymentProcessingSessions || []).findIndex((s) => s && s.id === session.id);
-          if (idx >= 0) window.paymentProcessingSessions[idx] = session;
-          else window.paymentProcessingSessions.push(session);
-        }
-        window.onPremScheduleSave();
-        return true;
-      }
       try {
 
         const sessionsRef = collection(db, 'paymentProcessingSessions');
@@ -2558,10 +1951,6 @@
     async function loadPaymentProcessingSessionsFromFirestore() {
       if (window.__MASTER_TEST_SKIP_FIRESTORE_PERSIST) {
         if (!window.paymentProcessingSessions) window.paymentProcessingSessions = [];
-        return;
-      }
-      if (window.isOnPremStorage && window.isOnPremStorage()) {
-        renderPaymentProcessingSessionsList();
         return;
       }
       try {
@@ -3443,14 +2832,6 @@
     // Initialize dashboard on page load
     document.addEventListener('DOMContentLoaded', async function() {
 
-      try {
-        if (window.__ON_PREM_MODE_PROMISE) {
-          await window.__ON_PREM_MODE_PROMISE;
-        }
-      } catch (e) {
-        console.error('[onprem] init failed:', e);
-      }
-
       // Load users immediately on page load (don't wait for settings to be opened)
       loadUsersFromFirestore().catch(error => {
 
@@ -4110,19 +3491,17 @@
           user = window.authenticatedUser;
           userRole = window.getEffectiveRole ? window.getEffectiveRole(user) : null;
 
-          // Also ensure Firebase Auth is signed in for Firestore rules (skip in on-prem mode)
-          if (!(window.isOnPremStorage && window.isOnPremStorage())) {
-            const firebaseAuthResult = await ensureFirebaseAuthSession(user, window.authenticatedUser.userCode || '');
-            if (!firebaseAuthResult.success) {
+          // Also ensure Firebase Auth is signed in for Firestore rules
+          const firebaseAuthResult = await ensureFirebaseAuthSession(user, window.authenticatedUser.userCode || '');
+          if (!firebaseAuthResult.success) {
 
-              // Show warning to user if Firebase Auth completely failed
-              if (firebaseAuthResult.error && firebaseAuthResult.error.includes('admin-restricted-operation')) {
+            // Show warning to user if Firebase Auth completely failed
+            if (firebaseAuthResult.error && firebaseAuthResult.error.includes('admin-restricted-operation')) {
 
-              } else if (firebaseAuthResult.error && firebaseAuthResult.error.includes('email exists')) {
+            } else if (firebaseAuthResult.error && firebaseAuthResult.error.includes('email exists')) {
 
-              }
-              // Continue anyway - custom auth still works, but Firestore may deny access
             }
+            // Continue anyway - custom auth still works, but Firestore may deny access
           }
         } else {
           // Fallback to Firebase Auth (legacy)
@@ -4390,10 +3769,9 @@
 
             }
 
-            // Ensure Firebase Auth session exists for Firestore rules (skip in on-prem mode)
-            if (!(window.isOnPremStorage && window.isOnPremStorage())) {
-              await ensureFirebaseAuthSession(window.authenticatedUser, userCode);
-            }
+            // Ensure Firebase Auth session exists for Firestore rules
+
+            await ensureFirebaseAuthSession(window.authenticatedUser, userCode);
 
             // Verify authorized user after sign in
             const authResult = await verifyAdminAndLoad();
@@ -4466,18 +3844,14 @@
       const firebaseUserBefore = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
 
       try {
-        if (!(window.isOnPremStorage && window.isOnPremStorage())) {
-          await ensureFirebaseAuthSession(initUser, window.authenticatedUser?.userCode || '');
-          const firebaseUserAfter = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
-        }
+        await ensureFirebaseAuthSession(initUser, window.authenticatedUser?.userCode || '');
+        const firebaseUserAfter = window.firebaseAuth ? window.firebaseAuth.getCurrentUser() : null;
+
       } catch (e) {
 
       }
 
       try {
-        if (window.isOnPremStorage && window.isOnPremStorage() && !window.__ON_PREM_READY) {
-          await window.onPremLoadAllFromServer();
-        }
         // CRITICAL: Load codes FIRST before customers!
         // This ensures that when populateCustomerCodesFromImportData() runs during customer load,
         // it will find existing codes in the array instead of creating new ones with default values
@@ -4601,7 +3975,6 @@
       const hierarchyTab = document.getElementById('settingsHierarchyTab');
       const drawersTab = document.getElementById('settingsDrawersTab');
       const togglesTab = document.getElementById('settingsTogglesTab');
-      const testingTab = document.getElementById('settingsTestingTab');
       const accountsContent = document.getElementById('settingsAccountsContent');
       const locationsContent = document.getElementById('settingsLocationsContent');
       const codesContent = document.getElementById('settingsCodesContent');
@@ -4610,10 +3983,9 @@
       const hierarchyContent = document.getElementById('settingsHierarchyContent');
       const drawersContent = document.getElementById('settingsDrawersContent');
       const togglesContent = document.getElementById('settingsTogglesContent');
-      const testingContent = document.getElementById('settingsTestingContent');
 
       // Reset all tabs and content
-      [accountsTab, locationsTab, codesTab, usersTab, cleanupTab, hierarchyTab, drawersTab, togglesTab, testingTab].forEach(tab => {
+      [accountsTab, locationsTab, codesTab, usersTab, cleanupTab, hierarchyTab, drawersTab, togglesTab].forEach(tab => {
         if (!tab) return;
         tab.classList.remove('bg-blue-600', 'text-white');
         tab.classList.add('bg-slate-200', 'text-slate-700');
@@ -4626,7 +3998,6 @@
       if (hierarchyContent) hierarchyContent.classList.add('hidden');
       if (drawersContent) drawersContent.classList.add('hidden');
       if (togglesContent) togglesContent.classList.add('hidden');
-      if (testingContent) testingContent.classList.add('hidden');
 
       if (view === 'accounts') {
         accountsTab.classList.add('bg-blue-600', 'text-white');
@@ -4685,17 +4056,6 @@
         if (togglesContent) {
           togglesContent.classList.remove('hidden');
           loadTogglesSettings();
-        }
-      } else if (view === 'testing') {
-        if (testingTab) {
-          testingTab.classList.add('bg-blue-600', 'text-white');
-          testingTab.classList.remove('bg-slate-200', 'text-slate-700');
-        }
-        if (testingContent) {
-          testingContent.classList.remove('hidden');
-          if (typeof window.refreshSettingsTestingIframe === 'function') {
-            window.refreshSettingsTestingIframe();
-          }
         }
       }
     };
@@ -10780,12 +10140,8 @@
 
         // Save snapshot to Firestore before downloading
         try {
-          if (window.isOnPremStorage && window.isOnPremStorage()) {
-            await window.onPremSaveBillingCycle(billingCycleSnapshot);
-          } else {
-            const billingCyclesRef = collection(db, 'billingCycles');
-            await addDoc(billingCyclesRef, billingCycleSnapshot);
-          }
+          const billingCyclesRef = collection(db, 'billingCycles');
+          await addDoc(billingCyclesRef, billingCycleSnapshot);
 
         } catch (snapshotError) {
 
@@ -10848,21 +10204,17 @@
     // Show past billing cycles modal
     window.showPastBillingCycles = async function() {
       try {
-        let pastCycles = [];
-        if (window.isOnPremStorage && window.isOnPremStorage()) {
-          pastCycles = window.onPremGetBillingCycles();
-        } else {
-          // Load all billing cycle snapshots from Firestore
-          const billingCyclesRef = collection(db, 'billingCycles');
-          const snapshot = await getDocs(billingCyclesRef);
+        // Load all billing cycle snapshots from Firestore
+        const billingCyclesRef = collection(db, 'billingCycles');
+        const snapshot = await getDocs(billingCyclesRef);
 
-          snapshot.forEach(doc => {
-            pastCycles.push({
-              id: doc.id,
-              ...doc.data()
-            });
+        const pastCycles = [];
+        snapshot.forEach(doc => {
+          pastCycles.push({
+            id: doc.id,
+            ...doc.data()
           });
-        }
+        });
 
         // Sort by date (newest first)
         pastCycles.sort((a, b) => new Date(b.generatedDate) - new Date(a.generatedDate));
@@ -10967,24 +10319,16 @@
       }
 
       try {
-        let cycleSnapshot = null;
-        if (window.isOnPremStorage && window.isOnPremStorage()) {
-          cycleSnapshot = window.onPremGetBillingCycleById(cycleId);
-        } else {
-          // Load the billing cycle snapshot from Firestore
-          const billingCyclesRef = collection(db, 'billingCycles');
-          const cycleDoc = await getDoc(doc(billingCyclesRef, cycleId));
-          if (!cycleDoc.exists()) {
-            alert('Billing cycle snapshot not found');
-            return;
-          }
-          cycleSnapshot = cycleDoc.data();
-        }
+        // Load the billing cycle snapshot from Firestore
+        const billingCyclesRef = collection(db, 'billingCycles');
+        const cycleDoc = await getDoc(doc(billingCyclesRef, cycleId));
 
-        if (!cycleSnapshot) {
+        if (!cycleDoc.exists()) {
           alert('Billing cycle snapshot not found');
           return;
         }
+
+        const cycleSnapshot = cycleDoc.data();
 
         // Show loading message
         const billModule = document.getElementById('billModule');
@@ -21654,16 +20998,12 @@
           // Add code name to deleted set to prevent recreation
           deletedCodeNames.add(code.name.toLowerCase());
 
-          // Save deleted code names for persistence across reloads
-          if (window.isOnPremStorage && window.isOnPremStorage()) {
-            window.onPremScheduleSave();
-          } else {
-            const deletedCodesRef = doc(db, 'settings', 'deletedCodeNames');
-            await setDoc(deletedCodesRef, { 
-              names: Array.from(deletedCodeNames),
-              lastUpdated: new Date().toISOString()
-            });
-          }
+          // Save deleted code names to Firestore for persistence across reloads
+          const deletedCodesRef = doc(db, 'settings', 'deletedCodeNames');
+          await setDoc(deletedCodesRef, { 
+            names: Array.from(deletedCodeNames),
+            lastUpdated: new Date().toISOString()
+          });
 
           // Then remove it from the local array
         codes = codes.filter(c => c.id !== codeId);
@@ -31781,33 +31121,15 @@
           ? customer.paymentHistory.length
           : 0;
 
-        let td = null;
-        if (window.__ON_PREM_MASTER_TEST && window.__MASTER_TEST_OFFLINE_DRAWER) {
-          td = JSON.parse(JSON.stringify(window.__MASTER_TEST_OFFLINE_DRAWER));
-          if (!Array.isArray(drawers)) drawers = [];
-          const di = drawers.findIndex(function (d) { return d && d.id === td.id; });
-          if (di >= 0) drawers[di] = td;
-          else drawers.push(td);
-        } else {
-          if (typeof syncSystemTestingDrawerFromToggle !== 'function') {
-            throw new Error('developTest: syncSystemTestingDrawerFromToggle not available');
-          }
-          await syncSystemTestingDrawerFromToggle({ reason: 'developBillingScenarioCheckPay' });
-          if (window.__MASTER_TEST_OFFLINE_DRAWER) {
-            const inj = JSON.parse(JSON.stringify(window.__MASTER_TEST_OFFLINE_DRAWER));
-            const di = drawers.findIndex(function (d) { return d && d.id === inj.id; });
-            if (di >= 0) drawers[di] = inj;
-            else drawers.push(inj);
-          }
-          td = Array.isArray(drawers)
-            ? drawers.find(function (d) {
-                return d && d.id === SYSTEM_TESTING_DRAWER_ID;
-              })
-            : null;
-          if (!td && window.__MASTER_TEST_OFFLINE_DRAWER) {
-            td = window.__MASTER_TEST_OFFLINE_DRAWER;
-          }
+        if (typeof syncSystemTestingDrawerFromToggle !== 'function') {
+          throw new Error('developTest: syncSystemTestingDrawerFromToggle not available');
         }
+        await syncSystemTestingDrawerFromToggle({ reason: 'developBillingScenarioCheckPay' });
+        const td = Array.isArray(drawers)
+          ? drawers.find(function (d) {
+              return d && d.id === SYSTEM_TESTING_DRAWER_ID;
+            })
+          : null;
         if (!td) {
           throw new Error(
             'developTest: System Testing Drawer missing. Enable Settings → Toggles → Testing Drawer and reload (or run sync), then retry.'
@@ -31829,32 +31151,13 @@
         window.currentPaymentProcessing = null;
 
         const togglesPay = await loadTogglesSettings();
-        const skipPosPay =
-          window.__ON_PREM_MASTER_TEST ||
-          (togglesPay && togglesPay.skipPOSInitialRegisterCount) ||
-          (window.__MASTER_TEST_OFFLINE_TOGGLES && window.__MASTER_TEST_OFFLINE_TOGGLES.skipPOSInitialRegisterCount);
-        if (!skipPosPay) {
+        if (!togglesPay || !togglesPay.skipPOSInitialRegisterCount) {
           throw new Error(
             'developTest: Enable Settings → Toggles → "Skip POS initial register count" so Start New Payment opens the entry form without a manual initial drawer count.'
           );
         }
 
         if (typeof showPaymentModule === 'function') window.showPaymentModule();
-        if (window.__MASTER_TEST_SKIP_POS_UI || window.__ON_PREM_MASTER_TEST) {
-          await developTestApplyCheckPaymentDirect(customer, amount, checkNo);
-          if (
-            !Array.isArray(customer.paymentHistory) ||
-            customer.paymentHistory.length <= paymentHistoryBefore
-          ) {
-            throw new Error(
-              'developTest: check payment did not post (paymentHistory unchanged). amount=' + amount
-            );
-          }
-          if (typeof saveSingleCustomerToFirestore === 'function') {
-            await saveSingleCustomerToFirestore(customer);
-          }
-          return;
-        }
         await window.startNewPayment();
 
         if (typeof window.selectCustomerFromSearch === 'function') {
@@ -33939,9 +33242,7 @@
        */
       window.__developTestPrepareLiveMasterTest = async function (cfg) {
         cfg = developTestFillCreateModeDefaults(cfg || {});
-        if (!window.__ON_PREM_MASTER_TEST) {
-          window.clearMasterTestOfflineMode();
-        }
+        window.clearMasterTestOfflineMode();
         if (typeof window.masterTestLog === 'function') {
           window.masterTestLog('livePrep:start', {
             accountNumber: cfg.accountNumber,
@@ -33994,25 +33295,19 @@
           );
         }
         const toggles = await loadTogglesSettings();
-        const offlineToggles = window.__MASTER_TEST_OFFLINE_TOGGLES || {};
-        const onPremTest = window.__ON_PREM_MASTER_TEST === true;
-        const skipPosInitial =
-          onPremTest ||
-          (toggles && toggles.skipPOSInitialRegisterCount) ||
-          offlineToggles.skipPOSInitialRegisterCount;
-        if (!skipPosInitial) {
+        if (!toggles || !toggles.skipPOSInitialRegisterCount) {
           throw new Error(
             'Live master test: enable Settings → Toggles → "Skip POS initial register count" in the billing app (saved to Firestore).'
           );
         }
-        const testingDrawerOn =
-          onPremTest ||
-          (toggles &&
-            (toggles.testingDrawerEnabled === true ||
-              toggles.testingDrawerEnabled === 'true' ||
-              toggles.testingDrawerEnabled === 1)) ||
-          offlineToggles.testingDrawerEnabled === true;
-        if (!testingDrawerOn) {
+        if (
+          !toggles ||
+          !(
+            toggles.testingDrawerEnabled === true ||
+            toggles.testingDrawerEnabled === 'true' ||
+            toggles.testingDrawerEnabled === 1
+          )
+        ) {
           throw new Error(
             'Live master test: enable Settings → Toggles → "Testing Drawer" in the billing app (saved to Firestore).'
           );
@@ -35169,13 +34464,6 @@
             >
               Toggles
             </button>
-            <button 
-              id="settingsTestingTab"
-              onclick="switchSettingsView('testing')" 
-              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
-            >
-              Testing
-            </button>
           </div>
 
           <!-- Accounts Section -->
@@ -35665,32 +34953,6 @@
                 </button>
               </div>
 
-              <div class="bg-violet-50 dark:bg-violet-900/20 p-4 rounded-xl border border-violet-200 dark:border-violet-700">
-                <h3 class="font-semibold text-violet-800 dark:text-violet-200 mb-2">Online ↔ On-prem Sync</h3>
-                <p class="text-sm text-violet-600 dark:text-violet-300 mb-4">
-                  Copy billing data between Firebase (online) and local <code class="text-xs">data/system_data</code>. Online → on-prem uses a browser export (same as <code class="text-xs">npm run export:firebase</code>). On-prem → online requires Firebase access and overwrites online collections.
-                </p>
-                <div class="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onclick="syncOnlineDataToOnPrem()"
-                    class="bg-violet-600 text-white px-6 py-3 rounded-lg hover:bg-violet-700 transition-colors font-medium"
-                    title="Export Firebase and save to local system_data"
-                  >
-                    Sync online data to on-prem
-                  </button>
-                  <button
-                    type="button"
-                    onclick="syncOnPremDataToOnline()"
-                    class="bg-fuchsia-600 text-white px-6 py-3 rounded-lg hover:bg-fuchsia-700 transition-colors font-medium"
-                    title="Push local system_data to Firebase"
-                  >
-                    Sync on-prem data to online
-                  </button>
-                </div>
-                <p id="syncStorageStatus" class="text-sm mt-3 text-slate-600 dark:text-slate-300"></p>
-              </div>
-
               <div class="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-xl border border-orange-200 dark:border-orange-700">
                 <h3 class="font-semibold text-orange-800 dark:text-orange-200 mb-2">Date Fixes</h3>
                 <p class="text-sm text-orange-600 dark:text-orange-300 mb-4">
@@ -35918,26 +35180,6 @@
               <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
                 <div class="flex items-center justify-between">
                   <div class="flex-1">
-                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">On-prem mode (no Firebase)</h3>
-                    <p class="text-sm text-slate-600 dark:text-slate-300">
-                      Store all billing data locally in <code class="text-xs">data/system_data.xlsx</code>. Run <code class="text-xs">npm run export:firebase</code> once to migrate from Firebase, then enable this toggle.
-                    </p>
-                  </div>
-                  <label class="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      id="toggleOnPremMode"
-                      class="sr-only peer"
-                      onchange="toggleOnPremMode(this.checked)"
-                    />
-                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-              </div>
-
-              <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div class="flex items-center justify-between">
-                  <div class="flex-1">
                     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Automatically apply late fees</h3>
                     <p class="text-sm text-slate-600 dark:text-slate-300">
                       When enabled, PUBS applies one late fee per bill cycle when the per-bill timer reaches the configured day and the account still owes (30-60-90 is a separate delinquency timer for search and deposit rules). Set day counts below.
@@ -36143,25 +35385,6 @@
                 </div>
               </div>
             </div>
-          </div>
-
-          <!-- Testing Section -->
-          <div id="settingsTestingContent" class="card rounded-3xl bg-white dark:bg-slate-800 shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-6 hidden">
-            <div class="mb-4">
-              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Master Tests</h2>
-              <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">
-                Run master tests 1–3 against the active storage mode. Tests use Firebase when online and local system data when on-prem.
-                In online mode, save your billing username and user code in the test viewer before running.
-              </p>
-              <p id="settingsTestingModeBadge" class="text-sm font-medium text-indigo-700 dark:text-indigo-300"></p>
-            </div>
-            <iframe
-              id="settingsTestingIframe"
-              title="Master test viewer"
-              class="w-full rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900"
-              style="min-height: 75vh; height: 75vh;"
-              loading="lazy"
-            ></iframe>
           </div>
         </div>
       </div>

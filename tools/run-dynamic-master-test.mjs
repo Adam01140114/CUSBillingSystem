@@ -10,9 +10,6 @@ import { fileURLToPath } from 'url';
 
 const require = createRequire(import.meta.url);
 const { saveResultsToDisk } = require('./master-test-disk-store.cjs');
-const { buildOnPremInjectPayload, applyOnPremInitScript } = require('./master-test-onprem-payload.cjs');
-const { loadMasterTestCredentials, isConfigured } = require('./master-test-credentials.cjs');
-const { ensurePlaywrightBrowsers } = require('./ensure-playwright-browsers.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
@@ -85,39 +82,37 @@ async function main() {
 
   writeJob(jobFile, { status: 'running', progress: 2, message: 'Launching browser…' });
 
-  const creds = loadMasterTestCredentials(repoRoot);
-  const email = creds.username;
-  const password = creds.password;
-  let baseUrl = (process.env.BASE_URL || creds.baseUrl || 'http://127.0.0.1:8000').replace(/\/$/, '');
+  const localPath = path.join(repoRoot, 'tools', 'billing-test.local.json');
+  let email = process.env.FIREBASE_TEST_EMAIL || process.env.DEV_TEST_EMAIL;
+  let password = process.env.FIREBASE_TEST_PASSWORD || process.env.DEV_TEST_PASSWORD;
+  let baseUrl = (process.env.BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 
-  const storageMode = config.storageMode === 'onprem' ? 'onprem' : 'online';
-  const isOnPrem = storageMode === 'onprem';
+  if (fs.existsSync(localPath)) {
+    try {
+      const j = JSON.parse(fs.readFileSync(localPath, 'utf8'));
+      email = email || j.email || j.FIREBASE_TEST_EMAIL;
+      password = password || j.password || j.FIREBASE_TEST_PASSWORD;
+      if (!process.env.BASE_URL && (j.baseUrl || j.BASE_URL)) {
+        baseUrl = String(j.baseUrl || j.BASE_URL).replace(/\/$/, '');
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
 
-  if (!isOnPrem && !isConfigured({ username: email, password: password })) {
+  if (!email || !password) {
     writeJob(jobFile, {
       status: 'failed',
-      error:
-        'Missing billing login credentials for online tests. Save username and user code in the Master Tests screen, or copy tools/billing-test.local.example.json to tools/billing-test.local.json.',
+      error: 'Missing Firebase credentials (tools/billing-test.local.json)',
       progress: 0
     });
     process.exit(1);
   }
 
   const { chromium } = await loadPlaywright();
-  writeJob(jobFile, { status: 'running', progress: 3, message: 'Preparing test browser…' });
-  const pwReady = await ensurePlaywrightBrowsers(repoRoot);
-  if (!pwReady.ok) {
-    writeJob(jobFile, {
-      status: 'failed',
-      error: pwReady.error || 'Playwright Chromium is not installed.',
-      progress: 0
-    });
-    process.exit(1);
-  }
   const headed = process.env.HEADED === '1' || process.env.HEADED === 'true';
-  const onPremInjectPayload = isOnPrem ? buildOnPremInjectPayload({ includeSusan: false }) : null;
   const scenario = {
-    liveMode: !isOnPrem,
+    liveMode: true,
     advanceMode: config.advanceMode === 'walk' ? 'walk' : 'instant',
     accountNumber: config.accountNumber || 'CUS-3011000',
     customerNameMatch: config.customerName || '',
@@ -141,127 +136,64 @@ async function main() {
         ? 900000
         : 300000;
 
-  let browser;
-  try {
-    browser = await chromium.launch({ headless: !headed });
-  } catch (launchErr) {
-    const launchMsg = launchErr && launchErr.message ? launchErr.message : String(launchErr);
-    const retry = await ensurePlaywrightBrowsers(repoRoot);
-    if (retry.ok) {
-      try {
-        browser = await chromium.launch({ headless: !headed });
-      } catch (retryErr) {
-        writeJob(jobFile, {
-          status: 'failed',
-          progress: 0,
-          error:
-            'Could not launch Playwright Chromium after install attempt: ' +
-            (retryErr && retryErr.message ? retryErr.message : String(retryErr))
-        });
-        process.exit(1);
-      }
-    } else {
-      writeJob(jobFile, {
-        status: 'failed',
-        progress: 0,
-        error: launchMsg.indexOf("Executable doesn't exist") !== -1
-          ? 'Playwright Chromium is missing. Restart npm start and run the test again, or run: npm run playwright:install'
-          : launchMsg
-      });
-      process.exit(1);
-    }
-  }
+  const browser = await chromium.launch({ headless: !headed });
   const page = await browser.newPage();
   page.setDefaultTimeout(300000);
   let progressTimer = null;
   let exitCode = 0;
 
-  if (isOnPrem && onPremInjectPayload) {
-    await applyOnPremInitScript(page, onPremInjectPayload);
-  }
-
   try {
-    writeJob(jobFile, {
-      status: 'running',
-      progress: 5,
-      message: isOnPrem ? 'Loading on-prem billing app…' : 'Loading billing app…'
-    });
-    const appUrl = isOnPrem
-      ? `${baseUrl}/index.html?onPrem=1&masterTestLive=${Date.now()}`
-      : `${baseUrl}/index.html?masterTestLive=${Date.now()}`;
-    await page.goto(appUrl, {
+    writeJob(jobFile, { status: 'running', progress: 5, message: 'Loading billing app…' });
+    await page.goto(`${baseUrl}/index.html?masterTestLive=${Date.now()}`, {
       waitUntil: 'load',
       timeout: 120000
     });
 
-    if (isOnPrem) {
-      await page.waitForFunction(
-        () =>
-          window.__ON_PREM_READY &&
-          typeof window.runMasterTestFromStepDefs === 'function',
-        { timeout: 180000 }
-      );
-      if (onPremInjectPayload) {
-        await page.evaluate((payload) => {
-          if (payload.toggles) window.__MASTER_TEST_OFFLINE_TOGGLES = payload.toggles;
-          if (payload.drawer) window.__MASTER_TEST_OFFLINE_DRAWER = payload.drawer;
-          if (payload.billingGlobals) {
-            window.__MASTER_TEST_OFFLINE_BILLING_GLOBALS = payload.billingGlobals;
-          }
-        }, onPremInjectPayload);
-      }
-    } else {
+    await page.waitForFunction(
+      () => {
+        const modal = document.getElementById('firebaseAuthModal');
+        const modalShown = modal && !modal.classList.contains('hidden');
+        const n = document.querySelectorAll('#customerTableBody tr').length;
+        return modalShown || n > 0;
+      },
+      { timeout: 180000 }
+    );
+
+    const authModalShown = await page
+      .locator('#firebaseAuthModal')
+      .evaluate((el) => el && !el.classList.contains('hidden'))
+      .catch(() => false);
+
+    if (authModalShown) {
+      writeJob(jobFile, { status: 'running', progress: 8, message: 'Signing in…' });
+      await page.locator('#firebaseEmail').fill(email);
+      await page.locator('#firebasePassword').fill(password);
+      await page.locator('#firebaseAuthSubmit').click();
       await page.waitForFunction(
         () => {
-          const modal = document.getElementById('firebaseAuthModal');
-          const modalShown = modal && !modal.classList.contains('hidden');
-          const n = document.querySelectorAll('#customerTableBody tr').length;
-          return modalShown || n > 0;
+          const m = document.getElementById('firebaseAuthModal');
+          const err = document.getElementById('firebaseAuthError');
+          const errShown =
+            err && !err.classList.contains('hidden') && String(err.textContent || '').trim().length > 0;
+          return (m && m.classList.contains('hidden')) || errShown;
         },
-        { timeout: 180000 }
-      );
-
-      const authModalShown = await page
-        .locator('#firebaseAuthModal')
-        .evaluate((el) => el && !el.classList.contains('hidden'))
-        .catch(() => false);
-
-      if (authModalShown) {
-        writeJob(jobFile, { status: 'running', progress: 8, message: 'Signing in…' });
-        await page.locator('#firebaseEmail').fill(email);
-        await page.locator('#firebasePassword').fill(password);
-        await page.locator('#firebaseAuthSubmit').click();
-        await page.waitForFunction(
-          () => {
-            const m = document.getElementById('firebaseAuthModal');
-            const err = document.getElementById('firebaseAuthError');
-            const errShown =
-              err && !err.classList.contains('hidden') && String(err.textContent || '').trim().length > 0;
-            return (m && m.classList.contains('hidden')) || errShown;
-          },
-          { timeout: 180000 }
-        );
-      }
-
-      await page.waitForFunction(
-        () => document.querySelectorAll('#customerTableBody tr').length > 0,
         { timeout: 180000 }
       );
     }
 
-    writeJob(jobFile, { status: 'running', progress: 12, message: 'Preparing customer…' });
-    const prep = await page.evaluate(
-      async ({ cfgJson, skipClearOffline }) => {
-        if (!skipClearOffline && typeof window.clearMasterTestOfflineMode === 'function') {
-          window.clearMasterTestOfflineMode();
-        }
-        if (typeof window.__developTestPrepareLiveMasterTest !== 'function') {
-          return { ok: false, error: 'prepareLiveMasterTest missing' };
-        }
-        return await window.__developTestPrepareLiveMasterTest(JSON.parse(cfgJson));
-      },
-      { cfgJson: JSON.stringify(scenario), skipClearOffline: isOnPrem }
+    await page.waitForFunction(
+      () => document.querySelectorAll('#customerTableBody tr').length > 0,
+      { timeout: 180000 }
     );
+
+    writeJob(jobFile, { status: 'running', progress: 12, message: 'Preparing customer…' });
+    const prep = await page.evaluate(async (cfgJson) => {
+      window.clearMasterTestOfflineMode();
+      if (typeof window.__developTestPrepareLiveMasterTest !== 'function') {
+        return { ok: false, error: 'prepareLiveMasterTest missing' };
+      }
+      return await window.__developTestPrepareLiveMasterTest(JSON.parse(cfgJson));
+    }, JSON.stringify(scenario));
 
     if (!prep || !prep.ok) {
       throw new Error('Live prep failed: ' + (prep && prep.error ? prep.error : 'unknown'));
@@ -284,15 +216,12 @@ async function main() {
     }, 1500);
 
     const result = await page.evaluate(
-      async ({ cfgJson, timeoutMs, skipClearOffline }) => {
-        if (!skipClearOffline && typeof window.clearMasterTestOfflineMode === 'function') {
-          window.clearMasterTestOfflineMode();
-        }
+      async ({ cfgJson, timeoutMs }) => {
+        window.clearMasterTestOfflineMode();
         if (typeof window.runMasterTestFromStepDefs !== 'function') {
           return { ok: false, error: 'runMasterTestFromStepDefs missing — reload billing app' };
         }
         const cfg = JSON.parse(cfgJson);
-        if (skipClearOffline) cfg.liveMode = false;
         return await Promise.race([
           window.runMasterTestFromStepDefs(cfg),
           new Promise(function (_, reject) {
@@ -302,11 +231,7 @@ async function main() {
           })
         ]);
       },
-      {
-        cfgJson: JSON.stringify(scenario),
-        timeoutMs: masterTestTimeoutMs,
-        skipClearOffline: isOnPrem
-      }
+      { cfgJson: JSON.stringify(scenario), timeoutMs: masterTestTimeoutMs }
     );
 
     clearInterval(progressTimer);

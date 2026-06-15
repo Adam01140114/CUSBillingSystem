@@ -1,5 +1,5 @@
 {
-  "username": "rich",
-  "password": "your-user-code-here",
+  "email": "rich",
+  "password": "your-firebase-password-here",
   "baseUrl": "http://127.0.0.1:8000"
 }

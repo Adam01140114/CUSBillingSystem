@@ -18,44 +18,22 @@ if (!ADMIN_PASSWORD) {
   throw new Error('ADMIN_PASSWORD is not set in the environment. Please add it to your .env file.');
 }
 
-// On-prem / system data store
-const systemDataStore = require('./tools/system-data-store.cjs');
-const onPremConfig = systemDataStore.readOnPremConfig();
-const ON_PREM_MODE =
-  onPremConfig.onPremEnabled === true ||
-  process.env.ON_PREM_MODE === '1' ||
-  process.env.ON_PREM_MODE === 'true';
-
-// Firebase Configuration (optional when ON_PREM_MODE=1)
+// Firebase Configuration
 const requiredFirebaseEnvVars = [
   'FIREBASE_PROJECT_ID',
-  'FIREBASE_PRIVATE_KEY_ID',
+  'FIREBASE_PRIVATE_KEY_ID', 
   'FIREBASE_PRIVATE_KEY',
   'FIREBASE_CLIENT_EMAIL',
   'FIREBASE_CLIENT_ID'
 ];
 
-const firebaseEnvReady = requiredFirebaseEnvVars.every((envVar) => !!process.env[envVar]);
-if (!firebaseEnvReady && !ON_PREM_MODE) {
-  throw new Error(
-    'Firebase env vars are missing. Set them in .env or enable on-prem mode (ON_PREM_MODE=1) after running npm run export:firebase.'
-  );
-}
-
-let admin = null;
-let db = null;
-function loadFirebaseAdmin() {
-  if (!firebaseEnvReady) return null;
-  if (!admin) {
-    try {
-      admin = require('firebase-admin');
-    } catch (e) {
-      console.warn('[firebase] admin SDK unavailable:', e.message);
-      return null;
-    }
+for (const envVar of requiredFirebaseEnvVars) {
+  if (!process.env[envVar]) {
+    throw new Error(`${envVar} is not set in the environment. Please add it to your .env file.`);
   }
-  return admin;
 }
+// Stripe package removed
+const admin         = require('firebase-admin');
 const bodyParser    = require('body-parser');
 const fileUpload    = require('express-fileupload');
 const path          = require('path');
@@ -66,8 +44,8 @@ const nodemailer    = require('nodemailer');
 const { spawn }     = require('child_process');
 
 const app = express();
-app.use(bodyParser.json({ limit: '64mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '64mb' }));
+app.use(bodyParser.json({ limit: '2mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '2mb' }));
 const masterTestTextBody = bodyParser.text({ type: 'text/plain', limit: '64mb' });
 app.use(fileUpload());          // parses multipart/form‑data (fields ➜ req.body, files ➜ req.files)
 app.use(cors());
@@ -76,8 +54,6 @@ app.use(cors());
 // Master test runner (viewer → Playwright) — before static so POST is never swallowed
 // ────────────────────────────────────────────────────────────
 const masterTestJobsDir = path.join(__dirname, 'Test Scripts', '.master-test-jobs');
-const masterTestCredentials = require('./tools/master-test-credentials.cjs');
-const playwrightBrowsers = require('./tools/ensure-playwright-browsers.cjs');
 
 function readMasterTestJobFile(jobId) {
   const safe = String(jobId || '').replace(/[^a-zA-Z0-9_-]/g, '');
@@ -111,84 +87,22 @@ function writeMasterTestJobFile(jobId, patch) {
 
 app.get('/api/master-test/ping', (req, res) => {
   const runnerPath = path.join(__dirname, 'tools', 'run-dynamic-master-test.mjs');
-  const credStatus = masterTestCredentials.credentialsStatus(__dirname);
-  const playwrightStatus = playwrightBrowsers.getPlaywrightStatus(__dirname);
   res.json({
     ok: true,
     runnerInstalled: fs.existsSync(runnerPath),
-    jobsDir: masterTestJobsDir,
-    credentials: credStatus,
-    playwright: playwrightStatus
+    jobsDir: masterTestJobsDir
   });
 });
 
-app.get('/api/master-test/credentials/status', (req, res) => {
-  try {
-    res.json({ ok: true, credentials: masterTestCredentials.credentialsStatus(__dirname) });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message || String(err) });
-  }
-});
-
-app.put('/api/master-test/credentials', (req, res) => {
-  try {
-    const body = req.body || {};
-    masterTestCredentials.saveMasterTestCredentials(__dirname, {
-      username: body.username || body.email,
-      password: body.password || body.userCode,
-      baseUrl: body.baseUrl
-    });
-    res.json({
-      ok: true,
-      credentials: masterTestCredentials.credentialsStatus(__dirname)
-    });
-  } catch (err) {
-    res.status(400).json({ ok: false, error: err.message || String(err) });
-  }
-});
-
-app.post('/api/master-test/run', async (req, res) => {
+app.post('/api/master-test/run', (req, res) => {
   try {
     const body = req.body || {};
     const steps = body.steps;
     if (!Array.isArray(steps) || !steps.length) {
       return res.status(400).json({ ok: false, error: 'At least one step is required.' });
     }
-
-    const playwrightReady = await playwrightBrowsers.ensurePlaywrightBrowsers(__dirname);
-    if (!playwrightReady.ok) {
-      return res.status(503).json({
-        ok: false,
-        needsPlaywrightInstall: true,
-        error: playwrightReady.error || 'Playwright Chromium is not installed.'
-      });
-    }
-
     const jobId =
       'job-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-    const storageModeRaw = String(body.storageMode || 'online').trim().toLowerCase();
-    const storageMode =
-      storageModeRaw === 'onprem' || storageModeRaw === 'on-prem' ? 'onprem' : 'online';
-    let runnerCreds = masterTestCredentials.loadMasterTestCredentials(__dirname);
-    const bodyUsername = String(body.testUsername || body.username || '').trim();
-    const bodyPassword = String(body.testPassword || body.userCode || body.password || '').trim();
-    if (bodyUsername && bodyPassword) {
-      runnerCreds = {
-        username: bodyUsername,
-        password: bodyPassword,
-        baseUrl: runnerCreds.baseUrl,
-        source: 'request',
-        configured: true
-      };
-    }
-    if (storageMode === 'online' && !masterTestCredentials.isConfigured(runnerCreds)) {
-      return res.status(400).json({
-        ok: false,
-        needsCredentials: true,
-        error:
-          'Online master tests need billing login credentials. Enter your username and user code in the test viewer, or create tools/billing-test.local.json from tools/billing-test.local.example.json.'
-      });
-    }
     const config = {
       accountNumber: String(body.accountNumber || body.customerId || 'CUS-3011000').trim(),
       customerName: String(body.customerName || '').trim(),
@@ -198,8 +112,7 @@ app.post('/api/master-test/run', async (req, res) => {
       customerCreatedDate: String(body.customerCreatedDate || '').trim(),
       steps: steps,
       advanceMode: body.advanceMode === 'walk' ? 'walk' : 'instant',
-      testSlug: String(body.testSlug || '').trim(),
-      storageMode: storageMode
+      testSlug: String(body.testSlug || '').trim()
     };
     writeMasterTestJobFile(jobId, {
       status: 'queued',
@@ -220,15 +133,10 @@ app.post('/api/master-test/run', async (req, res) => {
       cwd: __dirname,
       detached: true,
       stdio: 'ignore',
-      env: Object.assign(
-        {},
-        process.env,
-        {
-          MASTER_TEST_JOB_FILE: jobFile,
-          MASTER_TEST_CONFIG: JSON.stringify(config)
-        },
-        masterTestCredentials.credentialsToRunnerEnv(runnerCreds)
-      )
+      env: Object.assign({}, process.env, {
+        MASTER_TEST_JOB_FILE: jobFile,
+        MASTER_TEST_CONFIG: JSON.stringify(config)
+      })
     });
     child.on('error', function (spawnErr) {
       writeMasterTestJobFile(jobId, {
@@ -358,223 +266,27 @@ app.delete('/api/master-test/tests/:slug', (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// On-prem system data API (before static)
+// Firebase
 // ────────────────────────────────────────────────────────────
-if (ON_PREM_MODE) {
-  systemDataStore.loadStateFromDisk();
-  console.log('[on-prem] Mode enabled — using data/system_data.json');
-}
+// Firebase configuration using environment variables
+const serviceAccount = {
+  type: "service_account",
+  project_id: process.env.FIREBASE_PROJECT_ID,
+  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+  private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+  client_email: process.env.FIREBASE_CLIENT_EMAIL,
+  client_id: process.env.FIREBASE_CLIENT_ID,
+  auth_uri: "https://accounts.google.com/o/oauth2/auth",
+  token_uri: "https://oauth2.googleapis.com/token",
+  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+  client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${process.env.FIREBASE_CLIENT_EMAIL}`
+};
 
-app.get('/api/storage/mode', (req, res) => {
-  const cfg = systemDataStore.readOnPremConfig();
-  const state = systemDataStore.getState();
-  res.json({
-    onPremEnabled:
-      cfg.onPremEnabled === true ||
-      ON_PREM_MODE ||
-      (state.meta && state.meta.onPremEnabled === true) ||
-      (state.settings &&
-        state.settings.toggles &&
-        state.settings.toggles.onPremModeEnabled === true),
-    hasDataFile:
-      fs.existsSync(systemDataStore.JSON_PATH) || fs.existsSync(systemDataStore.XLSX_PATH)
-  });
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`
 });
-
-app.get('/api/system-data', (req, res) => {
-  try {
-    const state = systemDataStore.getState();
-    res.json(systemDataStore.buildClientSnapshot(state));
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message || String(err) });
-  }
-});
-
-app.put('/api/system-data', (req, res) => {
-  try {
-    if (req.headers['x-onprem-skip-disk'] === '1') {
-      return res.json({ ok: true, skipped: true, reason: 'master-test in-memory only' });
-    }
-    const body = req.body || {};
-    const saved = systemDataStore.applyClientSnapshot(body);
-    res.json({ ok: true, lastSavedAt: saved.meta.lastSavedAt });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message || String(err) });
-  }
-});
-
-app.post('/api/system-data/reload-from-disk', (req, res) => {
-  try {
-    const state = systemDataStore.reloadStateFromDisk();
-    res.json({
-      ok: true,
-      customers: state.customers.length,
-      lastSavedAt: state.meta.lastSavedAt
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message || String(err) });
-  }
-});
-
-app.post('/api/storage/toggle-onprem', (req, res) => {
-  try {
-    const enabled = !!(req.body && req.body.enabled);
-    systemDataStore.writeOnPremConfig({ onPremEnabled: enabled });
-    const state = systemDataStore.getState();
-    if (state.settings && state.settings.toggles) {
-      state.settings.toggles.onPremModeEnabled = enabled;
-    }
-    state.meta.onPremEnabled = enabled;
-    systemDataStore.saveStateToDisk(state);
-    res.json({ ok: true, onPremEnabled: enabled });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message || String(err) });
-  }
-});
-
-// ────────────────────────────────────────────────────────────
-// Online ↔ on-prem sync jobs
-// ────────────────────────────────────────────────────────────
-const syncJobsDir = path.join(__dirname, 'data', '.sync-jobs');
-
-function readSyncJobFile(jobId) {
-  const safe = String(jobId || '').replace(/[^a-zA-Z0-9_-]/g, '');
-  if (!safe) return null;
-  const fp = path.join(syncJobsDir, safe + '.json');
-  if (!fs.existsSync(fp)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(fp, 'utf8'));
-  } catch (e) {
-    return null;
-  }
-}
-
-function writeSyncJobFile(jobId, patch) {
-  const safe = String(jobId || '').replace(/[^a-zA-Z0-9_-]/g, '');
-  if (!safe) return null;
-  fs.mkdirSync(syncJobsDir, { recursive: true });
-  const fp = path.join(syncJobsDir, safe + '.json');
-  let cur = {};
-  if (fs.existsSync(fp)) {
-    try {
-      cur = JSON.parse(fs.readFileSync(fp, 'utf8'));
-    } catch (e) {
-      cur = {};
-    }
-  }
-  const next = Object.assign({}, cur, patch, { jobId: safe, updatedAt: Date.now() });
-  fs.writeFileSync(fp, JSON.stringify(next, null, 0), 'utf8');
-  return next;
-}
-
-app.post('/api/sync/online-to-onprem', (req, res) => {
-  try {
-    const jobId =
-      'sync-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-    const port = process.env.PORT || 8000;
-    const baseUrl = (process.env.BASE_URL || `http://127.0.0.1:${port}`).replace(/\/$/, '');
-    const exportScript = path.join(__dirname, 'tools', 'export-firebase-via-browser.mjs');
-    if (!fs.existsSync(exportScript)) {
-      return res.status(500).json({ ok: false, error: 'Export script missing (tools/export-firebase-via-browser.mjs).' });
-    }
-    writeSyncJobFile(jobId, {
-      status: 'running',
-      progress: 5,
-      message: 'Exporting Firebase data via browser…',
-      direction: 'online-to-onprem',
-      error: null,
-      startedAt: Date.now()
-    });
-    const child = spawn(process.execPath, [exportScript], {
-      cwd: __dirname,
-      detached: true,
-      stdio: 'ignore',
-      env: Object.assign({}, process.env, {
-        BASE_URL: baseUrl,
-        ON_PREM_MODE: '0'
-      })
-    });
-    child.on('error', function (spawnErr) {
-      writeSyncJobFile(jobId, {
-        status: 'failed',
-        progress: 100,
-        message: 'Could not start export',
-        error: spawnErr.message || String(spawnErr)
-      });
-    });
-    child.on('exit', function (code) {
-      if (code === 0) {
-        try {
-          const state = systemDataStore.reloadStateFromDisk();
-          writeSyncJobFile(jobId, {
-            status: 'complete',
-            progress: 100,
-            message: 'Online data synced to on-prem storage.',
-            customers: state.customers.length,
-            locations: state.locations.length,
-            codes: state.codes.length,
-            users: state.users.length,
-            drawers: state.drawers.length,
-            error: null
-          });
-        } catch (reloadErr) {
-          writeSyncJobFile(jobId, {
-            status: 'failed',
-            progress: 100,
-            message: 'Export finished but reload failed',
-            error: reloadErr.message || String(reloadErr)
-          });
-        }
-      } else {
-        writeSyncJobFile(jobId, {
-          status: 'failed',
-          progress: 100,
-          message: 'Firebase export failed',
-          error: 'Export process exited with code ' + code
-        });
-      }
-    });
-    child.unref();
-    res.json({ ok: true, jobId: jobId });
-  } catch (err) {
-    console.error('[sync] online-to-onprem error:', err);
-    res.status(500).json({ ok: false, error: err.message || String(err) });
-  }
-});
-
-app.get('/api/sync/status/:jobId', (req, res) => {
-  const job = readSyncJobFile(req.params.jobId);
-  if (!job) {
-    return res.status(404).json({ ok: false, error: 'Sync job not found' });
-  }
-  res.json({ ok: true, job: job });
-});
-
-// ────────────────────────────────────────────────────────────
-// Firebase (optional in on-prem mode)
-// ────────────────────────────────────────────────────────────
-const firebaseAdmin = loadFirebaseAdmin();
-if (firebaseEnvReady && firebaseAdmin) {
-  admin = firebaseAdmin;
-  const serviceAccount = {
-    type: 'service_account',
-    project_id: process.env.FIREBASE_PROJECT_ID,
-    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-    private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    client_email: process.env.FIREBASE_CLIENT_EMAIL,
-    client_id: process.env.FIREBASE_CLIENT_ID,
-    auth_uri: 'https://accounts.google.com/o/oauth2/auth',
-    token_uri: 'https://oauth2.googleapis.com/token',
-    auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
-    client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${process.env.FIREBASE_CLIENT_EMAIL}`
-  };
-
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`
-  });
-  db = admin.firestore();
-}
+const db = admin.firestore();
 
 // ────────────────────────────────────────────────────────────
 // Static files
@@ -661,9 +373,6 @@ app.post('/api/verify-password', (req, res) => {
 // Admin forms data endpoint
 app.get('/api/admin-forms', async (req, res) => {
   try {
-    if (!db) {
-      return res.json({ success: true, forms: [] });
-    }
     console.log('Loading forms for admin console...');
     
     const formsRef = db.collection('forms');
@@ -1795,23 +1504,6 @@ function formatFileSize(bytes) {
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
-  const pwStatus = playwrightBrowsers.getPlaywrightStatus(__dirname);
-  if (!pwStatus.ready) {
-    console.log('[master-test] Playwright Chromium missing — downloading in background (first-time setup)…');
-    playwrightBrowsers
-      .ensurePlaywrightBrowsers(__dirname)
-      .then(function (result) {
-        if (result.ok) {
-          console.log('[master-test] Playwright Chromium ready.');
-        } else {
-          console.warn('[master-test] Playwright Chromium setup failed:', result.error || 'unknown error');
-          console.warn('[master-test] Run manually: npm run playwright:install');
-        }
-      })
-      .catch(function (err) {
-        console.warn('[master-test] Playwright Chromium setup failed:', err.message || String(err));
-      });
-  }
   if (process.env.DEV_BILLING_SCENARIO === '1') {
     const base = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
     console.log('\n[DEV_BILLING_SCENARIO] Browser automation (login first, then open):\n');
