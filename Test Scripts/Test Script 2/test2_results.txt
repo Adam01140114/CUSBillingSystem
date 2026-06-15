@@ -2102,7 +2102,7 @@ Status Update
 Current Status
 $168.36
 $0
-$0.13
+$0.02
 0
 $0
 $0
@@ -2698,7 +2698,7 @@ Status Update
 Current Status
 $168.36
 $0
-$0.13
+$0.02
 0
 $0
 $0
@@ -2710,7 +2710,7 @@ Charge
 Late Fee
 $168.36
 $0
-$0.13
+$0.02
 0
 $0
 $0
@@ -2722,7 +2722,7 @@ Status Update
 Current Status
 $168.36
 $0
-$0.13
+$0.02
 0
 $5.00
 $0
@@ -2734,7 +2734,7 @@ Charge
 Billed Customer
 $168.36
 $0
-$0.13
+$0.02
 0
 $5.00
 N/A
@@ -3162,7 +3162,7 @@ Total (Past Due line)
 $0
 $0
 $0
-$0.13
+$0.02
 $168.36
 $0
 $168.38

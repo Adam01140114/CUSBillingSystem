@@ -25218,8 +25218,8 @@
         priorBill = idx > 0 ? bills[idx - 1] : null;
       }
       const snap = emptyPastDueComposition();
+      const billIdx = bills.findIndex((b) => b === charge);
       if (priorBill) {
-        const billIdx = bills.findIndex((b) => b === charge);
         const priorPastOnBill = roundMoney2(Math.max(0, parseFloat(priorBill.pastDueOnBill) || 0));
         if (billIdx > 1) {
           const spPrior = ledgerTaxCodesAndPucFromEntry(priorBill);
@@ -25240,11 +25240,31 @@
         typeof ledgerTaxCodesAndPucFromBillEntry === 'function'
           ? ledgerTaxCodesAndPucFromBillEntry(charge)
           : ledgerTaxCodesAndPucFromEntry(charge);
+      const currentSewer = roundMoney2(Math.max(0, parseFloat(charge.sewerChargeOnBill) || 0));
+      if (priorBill && billIdx === 1) {
+        const spPrior = ledgerTaxCodesAndPucFromEntry(priorBill);
+        const firstSewer = roundMoney2(Math.max(0, parseFloat(priorBill.sewerChargeOnBill) || 0));
+        const priorCycleFace = roundMoney2(
+          Math.max(0, firstSewer + spPrior.taxCodes + spPrior.puc)
+        );
+        if (
+          firstSewer > 0.005 &&
+          currentSewer > firstSewer + 1.0 &&
+          Math.abs(pastDueLine - priorCycleFace) < 0.05
+        ) {
+          snap['Past due amount'] = 0;
+          snap['Tax Codes'] = spPrior.taxCodes;
+          snap['Puc surcharge'] = spPrior.puc;
+          snap['Current amount due'] = firstSewer;
+          getCanonicalHierarchyLabels().forEach((k) => {
+            snap[k] = roundMoney2(snap[k] || 0);
+          });
+          return snap;
+        }
+      }
       snap['Tax Codes'] = roundMoney2(Math.max(0, parseFloat(sp.taxCodes) || 0));
       snap['Puc surcharge'] = roundMoney2(Math.max(0, parseFloat(sp.puc) || 0));
-      snap['Current amount due'] = roundMoney2(
-        Math.max(0, parseFloat(charge.sewerChargeOnBill) || 0)
-      );
+      snap['Current amount due'] = currentSewer;
       getCanonicalHierarchyLabels().forEach((k) => {
         snap[k] = roundMoney2(snap[k] || 0);
       });
@@ -25539,6 +25559,51 @@
       return snapComp;
     }
 
+    /** Residual PUC after on-bill credit consumes tax+PUC surcharges (e.g. $10 credit on $10.02 surcharges → $0.02 PUC). */
+    function resolveOnBillCreditResidualPuc(anchorEntry) {
+      if (!anchorEntry) return 0;
+      const credit = roundMoney2(Math.max(0, parseFloat(anchorEntry.creditAppliedOnBill || 0)));
+      if (credit <= 0.005) return 0;
+      const sp = ledgerTaxCodesAndPucFromEntry(anchorEntry);
+      const totalSurcharge = roundMoney2(Math.max(0, sp.taxCodes + sp.puc));
+      return roundMoney2(Math.max(0, totalSurcharge - credit));
+    }
+
+    /**
+     * Residual PUC on partial-pay / on-bill-credit bill rows (uses drift-adjusted partial statement when available).
+     */
+    function resolveResidualPucForPartialPayBill(customer, charge, statementLineOpt) {
+      if (!customer || !charge) return 0;
+      if (typeof getPartialPaymentStatementPastDueComposition === 'function') {
+        const partialComp = getPartialPaymentStatementPastDueComposition(
+          customer,
+          charge,
+          false,
+          statementLineOpt
+        );
+        if (partialComp) {
+          return roundMoney2(Math.max(0, parseFloat(partialComp['Puc surcharge']) || 0));
+        }
+      }
+      if (
+        charge.creditAppliedOnBill != null &&
+        parseFloat(charge.creditAppliedOnBill) > 0.005
+      ) {
+        return resolveOnBillCreditResidualPuc(charge);
+      }
+      const payBefore =
+        typeof getMostRecentPaymentBeforeLedgerEntry === 'function'
+          ? getMostRecentPaymentBeforeLedgerEntry(customer, charge)
+          : null;
+      if (payBefore && typeof ledgerStatusSnapshotFieldsFromAnchorEntry === 'function') {
+        const paySnap = ledgerStatusSnapshotFieldsFromAnchorEntry(customer, payBefore);
+        if (paySnap && paySnap.puc > 0.005) {
+          return roundMoney2(paySnap.puc);
+        }
+      }
+      return 0;
+    }
+
     /**
      * Past-due modal face after on-bill credit or a partial-pay statement (tax 0, residual PUC, sewer only).
      * Does not require creditAppliedOnBill on the row — partial-pay $10 checks may post after the bill ledger order.
@@ -25549,18 +25614,7 @@
       snap['Past due amount'] = 0;
       snap['Late fees'] = 0;
       snap['Tax Codes'] = 0;
-      let puc = 0.13;
-      const payBefore =
-        customer && typeof getMostRecentPaymentBeforeLedgerEntry === 'function'
-          ? getMostRecentPaymentBeforeLedgerEntry(customer, creditBill)
-          : null;
-      if (payBefore && typeof ledgerStatusSnapshotFieldsFromAnchorEntry === 'function') {
-        const paySnap = ledgerStatusSnapshotFieldsFromAnchorEntry(customer, payBefore);
-        if (paySnap && paySnap.puc > 0.005) {
-          puc = roundMoney2(paySnap.puc);
-        }
-      }
-      snap['Puc surcharge'] = puc;
+      snap['Puc surcharge'] = resolveResidualPucForPartialPayBill(customer, creditBill, null);
       snap['Current amount due'] = roundMoney2(
         Math.max(0, parseFloat(creditBill.sewerChargeOnBill) || 0)
       );
@@ -27238,17 +27292,7 @@
         parseFloat(anchorEntry.creditAppliedOnBill) > 0.005
       ) {
         const sewerOb = Math.round(Math.max(0, parseFloat(anchorEntry.sewerChargeOnBill || 0)) * 100) / 100;
-        let pucOb = 0.13;
-        const payBefore =
-          typeof getMostRecentPaymentBeforeLedgerEntry === 'function'
-            ? getMostRecentPaymentBeforeLedgerEntry(customer, anchorEntry)
-            : null;
-        if (payBefore && typeof ledgerStatusSnapshotFieldsFromAnchorEntry === 'function') {
-          const paySnap = ledgerStatusSnapshotFieldsFromAnchorEntry(customer, payBefore);
-          if (paySnap && paySnap.puc > 0.005) {
-            pucOb = Math.round(paySnap.puc * 100) / 100;
-          }
-        }
+        const pucOb = resolveOnBillCreditResidualPuc(anchorEntry);
         const netOb =
           anchorEntry.netBalanceAfterBill != null && !isNaN(parseFloat(anchorEntry.netBalanceAfterBill))
             ? Math.round(parseFloat(anchorEntry.netBalanceAfterBill) * 100) / 100
@@ -27313,17 +27357,7 @@
           const priorNetLf = Math.round(parseFloat(stmtLfSnap.netBalanceAfterBill || 0) * 100) / 100;
           sewer = Math.round(Math.max(0, parseFloat(stmtLfSnap.sewerChargeOnBill || 0)) * 100) / 100;
           pastDue = 0;
-          let pucLf = 0.13;
-          const payBeforeLf =
-            typeof getMostRecentPaymentBeforeLedgerEntry === 'function'
-              ? getMostRecentPaymentBeforeLedgerEntry(customer, stmtLfSnap)
-              : null;
-          if (payBeforeLf && typeof ledgerStatusSnapshotFieldsFromAnchorEntry === 'function') {
-            const paySnapLf = ledgerStatusSnapshotFieldsFromAnchorEntry(customer, payBeforeLf);
-            if (paySnapLf && paySnapLf.puc > 0.005) {
-              pucLf = Math.round(paySnapLf.puc * 100) / 100;
-            }
-          }
+          const pucLf = resolveResidualPucForPartialPayBill(customer, stmtLfSnap, null);
           balanceAfter =
             priorNetLf > 0.005
               ? Math.round((priorNetLf + incLf) * 100) / 100
@@ -28332,22 +28366,7 @@
           ) {
             pastDue = 0;
             taxCodes = 0;
-            const payBefore =
-              typeof getMostRecentPaymentBeforeLedgerEntry === 'function'
-                ? getMostRecentPaymentBeforeLedgerEntry(customer, c)
-                : null;
-            let snapPuc = 0;
-            if (payBefore && typeof ledgerStatusSnapshotFieldsFromAnchorEntry === 'function') {
-              const snapFields = ledgerStatusSnapshotFieldsFromAnchorEntry(customer, payBefore);
-              if (snapFields) {
-                snapPuc = Math.round(Math.max(0, parseFloat(snapFields.puc) || 0) * 100) / 100;
-              }
-            }
-            if (snapPuc > 0.005) {
-              pucSurcharge = snapPuc;
-            } else {
-              pucSurcharge = 0.13;
-            }
+            pucSurcharge = resolveResidualPucForPartialPayBill(customer, c, storedPastDue);
             try {
               if (typeof window.masterTestLog === 'function') {
                 window.masterTestLog('ledger:partialPayBillChargeColumnsAdjusted', {
@@ -28369,27 +28388,11 @@
           ) {
             pastDue = 0;
             taxCodes = 0;
-            let snapPucAfterCr = 0.13;
-            const payBeforeAfterCr =
-              typeof getMostRecentPaymentBeforeLedgerEntry === 'function'
-                ? getMostRecentPaymentBeforeLedgerEntry(
-                    customer,
-                    billingChargesForLedger[billIdx - 1]
-                  )
-                : null;
-            if (
-              payBeforeAfterCr &&
-              typeof ledgerStatusSnapshotFieldsFromAnchorEntry === 'function'
-            ) {
-              const snapAfterCr = ledgerStatusSnapshotFieldsFromAnchorEntry(
-                customer,
-                payBeforeAfterCr
-              );
-              if (snapAfterCr && snapAfterCr.puc > 0.005) {
-                snapPucAfterCr = Math.round(snapAfterCr.puc * 100) / 100;
-              }
-            }
-            pucSurcharge = snapPucAfterCr;
+            pucSurcharge = resolveResidualPucForPartialPayBill(
+              customer,
+              billingChargesForLedger[billIdx - 1],
+              null
+            );
             try {
               if (typeof window.masterTestLog === 'function') {
                 window.masterTestLog('ledger:billAfterOnBillCreditColumnsAdjusted', {
@@ -28404,6 +28407,34 @@
             }
           } else if (billIdx === 1) {
             pastDue = 0;
+            const firstBill = billingChargesForLedger[0];
+            if (firstBill) {
+              const firstSewer = Math.round(
+                Math.max(0, parseFloat(firstBill.sewerChargeOnBill || 0)) * 100
+              ) / 100;
+              const currentSewer = Math.round(
+                Math.max(0, parseFloat(c.sewerChargeOnBill || 0)) * 100
+              ) / 100;
+              if (firstSewer > 0.005 && currentSewer > firstSewer + 1.0) {
+                const spFirst = ledgerTaxCodesAndPucFromEntry(firstBill);
+                sewer = firstSewer;
+                taxCodes = spFirst.taxCodes;
+                pucSurcharge = spFirst.puc;
+                try {
+                  if (typeof window.masterTestLog === 'function') {
+                    window.masterTestLog('ledger:secondBillProratedChargeColumns', {
+                      account: customer.accountNumber || customer.id,
+                      ledgerOrder: cOrder,
+                      firstSewer: firstSewer,
+                      displayTax: taxCodes,
+                      displayPuc: pucSurcharge
+                    });
+                  }
+                } catch (eLog2nd) {
+                  /* ignore */
+                }
+              }
+            }
           } else if (billIdx > 1) {
             const priorBill = billingChargesForLedger[billIdx - 1];
             let priorPeriodCharges = 0;
@@ -28461,21 +28492,7 @@
             sewer = Math.round(Math.max(0, parseFloat(stmtBeforeLf.sewerChargeOnBill || 0)) * 100) / 100;
             pastDue = 0;
             taxCodes = 0;
-            let snapPucLf = 0.13;
-            const payBeforeLf =
-              typeof getMostRecentPaymentBeforeLedgerEntry === 'function'
-                ? getMostRecentPaymentBeforeLedgerEntry(customer, stmtBeforeLf)
-                : null;
-            if (
-              payBeforeLf &&
-              typeof ledgerStatusSnapshotFieldsFromAnchorEntry === 'function'
-            ) {
-              const snapLf = ledgerStatusSnapshotFieldsFromAnchorEntry(customer, payBeforeLf);
-              if (snapLf && snapLf.puc > 0.005) {
-                snapPucLf = Math.round(snapLf.puc * 100) / 100;
-              }
-            }
-            pucSurcharge = snapPucLf;
+            pucSurcharge = resolveResidualPucForPartialPayBill(customer, stmtBeforeLf, null);
             pastDue = 0;
             lateFee = 0;
             creditApplied = incLate > 0.005 ? incLate : 0;

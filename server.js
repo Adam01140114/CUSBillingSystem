@@ -54,6 +54,12 @@ app.use(cors());
 // Master test runner (viewer → Playwright) — before static so POST is never swallowed
 // ────────────────────────────────────────────────────────────
 const masterTestJobsDir = path.join(__dirname, 'Test Scripts', '.master-test-jobs');
+const {
+  loadBillingTestCredentials,
+  saveBillingTestCredentials,
+  ensureLocalCredentialsFile,
+  credentialsStatus
+} = require('./tools/load-billing-test-credentials.cjs');
 
 function readMasterTestJobFile(jobId) {
   const safe = String(jobId || '').replace(/[^a-zA-Z0-9_-]/g, '');
@@ -87,11 +93,37 @@ function writeMasterTestJobFile(jobId, patch) {
 
 app.get('/api/master-test/ping', (req, res) => {
   const runnerPath = path.join(__dirname, 'tools', 'run-dynamic-master-test.mjs');
+  const creds = credentialsStatus();
   res.json({
     ok: true,
     runnerInstalled: fs.existsSync(runnerPath),
-    jobsDir: masterTestJobsDir
+    jobsDir: masterTestJobsDir,
+    credentialsConfigured: creds.configured,
+    credentialsError: creds.error || null
   });
+});
+
+app.get('/api/master-test/credentials', (req, res) => {
+  try {
+    const status = credentialsStatus();
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.post('/api/master-test/credentials', (req, res) => {
+  try {
+    const saved = saveBillingTestCredentials(req.body || {});
+    const status = credentialsStatus();
+    res.json({
+      ok: true,
+      saved: { username: saved.email, baseUrl: saved.baseUrl },
+      ...status
+    });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
 });
 
 app.post('/api/master-test/run', (req, res) => {
@@ -100,6 +132,11 @@ app.post('/api/master-test/run', (req, res) => {
     const steps = body.steps;
     if (!Array.isArray(steps) || !steps.length) {
       return res.status(400).json({ ok: false, error: 'At least one step is required.' });
+    }
+    ensureLocalCredentialsFile();
+    const creds = loadBillingTestCredentials();
+    if (!creds.ok) {
+      return res.status(400).json({ ok: false, error: creds.error });
     }
     const jobId =
       'job-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
@@ -133,9 +170,13 @@ app.post('/api/master-test/run', (req, res) => {
       cwd: __dirname,
       detached: true,
       stdio: 'ignore',
+      windowsHide: true,
       env: Object.assign({}, process.env, {
         MASTER_TEST_JOB_FILE: jobFile,
-        MASTER_TEST_CONFIG: JSON.stringify(config)
+        MASTER_TEST_CONFIG: JSON.stringify(config),
+        FIREBASE_TEST_EMAIL: creds.email,
+        FIREBASE_TEST_PASSWORD: creds.password,
+        BASE_URL: creds.baseUrl
       })
     });
     child.on('error', function (spawnErr) {
@@ -1504,6 +1545,18 @@ function formatFileSize(bytes) {
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  ensureLocalCredentialsFile();
+  const credStatus = credentialsStatus();
+  if (!credStatus.configured) {
+    console.log(
+      '\n[master-test] Test login not configured — live tests need billing app username + user code.\n' +
+        '  Open the test viewer → Configure Test Login, or edit tools/billing-test.local.json\n' +
+        '  (copy from tools/billing-test.local.example.json).\n'
+    );
+    if (credStatus.error) {
+      console.log('  ' + credStatus.error + '\n');
+    }
+  }
   if (process.env.DEV_BILLING_SCENARIO === '1') {
     const base = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
     console.log('\n[DEV_BILLING_SCENARIO] Browser automation (login first, then open):\n');

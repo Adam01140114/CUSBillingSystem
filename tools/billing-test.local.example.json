@@ -1,5 +1,6 @@
 {
   "email": "rich",
   "password": "your-firebase-password-here",
-  "baseUrl": "http://127.0.0.1:8000"
+  "baseUrl": "http://127.0.0.1:8000",
+  "_comment": "email = billing app username (full name). password = user code from the sign-in modal."
 }

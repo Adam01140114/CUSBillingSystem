@@ -958,9 +958,11 @@
     <h1>Master Test viewer</h1>
     <p>Tests are stored on disk under <code>Test Scripts/Test Script N/</code> (not cookies or browser storage). Use <strong>Create New Test</strong> or <strong>Import Test</strong> to add tests, <strong>Import Data</strong> to load files, and <strong>Run All Tests</strong> to run every test. Requires <code>npm start</code>. Double-click a test title to edit steps; double-click cells to edit results.</p>
     <p id="masterTestApiBanner" class="hidden" style="margin:0.65rem 0 0;padding:0.55rem 0.75rem;border-radius:8px;border:1px solid rgba(251,191,36,0.45);background:rgba(251,191,36,0.12);color:#fde68a;font-size:0.85rem"></p>
+    <p id="masterTestCredentialsBanner" class="hidden" style="margin:0.65rem 0 0;padding:0.55rem 0.75rem;border-radius:8px;border:1px solid rgba(251,191,36,0.45);background:rgba(251,191,36,0.12);color:#fde68a;font-size:0.85rem"></p>
   </header>
   <div class="header-actions">
     <button type="button" id="btnImportDataHeader">Import Data</button>
+    <button type="button" id="btnConfigureTestLogin" class="secondary">Configure Test Login</button>
     <button type="button" id="btnRunAllTests">Run All Tests</button>
     <button type="button" id="btnCreateNewTest">Create New Test</button>
   </div>
@@ -986,8 +988,38 @@
         <button type="button" id="pastDueModalPaste" disabled>Paste configuration</button>
         <span id="pastDueModalFeedback" class="mt-past-due-feedback hidden" role="status" aria-live="polite"></span>
       </div>
-      <p class="hint-edit" style="margin:0 0 0.5rem">Double-click a value to edit ($ stays fixed). Modal: Copy/Paste configuration moves all breakdown fields. Ledger: click a Past Due cell, then Ctrl+C / Ctrl+V (Cmd on Mac) to copy the column value. Changing Past due amount, Late Fees, Tax Codes, PUC Surcharge, Sewer Charge, or Credit recalculates Total (Past Due line) and syncs the ledger Past Due column. ✓ when components sum to Total (Past Due line).</p>
+      <p class="hint-edit" style="margin:0 0 0.5rem">Double-click a value to edit ($ stays fixed). Modal: Copy/Paste configuration moves all breakdown fields. Ledger: click a Past Due cell, then Ctrl+C / Ctrl+V (Cmd on Mac) to copy the column value. Changing component fields recalculates Total (Past Due line) in this modal only — ledger columns (Sewer, Tax, PUC, Past Due, etc.) are edited separately in the table and saved as-is. ✓ when components sum to Total (Past Due line).</p>
       <div class="kv" id="pastDueModalKv"></div>
+    </div>
+  </div>
+
+  <div id="testLoginModal" class="mt-modal-overlay hidden" aria-hidden="true">
+    <div class="mt-modal-panel" style="max-width: 28rem; width: calc(100% - 2rem)">
+      <div class="mt-modal-handle">
+        <div>
+          <h4 class="mt-section-h3" style="margin: 0">Configure test login</h4>
+          <p class="hint-edit" style="margin: 0.35rem 0 0">
+            Live tests sign into the billing app automatically. Use the same <strong>username</strong> (full name) and <strong>user code</strong> as the sign-in modal. Saved to <code>tools/billing-test.local.json</code> on the server.
+          </p>
+        </div>
+        <button type="button" class="mt-modal-close" id="testLoginModalClose">Cancel</button>
+      </div>
+      <div class="create-test-field" style="margin-top: 0.75rem">
+        <label for="testLoginUsername">Username (full name)</label>
+        <input type="text" id="testLoginUsername" autocomplete="username" placeholder="rich" />
+      </div>
+      <div class="create-test-field">
+        <label for="testLoginUserCode">User code</label>
+        <input type="password" id="testLoginUserCode" autocomplete="current-password" placeholder="Your billing app user code" />
+      </div>
+      <div class="create-test-field">
+        <label for="testLoginBaseUrl">Billing app URL</label>
+        <input type="text" id="testLoginBaseUrl" placeholder="http://127.0.0.1:8000" />
+      </div>
+      <p id="testLoginModalError" class="hidden" style="margin:0.5rem 0 0;color:#fca5a5;font-size:0.85rem"></p>
+      <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-top:0.75rem">
+        <button type="button" id="testLoginModalSave" style="background:rgba(61,156,249,0.25);border:1px solid var(--accent);color:var(--text);border-radius:8px;padding:0.45rem 0.9rem;cursor:pointer">Save</button>
+      </div>
     </div>
   </div>
 
@@ -1723,7 +1755,6 @@
         dedupePastDueEntries(sn);
         ensurePastDueEntryIds(sn);
       });
-      syncAllLedgerPastDueFromEntryTotals();
     }
 
     /** [ROW n] in captures is not always the ledger row index — match by date · type · subtype. */
@@ -1793,20 +1824,6 @@
         return x.entry;
       });
       relinkPastDueEntriesToLedger(stepNum);
-    }
-
-    /** Ledger Past Due column always reflects Total (Past Due line) from the breakdown entry. */
-    function syncAllLedgerPastDueFromEntryTotals() {
-      stepOrder.forEach(function (sn) {
-        const d = editableByStep.get(sn);
-        if (!d || !Array.isArray(d.pastDue)) return;
-        d.pastDue.forEach(function (e) {
-          if (e.rowIndex == null || isNaN(e.rowIndex)) return;
-          const ti = findPastDuePairIndexByKey(e, 'Total (Past Due line)');
-          if (ti < 0 || !e.pairs || !e.pairs[ti]) return;
-          syncPastDueTotalLineOnly(sn, e.rowIndex, e.pairs[ti].val);
-        });
-      });
     }
 
     function ledgerPastDueTotalFromEntry(entry) {
@@ -2306,9 +2323,6 @@
         syncLedgerCellsInDom(sn, ri, targetCol, ledgerStored, {
           pastDueCol: targetCol === pastDueCol
         });
-        if (targetCol === pastDueCol) {
-          syncPastDueTotalLineOnly(sn, ri, text);
-        }
       });
       return fp;
     }
@@ -2512,7 +2526,7 @@
      * Step 1 amount breakdown = first-bill/prorated baseline; highest sewer in any step = full month.
      */
     function getCustomerCycleChargeProfiles() {
-      const prorated = computeCustomerDefaultChargesFromAmount(1);
+      let prorated = computeCustomerDefaultChargesFromAmount(1);
       let fullMonth = prorated ? Object.assign({}, prorated) : null;
 
       for (let i = 0; i < stepOrder.length; i++) {
@@ -2582,11 +2596,74 @@
         fullMonth.sewer > prorated.sewer + 0.02 &&
         fullMonth.total > prorated.total + 0.02;
 
+      if (fullMonth) {
+        fullMonth = enrichProfileTaxPucFromLedger(fullMonth);
+      }
+      if (prorated) {
+        prorated = enrichProfileTaxPucFromLedger(prorated, { preferFirstBill: true });
+      }
+
       return {
         prorated: prorated,
         fullMonth: fullMonth || prorated,
         hasProration: hasProration
       };
+    }
+
+    /** When ledger Tax Codes / PUC columns exist, replace combined amount-breakdown tax with the split. */
+    function enrichProfileTaxPucFromLedger(profile, options) {
+      if (!profile) return profile;
+      options = options || {};
+
+      function pickFromLedger(minBill, maxBill) {
+        let best = null;
+        for (let i = 0; i < stepOrder.length; i++) {
+          const d = editableByStep.get(stepOrder[i]);
+          if (!d || !d.ledger) continue;
+          const headers = d.ledger.headers;
+          const rows = d.ledger.rows;
+          const c = ledgerMoneyCols(headers);
+          let billCount = 0;
+          for (let r = 0; r < rows.length; r++) {
+            if (
+              !isLedgerChargeRow(rows[r], headers) ||
+              !isLedgerBilledCustomerRow(rows[r], headers)
+            ) {
+              continue;
+            }
+            billCount++;
+            if (billCount < minBill) continue;
+            if (maxBill != null && billCount > maxBill) continue;
+            const sewerCol = ledgerCellMoney(rows[r], c.sewer);
+            const taxCol = ledgerCellMoney(rows[r], c.tax);
+            const pucCol = ledgerCellMoney(rows[r], c.puc);
+            if (taxCol <= 0.005 && pucCol <= 0.005) continue;
+            const charged =
+              c.amountCharged >= 0 ? ledgerCellMoney(rows[r], c.amountCharged) : 0;
+            const colSum = Math.round((sewerCol + taxCol + pucCol) * 100) / 100;
+            const totalRef = profile.total;
+            const matchesProfile =
+              moneyNearlyEqual(colSum, totalRef) ||
+              (charged > 0.005 && moneyNearlyEqual(charged, totalRef)) ||
+              moneyNearlyEqual(sewerCol, profile.sewer);
+            if (!matchesProfile) continue;
+            const candidate = {
+              sewer: sewerCol > 0.005 ? sewerCol : profile.sewer,
+              taxCodes: taxCol,
+              puc: pucCol,
+              taxCombined: Math.round((taxCol + pucCol) * 100) / 100,
+              total: charged > 0.005 ? charged : colSum > 0.005 ? colSum : profile.total
+            };
+            if (!best || candidate.total > best.total + 0.02) best = candidate;
+          }
+        }
+        return best;
+      }
+
+      if (options.preferFirstBill) {
+        return pickFromLedger(1, 1) || profile;
+      }
+      return pickFromLedger(2, null) || pickFromLedger(1, 1) || profile;
     }
 
     function countPriorBilledCustomerChargeRows(rows, headers, rowIndex) {
@@ -3240,15 +3317,31 @@
       if (hint) {
         html += '<p class="hint-edit" style="margin:0.25rem 0 0.5rem">' + escapeHtml(hint) + '</p>';
       }
+      const taxCodes =
+        ch.taxCodes != null && !isNaN(ch.taxCodes) ? ch.taxCodes : 0;
+      const puc = ch.puc != null && !isNaN(ch.puc) ? ch.puc : 0;
+      const taxCombined =
+        ch.taxCombined != null && !isNaN(ch.taxCombined)
+          ? ch.taxCombined
+          : Math.round((taxCodes + puc) * 100) / 100;
+      let displayTax = taxCodes;
+      let displayPuc = puc;
+      if (taxCodes <= 0.005 && puc <= 0.005 && taxCombined > 0.005) {
+        displayTax = taxCombined;
+        displayPuc = 0;
+      }
       html +=
         '<div class="kv">' +
         '<div>Sewer charge</div><div>' +
         formatUsd(ch.sewer) +
         '</div>' +
-        '<div>Tax charge (Tax Codes + PUC)</div><div><strong>' +
-        formatUsd(ch.taxCombined != null ? ch.taxCombined : ch.taxCodes || 0) +
-        '</strong></div>' +
-        '<div>Cycle total (Sewer + Tax)</div><div><strong>' +
+        '<div>Tax Codes</div><div>' +
+        formatUsd(displayTax) +
+        '</div>' +
+        '<div>PUC Surcharge</div><div>' +
+        formatUsd(displayPuc) +
+        '</div>' +
+        '<div>Cycle total (Sewer + Tax Codes + PUC)</div><div><strong>' +
         formatUsd(ch.total) +
         '</strong></div></div></div>';
       return html;
@@ -4418,7 +4511,7 @@
         html += '</div>';
       } else {
         html +=
-          '<p class="hint-edit">Double-click a cell below to edit. Click a <strong>Past Due</strong> cell, then <strong>Ctrl+C</strong> / <strong>Ctrl+V</strong> (Cmd on Mac) to copy/paste the value or full breakdown (see console: <code>[MasterTestViewer]</code>). Past Due Details modal: <strong>Copy configuration</strong> / <strong>Paste configuration</strong>. Rows with the same date and type (e.g. two Status Updates on one day) stay <strong>separate</strong>; matching rows sync across <strong>steps</strong> only (same position among duplicates).</p>' +
+          '<p class="hint-edit">Double-click a cell below to edit. Click a <strong>Past Due</strong> cell, then <strong>Ctrl+C</strong> / <strong>Ctrl+V</strong> (Cmd on Mac) to copy/paste the ledger Past Due value. Past Due Details modal edits are saved separately from ledger columns (Sewer, Tax, PUC, etc.). Matching ledger rows sync across <strong>steps</strong> only when you edit the table directly.</p>' +
           renderLedgerTable(lh.headers, ensureLedgerStatusSeparatorRows(lh.headers, lh.rows), step.stepNum, 'actual');
       }
       html += '</div>';
@@ -4632,7 +4725,6 @@
         const ti = findPastDuePairIndexByKey(entry, 'Total (Past Due line)');
         if (ti >= 0) entry.pairs[ti].val = formatted;
       }
-      syncPastDueTotalLineOnly(stepNum, rowIndex, formatted);
       return {
         totalNum: totalNum,
         formatted: formatted,
@@ -4640,59 +4732,10 @@
       };
     }
 
-    /** Sync Total (Past Due line) to modal entry and ledger Past Due column (not Past due amount bucket). */
-    function syncPastDueTotalLineOnly(stepNum, rowIndex, text) {
-      const ledgerStored = ledgerCellStoredMoney(
-        isEditableMoneyValue(text) ? stripLeadingDollar(text) : String(text || '')
-      );
-      const entry = resolvePastDueEntryForLedgerRow(stepNum, rowIndex);
-      if (entry && entry.pairs) {
-        entry.rowIndex = rowIndex;
-        entry.pairs.forEach(function (p) {
-          if (p.key === 'Total (Past Due line)') {
-            p.val = ledgerStored;
-          }
-        });
-      }
-      const d = editableByStep.get(stepNum);
-      if (!d || !d.ledger || !d.ledger.rows[rowIndex]) return;
-      const col = findPastDueColIndex(d.ledger.headers);
-      if (col >= 0) {
-        d.ledger.rows[rowIndex][col] = ledgerStored;
-        syncLedgerCellsInDom(stepNum, rowIndex, col, ledgerStored, { pastDueCol: true });
-      }
-    }
-
     function pastDueModalPairStoredMoney(text) {
       return ledgerCellStoredMoney(
         isEditableMoneyValue(text) ? stripLeadingDollar(text) : String(text || '')
       );
-    }
-
-    function syncPastDuePairToLedger(stepNum, rowIndex, pairKey, val) {
-      if (pairKey === 'Past due amount') return;
-      const headers = ledgerHeadersFromAnyStep();
-      const col = pastDuePairKeyToLedgerCol(pairKey, headers);
-      if (col < 0) return;
-      const ledgerStored = ledgerCellStoredValue(val);
-      applyLedgerCellEdit(stepNum, rowIndex, col, ledgerStored);
-      syncLedgerCellsInDom(stepNum, rowIndex, col, ledgerStored, {
-        pastDueCol: col === findPastDueColIndex(headers)
-      });
-    }
-
-    function syncPastDueEntryToLedgerRow(stepNum, rowIndex) {
-      const fp = getLedgerRowFingerprint(stepNum, rowIndex);
-      if (!fp) return;
-      const ordinal = getLedgerRowMatchOrdinal(stepNum, rowIndex);
-      stepOrder.forEach(function (sn) {
-        const ri = findLedgerRowIndexForSync(sn, fp, ordinal);
-        const entry = resolvePastDueEntryForLedgerRow(sn, ri);
-        if (!entry || !entry.pairs || ri < 0) return;
-        entry.pairs.forEach(function (p) {
-          syncPastDuePairToLedger(sn, ri, p.key, p.val);
-        });
-      });
     }
 
     function refreshLedgerPastDueRowInDom(stepNum, rowIndex) {
@@ -4825,7 +4868,6 @@
           });
         });
         recalcPastDueLineTotalForRow(sn, ri);
-        syncPastDueEntryToLedgerRow(sn, ri);
         refreshLedgerPastDueRowInDom(sn, ri);
         refreshLedgerRowAndDependents(sn, ri);
         pastedCount++;
@@ -4934,7 +4976,6 @@
           });
         });
         recalcPastDueLineTotalForRow(stepNum, rowIndex);
-        syncPastDueEntryToLedgerRow(stepNum, rowIndex);
       } else if (pastDueClipboard.ledgerValueOnly != null) {
         const stored = ledgerCellStoredValue(pastDueClipboard.ledgerValueOnly);
         const fpPaste = propagateLedgerCellToAllSteps(stepNum, rowIndex, col, stored);
@@ -5014,7 +5055,7 @@
       });
     }
 
-    /** Past-due popup edit — syncs matching row position across steps; each entry ID stays separate. */
+    /** Past-due popup edit — syncs matching breakdown entry across steps; does not write into ledger columns. */
     function propagatePastDuePairEdit(stepNum, rowIndex, pairIndex, text, entryId) {
       if (
         stepNum == null ||
@@ -5062,36 +5103,9 @@
         if (pairKey && pairKey !== 'Total (Past Due line)') {
           const rec = recalcPastDueLineTotalForRow(sn, ri);
           if (sn === stepNum) totalRecalc = rec;
-        } else if (pairKey === 'Total (Past Due line)') {
-          syncPastDueTotalLineOnly(sn, ri, stored);
         }
       });
 
-      const headers = ledgerHeadersFromAnyStep();
-      const col = pairKey ? pastDuePairKeyToLedgerCol(pairKey, headers) : -1;
-      if (col >= 0) {
-        stepOrder.forEach(function (sn) {
-          const ri = findLedgerRowIndexForSync(sn, fp, ordinal);
-          if (ri < 0) return;
-          const targetCol = resolveLedgerColumnIndex(sn, stepNum, col);
-          if (targetCol < 0) return;
-          applyLedgerCellEdit(sn, ri, targetCol, stored);
-          syncLedgerCellsInDom(sn, ri, targetCol, stored, {
-            pastDueCol: targetCol === findPastDueColIndex(
-              editableByStep.get(sn) && editableByStep.get(sn).ledger
-                ? editableByStep.get(sn).ledger.headers
-                : headers
-            )
-          });
-          const snHeaders =
-            editableByStep.get(sn) && editableByStep.get(sn).ledger
-              ? editableByStep.get(sn).ledger.headers
-              : headers;
-          if (targetCol === findPastDueColIndex(snHeaders)) {
-            syncPastDueTotalLineOnly(sn, ri, stored);
-          }
-        });
-      }
       if (totalRecalc && totalRecalc.totalPairIndex >= 0) {
         syncPastDueModalKvInDom(totalRecalc.totalPairIndex, totalRecalc.formatted);
       } else {
@@ -5226,12 +5240,6 @@
         entryId: entry.entryId,
         rowIndex: entry.rowIndex
       };
-      if (entry.rowIndex != null && !isNaN(entry.rowIndex)) {
-        const ti = findPastDuePairIndexByKey(entry, 'Total (Past Due line)');
-        if (ti >= 0 && entry.pairs[ti]) {
-          syncPastDueTotalLineOnly(stepNum, entry.rowIndex, entry.pairs[ti].val);
-        }
-      }
       document.getElementById('pastDueModalLabel').innerHTML = formatPastDueModalHeaderHtml(
         entry,
         stepNum
@@ -5875,7 +5883,10 @@
         }
       } catch (err) {
         root.innerHTML = '<p class="err">' + escapeHtml(err.message || String(err)) + '</p>';
-        if (hint) hint.textContent = 'Fix the file and reload.';
+        if (hint) {
+          hint.textContent =
+            'Could not render this file: ' + (err.message || String(err)) + '. Reload the page after fixing the viewer or file.';
+        }
       }
     }
 
@@ -6376,8 +6387,118 @@
     let activeEditorIsExpected = false;
     const activeTestRuns = {};
     let masterTestApiAvailable = null;
+    let masterTestCredentialsConfigured = false;
 
-    const MASTER_TEST_VIEWER_URL = 'http://localhost:8000/test-scripts/master_test_viewer.html';
+    async function refreshMasterTestCredentialsStatus() {
+      const banner = document.getElementById('masterTestCredentialsBanner');
+      const runAllBtn = document.getElementById('btnRunAllTests');
+      if (!masterTestApiAvailable) {
+        masterTestCredentialsConfigured = false;
+        if (banner) banner.classList.add('hidden');
+        return false;
+      }
+      try {
+        const hit = await fetchMasterTestApi('/api/master-test/credentials', { cache: 'no-store' });
+        masterTestCredentialsConfigured = !!(hit.data && hit.data.ok && hit.data.configured);
+        if (banner) {
+          if (masterTestCredentialsConfigured) {
+            banner.classList.add('hidden');
+          } else {
+            banner.classList.remove('hidden');
+            banner.innerHTML =
+              'Test login is not configured. Click <strong>Configure Test Login</strong> and enter the same username + user code you use to sign into the billing app.';
+          }
+        }
+        if (runAllBtn) {
+          runAllBtn.disabled = !masterTestApiAvailable || !masterTestCredentialsConfigured;
+        }
+        return masterTestCredentialsConfigured;
+      } catch (e) {
+        masterTestCredentialsConfigured = false;
+        if (banner) {
+          banner.classList.remove('hidden');
+          banner.textContent = e.message || String(e);
+        }
+        if (runAllBtn) runAllBtn.disabled = true;
+        return false;
+      }
+    }
+
+    function openTestLoginModal() {
+      const modal = document.getElementById('testLoginModal');
+      const err = document.getElementById('testLoginModalError');
+      if (err) {
+        err.classList.add('hidden');
+        err.textContent = '';
+      }
+      if (modal) {
+        modal.classList.remove('hidden');
+        modal.setAttribute('aria-hidden', 'false');
+      }
+      fetchMasterTestApi('/api/master-test/credentials', { cache: 'no-store' })
+        .then(function (hit) {
+          const data = hit.data || {};
+          const userEl = document.getElementById('testLoginUsername');
+          const passEl = document.getElementById('testLoginUserCode');
+          const baseEl = document.getElementById('testLoginBaseUrl');
+          if (userEl) userEl.value = data.username || '';
+          if (baseEl) baseEl.value = data.baseUrl || 'http://127.0.0.1:8000';
+          if (passEl) passEl.value = '';
+        })
+        .catch(function () {
+          /* ignore */
+        });
+      const userEl = document.getElementById('testLoginUsername');
+      if (userEl) userEl.focus();
+    }
+
+    function closeTestLoginModal() {
+      const modal = document.getElementById('testLoginModal');
+      if (modal) {
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+    }
+
+    async function saveTestLoginFromModal() {
+      const userEl = document.getElementById('testLoginUsername');
+      const passEl = document.getElementById('testLoginUserCode');
+      const baseEl = document.getElementById('testLoginBaseUrl');
+      const err = document.getElementById('testLoginModalError');
+      const email = userEl ? userEl.value.trim() : '';
+      const password = passEl ? passEl.value : '';
+      const baseUrl = baseEl ? baseEl.value.trim() : 'http://127.0.0.1:8000';
+      if (!email || !password) {
+        if (err) {
+          err.textContent = 'Username and user code are required.';
+          err.classList.remove('hidden');
+        }
+        return false;
+      }
+      const hit = await fetchMasterTestApi('/api/master-test/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email, password: password, baseUrl: baseUrl })
+      });
+      if (!hit.res.ok || !hit.data.ok) {
+        if (err) {
+          err.textContent = (hit.data && hit.data.error) || 'Could not save test login.';
+          err.classList.remove('hidden');
+        }
+        return false;
+      }
+      closeTestLoginModal();
+      await refreshMasterTestCredentialsStatus();
+      return true;
+    }
+
+    async function ensureMasterTestCredentialsBeforeRun() {
+      if (masterTestCredentialsConfigured) return true;
+      const ready = await refreshMasterTestCredentialsStatus();
+      if (ready) return true;
+      openTestLoginModal();
+      return false;
+    }
 
     function getMasterTestApiUrl(path) {
       const p = path.charAt(0) === '/' ? path : '/' + path;
@@ -6512,6 +6633,9 @@
       if (activeTestRuns[test.slug]) {
         return { ok: false, error: 'Test is already running' };
       }
+      if (!(await ensureMasterTestCredentialsBeforeRun())) {
+        return { ok: false, error: 'Test login is not configured.' };
+      }
       activeTestRuns[test.slug] = true;
       setTestPanelRunning(test.slug, true);
       updateTestRunProgress(test.slug, 0, 'Starting test…');
@@ -6535,7 +6659,7 @@
         if (!hit.res.ok || !hit.data.ok) {
           throw new Error(
             (hit.data && hit.data.error) ||
-              'Could not start test. Run npm start (port 8000), configure tools/billing-test.local.json, and open ' +
+              'Could not start test. Run npm start (port 8000), configure test login (Configure Test Login), and open ' +
                 MASTER_TEST_VIEWER_URL
           );
         }
@@ -7997,9 +8121,15 @@
               'Test runner API is not ready. Run npm start and open ' + MASTER_TEST_VIEWER_URL;
           }
         }
-        if (runAllBtn) runAllBtn.disabled = !masterTestApiAvailable;
+        if (!masterTestApiAvailable) {
+          masterTestCredentialsConfigured = false;
+          if (runAllBtn) runAllBtn.disabled = true;
+          return;
+        }
+        await refreshMasterTestCredentialsStatus();
       } catch (e) {
         masterTestApiAvailable = false;
+        masterTestCredentialsConfigured = false;
         if (banner) {
           banner.classList.remove('hidden');
           banner.textContent = e.message || String(e);
@@ -8008,7 +8138,33 @@
       }
     }
 
+    function wireTestLoginModal() {
+      const btn = document.getElementById('btnConfigureTestLogin');
+      const closeBtn = document.getElementById('testLoginModalClose');
+      const saveBtn = document.getElementById('testLoginModalSave');
+      const modal = document.getElementById('testLoginModal');
+      if (btn) btn.addEventListener('click', openTestLoginModal);
+      if (closeBtn) closeBtn.addEventListener('click', closeTestLoginModal);
+      if (saveBtn) {
+        saveBtn.addEventListener('click', function () {
+          saveTestLoginFromModal().catch(function (err) {
+            const errEl = document.getElementById('testLoginModalError');
+            if (errEl) {
+              errEl.textContent = err.message || String(err);
+              errEl.classList.remove('hidden');
+            }
+          });
+        });
+      }
+      if (modal) {
+        modal.addEventListener('click', function (e) {
+          if (e.target === modal) closeTestLoginModal();
+        });
+      }
+    }
+
     async function initMasterTestViewer() {
+      wireTestLoginModal();
       await checkMasterTestApiOnLoad();
       try {
         await loadAllCustomTestsFromDisk();

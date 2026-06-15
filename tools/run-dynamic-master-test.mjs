@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 
 const require = createRequire(import.meta.url);
 const { saveResultsToDisk } = require('./master-test-disk-store.cjs');
+const { loadBillingTestCredentials } = require('./load-billing-test-credentials.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
@@ -82,32 +83,19 @@ async function main() {
 
   writeJob(jobFile, { status: 'running', progress: 2, message: 'Launching browser…' });
 
-  const localPath = path.join(repoRoot, 'tools', 'billing-test.local.json');
-  let email = process.env.FIREBASE_TEST_EMAIL || process.env.DEV_TEST_EMAIL;
-  let password = process.env.FIREBASE_TEST_PASSWORD || process.env.DEV_TEST_PASSWORD;
-  let baseUrl = (process.env.BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-
-  if (fs.existsSync(localPath)) {
-    try {
-      const j = JSON.parse(fs.readFileSync(localPath, 'utf8'));
-      email = email || j.email || j.FIREBASE_TEST_EMAIL;
-      password = password || j.password || j.FIREBASE_TEST_PASSWORD;
-      if (!process.env.BASE_URL && (j.baseUrl || j.BASE_URL)) {
-        baseUrl = String(j.baseUrl || j.BASE_URL).replace(/\/$/, '');
-      }
-    } catch (e) {
-      /* ignore */
-    }
-  }
-
-  if (!email || !password) {
+  const creds = loadBillingTestCredentials({ ensureFile: true });
+  if (!creds.ok) {
     writeJob(jobFile, {
       status: 'failed',
-      error: 'Missing Firebase credentials (tools/billing-test.local.json)',
+      error: creds.error,
       progress: 0
     });
     process.exit(1);
   }
+
+  const email = creds.email;
+  const password = creds.password;
+  const baseUrl = creds.baseUrl;
 
   const { chromium } = await loadPlaywright();
   const headed = process.env.HEADED === '1' || process.env.HEADED === 'true';
