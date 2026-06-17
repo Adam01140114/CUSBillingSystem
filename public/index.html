@@ -4689,15 +4689,43 @@
           });
         }
       }
+      const anchorStmt =
+        typeof getAnchorBillingChargeHistoryRowForLastPrint === 'function'
+          ? getAnchorBillingChargeHistoryRowForLastPrint(customer)
+          : null;
+      if (
+        anchorStmt &&
+        anchorStmt.creditAppliedOnBill != null &&
+        parseFloat(anchorStmt.creditAppliedOnBill) > 0.005 &&
+        anchorStmt.netBalanceAfterBill != null &&
+        !isNaN(parseFloat(anchorStmt.netBalanceAfterBill))
+      ) {
+        const netStmt = Math.max(
+          0,
+          Math.round(parseFloat(anchorStmt.netBalanceAfterBill) * 100) / 100
+        );
+        if (netStmt + 0.02 < lastStmt) {
+          const paidAfterNet = getSumPaymentAmountsAfterLastBillPrint(customer);
+          const outNet = Math.max(0, Math.round((netStmt - paidAfterNet) * 100) / 100);
+          if (billDiagCustomerMatch(customer)) {
+            billDiag('getOutstandingLastStatementUnpaid:result', customer, {
+              lastBillPrintDate: customer.lastBillPrintDate,
+              lastBillPrintLedgerOrder: billLo,
+              lastPrintedStatementTotalDue: lastStmt,
+              paidAfter: paidAfterNet,
+              netBalanceAfterOnBillCredit: netStmt,
+              outstanding: outNet,
+              branch: 'onBillCreditNetBalance'
+            });
+          }
+          return outNet;
+        }
+      }
       const paidAfter = getSumPaymentAmountsAfterLastBillPrint(customer);
       let preAnchorCredit =
         paidAfter > 0.005
           ? getSumPreAnchorGiveCreditTowardLastPrintedStatement(customer)
           : 0;
-      const anchorStmt =
-        typeof getAnchorBillingChargeHistoryRowForLastPrint === 'function'
-          ? getAnchorBillingChargeHistoryRowForLastPrint(customer)
-          : null;
       if (
         anchorStmt &&
         anchorStmt.creditAppliedOnBill != null &&
@@ -7558,12 +7586,17 @@
         syncPastDueCompositionToPastDueField(customer);
       }
 
-      // Roll unpaid current-cycle dollars into live pastDue. lastPrintedStatementTotalDue must stay the
-      // printed bill row column sum (currentDueOnBill), never net-after-credit or rolled ledger totals.
+      // Roll unpaid current-cycle dollars into live pastDue. When on-bill credit reduces the closing
+      // statement, anchor lastPrintedStatementTotalDue / rolled pastDue to net owed (not gross column sum).
+      const statementOwedAfterBill =
+        creditAppliedOnBill > 0.005 ? currentDueNetAfterCredit : currentDueOnBill;
       applyBillProductionRollForward(customer, calcBeforeRoll, !!previousLastBillPrintDate, {
-        closedStatementTotalFromBill: currentDueOnBill
+        closedStatementTotalFromBill: statementOwedAfterBill
       });
-      customer.lastPrintedStatementTotalDue = Math.round(currentDueOnBill * 100) / 100;
+      customer.lastPrintedStatementTotalDue = Math.round(statementOwedAfterBill * 100) / 100;
+      if (creditAppliedOnBill > 0.005 && previousLastBillPrintDate) {
+        customer.pastDue = Math.round(currentDueNetAfterCredit * 100) / 100;
+      }
       syncPastDueCompositionToPastDueField(customer);
 
       const formattedDate = (now.getMonth() + 1).toString().padStart(2, '0') + '/' +
@@ -33472,7 +33505,7 @@
         <div class="mb-4 flex justify-center">
           <img src="PUBS Logo.png" alt="PUBS Logo" class="h-32 w-auto object-contain">
         </div>
-        <h1 class="text-4xl font-bold text-slate-900 dark:text-slate-100 mb-2">PUBS Billing System v1.7</h1>
+        <h1 class="text-4xl font-bold text-slate-900 dark:text-slate-100 mb-2">PUBS Billing System v1.8</h1>
         <p class="text-sm text-slate-500 dark:text-slate-500 mt-2">Please enter your credentials to continue</p>
       </div>
 
