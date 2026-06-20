@@ -329,6 +329,9 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
+const { registerLocalDbRoutes } = require('./tools/local-db-api.cjs');
+registerLocalDbRoutes(app, db);
+
 // ────────────────────────────────────────────────────────────
 // Static files
 // ────────────────────────────────────────────────────────────

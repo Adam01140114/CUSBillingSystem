@@ -16,8 +16,34 @@
   <!-- Firebase SDK -->
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-    import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc, getDoc, writeBatch, deleteField } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+    import { getFirestore, collection as fbCollection, addDoc as fbAddDoc, getDocs as fbGetDocs, doc as fbDoc, updateDoc as fbUpdateDoc, deleteDoc as fbDeleteDoc, setDoc as fbSetDoc, getDoc as fbGetDoc, writeBatch as fbWriteBatch, deleteField as fbDeleteField } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+    import { installLocalDbLayer } from './local-db-shim.mjs';
+
+    const localDbLayer = installLocalDbLayer({
+      getFirestore,
+      collection: fbCollection,
+      addDoc: fbAddDoc,
+      getDocs: fbGetDocs,
+      doc: fbDoc,
+      updateDoc: fbUpdateDoc,
+      deleteDoc: fbDeleteDoc,
+      setDoc: fbSetDoc,
+      getDoc: fbGetDoc,
+      writeBatch: fbWriteBatch,
+      deleteField: fbDeleteField
+    });
+
+    const collection = localDbLayer.collection;
+    const addDoc = localDbLayer.addDoc;
+    const getDocs = localDbLayer.getDocs;
+    const doc = localDbLayer.doc;
+    const updateDoc = localDbLayer.updateDoc;
+    const deleteDoc = localDbLayer.deleteDoc;
+    const setDoc = localDbLayer.setDoc;
+    const getDoc = localDbLayer.getDoc;
+    const writeBatch = localDbLayer.writeBatch;
+    const deleteField = localDbLayer.deleteField;
 
     const firebaseConfig = {
       apiKey: "AIzaSyCxfnleg4jI9C3xPI_UabT81vIsnPjukSY",
@@ -30,8 +56,10 @@
     };
 
     const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
+    const db = localDbLayer.getDb(app);
     const auth = getAuth(app);
+
+    window.localDbLayer = localDbLayer;
 
     // Firebase Authentication helper functions
     window.firebaseAuth = {
@@ -1624,6 +1652,7 @@
         updateLateFeeGraceAmountInputsVisibility();
         refreshLateFeeTimerTestButtonUi();
         syncFreshStartSetDateUiFromGlobals();
+        updateLocalDatabaseModeUi();
 
         return settings;
       } catch (error) {
@@ -1792,6 +1821,127 @@
     // Make loadTogglesSettings globally accessible
     window.loadTogglesSettings = loadTogglesSettings;
     window.saveTogglesSettings = saveTogglesSettings;
+
+    async function updateLocalDatabaseModeUi() {
+      const toggle = document.getElementById('toggleLocalDatabaseMode');
+      const statusEl = document.getElementById('localDbStatusText');
+      const syncFirebaseBtn = document.getElementById('syncFirebaseToLocalBtn');
+      const syncLocalBtn = document.getElementById('syncLocalToFirebaseBtn');
+      const isLocal = window.localDbLayer ? window.localDbLayer.isLocalDatabaseMode() : false;
+
+      if (toggle) {
+        toggle.checked = isLocal;
+      }
+
+      if (statusEl && window.localDbLayer) {
+        const status = await window.localDbLayer.fetchLocalDbStatus();
+        if (isLocal) {
+          if (status.ok) {
+            statusEl.textContent = `Local MySQL connected (${status.database} on ${status.host}:${status.port}) — ${status.documentCount} document(s) stored.`;
+          } else {
+            statusEl.textContent = `Local mode is ON but MySQL is not reachable: ${status.error || 'unknown error'}. Start MySQL with "brew services start mysql" and ensure npm start is running.`;
+          }
+        } else {
+          statusEl.textContent = status.ok
+            ? `Online mode (Firebase). Local MySQL is available with ${status.documentCount} document(s) if you switch to local mode.`
+            : `Online mode (Firebase). Local MySQL status: ${status.error || 'not connected'}.`;
+        }
+      }
+
+      if (syncFirebaseBtn) syncFirebaseBtn.disabled = false;
+      if (syncLocalBtn) syncLocalBtn.disabled = false;
+    }
+
+    async function handleLocalDatabaseModeToggle() {
+      const toggle = document.getElementById('toggleLocalDatabaseMode');
+      if (!toggle || !window.localDbLayer) return;
+
+      const wantLocal = toggle.checked;
+      const currentlyLocal = window.localDbLayer.isLocalDatabaseMode();
+      if (wantLocal === currentlyLocal) return;
+
+      const modeLabel = wantLocal ? 'local MySQL' : 'online Firebase';
+      if (!confirm(`Switch to ${modeLabel} mode? The page will reload.`)) {
+        toggle.checked = currentlyLocal;
+        return;
+      }
+
+      window.localDbLayer.setLocalDatabaseMode(wantLocal);
+      try {
+        const settingsRef = doc(db, 'settings', 'toggles');
+        const existingSnap = await getDoc(settingsRef);
+        const prev = existingSnap.exists() ? existingSnap.data() : {};
+        await setDoc(settingsRef, {
+          ...prev,
+          localDatabaseMode: wantLocal,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (e) {
+        /* mode is stored in localStorage; settings mirror is best-effort */
+      }
+      window.location.reload();
+    }
+
+    async function syncFirebaseToLocalDatabase() {
+      if (!window.localDbLayer) return;
+      if (!confirm('Copy all billing data from Firebase into the local MySQL database? Existing local documents in the synced collections will be replaced.')) {
+        return;
+      }
+      const btn = document.getElementById('syncFirebaseToLocalBtn');
+      const statusEl = document.getElementById('localDbStatusText');
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Syncing…';
+        }
+        if (statusEl) statusEl.textContent = 'Syncing Firebase → Local…';
+        const result = await window.localDbLayer.syncFirebaseToLocal();
+        const lines = Object.entries(result.summary || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+        alert(`Firebase → Local sync complete.\n\n${lines || 'No documents copied.'}`);
+        await updateLocalDatabaseModeUi();
+      } catch (err) {
+        alert('Sync failed: ' + (err.message || String(err)));
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Sync Firebase → Local';
+        }
+        await updateLocalDatabaseModeUi();
+      }
+    }
+
+    async function syncLocalDatabaseToFirebase() {
+      if (!window.localDbLayer) return;
+      if (!confirm('Push all local MySQL billing data to Firebase? Matching Firebase documents in the synced collections will be overwritten.')) {
+        return;
+      }
+      const btn = document.getElementById('syncLocalToFirebaseBtn');
+      const statusEl = document.getElementById('localDbStatusText');
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Syncing…';
+        }
+        if (statusEl) statusEl.textContent = 'Syncing Local → Firebase…';
+        const result = await window.localDbLayer.syncLocalToFirebase();
+        const lines = Object.entries(result.summary || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+        alert(`Local → Firebase sync complete.\n\n${lines || 'No documents copied.'}`);
+        await updateLocalDatabaseModeUi();
+      } catch (err) {
+        alert('Sync failed: ' + (err.message || String(err)));
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Sync Local → Firebase';
+        }
+        await updateLocalDatabaseModeUi();
+      }
+    }
+
+    window.handleLocalDatabaseModeToggle = handleLocalDatabaseModeToggle;
+    window.syncFirebaseToLocalDatabase = syncFirebaseToLocalDatabase;
+    window.syncLocalDatabaseToFirebase = syncLocalDatabaseToFirebase;
+    window.updateLocalDatabaseModeUi = updateLocalDatabaseModeUi;
     window.updateAfterHoursTimeInputs = updateAfterHoursTimeInputs;
     window.updateLateFeeGraceAmountInputsVisibility = updateLateFeeGraceAmountInputsVisibility;
 
@@ -2831,6 +2981,9 @@
 
     // Initialize dashboard on page load
     document.addEventListener('DOMContentLoaded', async function() {
+      if (typeof syncSettingsTestingTabVisibility === 'function') {
+        syncSettingsTestingTabVisibility();
+      }
 
       // Load users immediately on page load (don't wait for settings to be opened)
       loadUsersFromFirestore().catch(error => {
@@ -3965,6 +4118,47 @@
       updateDashboard();
     };
 
+    function isLocalMasterTestHost() {
+      const loc = window.location;
+      const host = String(loc.hostname || '').toLowerCase();
+      const port = String(loc.port || (loc.protocol === 'https:' ? '443' : '80'));
+      return (host === 'localhost' || host === '127.0.0.1') && port === '8000';
+    }
+
+    function getMasterTestViewerUrl() {
+      return (
+        window.location.protocol +
+        '//' +
+        window.location.hostname +
+        ':8000/test-scripts/master_test_viewer.html'
+      );
+    }
+
+    window.syncSettingsTestingTabVisibility = function () {
+      const tab = document.getElementById('settingsTestingTab');
+      const content = document.getElementById('settingsTestingContent');
+      const show = isLocalMasterTestHost();
+      if (tab) tab.classList.toggle('hidden', !show);
+      if (content && !show) content.classList.add('hidden');
+    };
+
+    function loadSettingsTestingIframe() {
+      const iframe = document.getElementById('settingsMasterTestViewerIframe');
+      if (!iframe || !isLocalMasterTestHost()) return;
+      const url = getMasterTestViewerUrl();
+      if (iframe.getAttribute('src') !== url) {
+        iframe.setAttribute('src', url);
+      }
+    }
+
+    function setSettingsTestingFullscreen(active) {
+      const module = document.getElementById('settingsModule');
+      if (module) {
+        module.classList.toggle('settings-module-testing-fullscreen', !!active);
+      }
+      document.body.classList.toggle('settings-testing-fullscreen-active', !!active);
+    }
+
     // Switch between settings accounts, locations, and codes views
     window.switchSettingsView = async function(view) {
       const accountsTab = document.getElementById('settingsAccountsTab');
@@ -3975,6 +4169,7 @@
       const hierarchyTab = document.getElementById('settingsHierarchyTab');
       const drawersTab = document.getElementById('settingsDrawersTab');
       const togglesTab = document.getElementById('settingsTogglesTab');
+      const testingTab = document.getElementById('settingsTestingTab');
       const accountsContent = document.getElementById('settingsAccountsContent');
       const locationsContent = document.getElementById('settingsLocationsContent');
       const codesContent = document.getElementById('settingsCodesContent');
@@ -3983,9 +4178,12 @@
       const hierarchyContent = document.getElementById('settingsHierarchyContent');
       const drawersContent = document.getElementById('settingsDrawersContent');
       const togglesContent = document.getElementById('settingsTogglesContent');
+      const testingContent = document.getElementById('settingsTestingContent');
+
+      setSettingsTestingFullscreen(false);
 
       // Reset all tabs and content
-      [accountsTab, locationsTab, codesTab, usersTab, cleanupTab, hierarchyTab, drawersTab, togglesTab].forEach(tab => {
+      [accountsTab, locationsTab, codesTab, usersTab, cleanupTab, hierarchyTab, drawersTab, togglesTab, testingTab].forEach(tab => {
         if (!tab) return;
         tab.classList.remove('bg-blue-600', 'text-white');
         tab.classList.add('bg-slate-200', 'text-slate-700');
@@ -3998,6 +4196,7 @@
       if (hierarchyContent) hierarchyContent.classList.add('hidden');
       if (drawersContent) drawersContent.classList.add('hidden');
       if (togglesContent) togglesContent.classList.add('hidden');
+      if (testingContent) testingContent.classList.add('hidden');
 
       if (view === 'accounts') {
         accountsTab.classList.add('bg-blue-600', 'text-white');
@@ -4056,6 +4255,17 @@
         if (togglesContent) {
           togglesContent.classList.remove('hidden');
           loadTogglesSettings();
+        }
+      } else if (view === 'testing') {
+        if (!isLocalMasterTestHost()) return;
+        if (testingTab) {
+          testingTab.classList.add('bg-blue-600', 'text-white');
+          testingTab.classList.remove('bg-slate-200', 'text-slate-700');
+        }
+        if (testingContent) {
+          testingContent.classList.remove('hidden');
+          setSettingsTestingFullscreen(true);
+          loadSettingsTestingIframe();
         }
       }
     };
@@ -4992,14 +5202,24 @@
         pdfPreviousCharges: Math.max(0, Math.round((parseFloat(pdfPreviousCharges) || 0) * 100) / 100),
         pdfLateFee: Math.max(0, Math.round((parseFloat(pdfLateFee) || 0) * 100) / 100),
         pdfCurrentDueDisplay: Math.max(0, Math.round((parseFloat(pdfCurrentDueDisplay) || 0) * 100) / 100),
-        creditAppliedToLines: 0
+        creditAppliedToLines: 0,
+        creditPdfLineAmount: 0,
+        pdfTotalSigned: 0
       };
+      const grossSum = Math.round(
+        (out.pdfPreviousCharges + out.pdfLateFee + out.pdfCurrentDueDisplay) * 100
+      ) / 100;
+      out.pdfTotalSigned = grossSum;
       if (!customer) return out;
       const creditAvail = Math.round(Math.max(0, -parseFloat(customer.pastDue || 0)) * 100) / 100;
       if (creditAvail <= 0.005) return out;
-      const cap = Math.round(
-        Math.min(creditAvail, out.pdfPreviousCharges + out.pdfLateFee + out.pdfCurrentDueDisplay) * 100
-      ) / 100;
+      out.creditPdfLineAmount = creditAvail;
+      out.pdfTotalSigned = Math.round((grossSum - creditAvail) * 100) / 100;
+      out.creditAppliedToLines = Math.round(Math.min(creditAvail, grossSum) * 100) / 100;
+      if (creditAvail > grossSum + 0.005) {
+        return out;
+      }
+      const cap = out.creditAppliedToLines;
       let rem = cap;
       const takeP = Math.min(rem, out.pdfPreviousCharges);
       out.pdfPreviousCharges = Math.round((out.pdfPreviousCharges - takeP) * 100) / 100;
@@ -5009,7 +5229,6 @@
       rem = Math.round((rem - takeLf) * 100) / 100;
       const takeC = Math.min(rem, out.pdfCurrentDueDisplay);
       out.pdfCurrentDueDisplay = Math.round((out.pdfCurrentDueDisplay - takeC) * 100) / 100;
-      out.creditAppliedToLines = Math.round((takeP + takeLf + takeC) * 100) / 100;
       return out;
     }
 
@@ -5107,6 +5326,22 @@
      */
     function getTotalDueExcludingAutoLateFee(customer) {
       if (!customer) return 0;
+      const anchorBill =
+        typeof getAnchorBillingChargeHistoryRowForLastPrint === 'function'
+          ? getAnchorBillingChargeHistoryRowForLastPrint(customer)
+          : typeof getLatestBillingChargeHistoryRow === 'function'
+            ? getLatestBillingChargeHistoryRow(customer)
+            : null;
+      if (
+        anchorBill &&
+        anchorBill.netBalanceAfterBill != null &&
+        !isNaN(parseFloat(anchorBill.netBalanceAfterBill))
+      ) {
+        const anchorNet = Math.round(parseFloat(anchorBill.netBalanceAfterBill) * 100) / 100;
+        if (anchorNet < -0.005) {
+          return 0;
+        }
+      }
       const parts = getSubtotalBeforePucAndPucSurcharge(customer);
       const currentDue = getCurrentCycleDueWithPaymentConsistency(customer, 0, parts);
       const pastDueRaw = parseFloat(customer.pastDue || 0);
@@ -6372,6 +6607,10 @@
       updateSettingsLocationsTable();
       updateSettingsUsersTable();
 
+      if (typeof syncSettingsTestingTabVisibility === 'function') {
+        syncSettingsTestingTabVisibility();
+      }
+
       // Hide loading overlay once data is ready
       if (loadingOverlay) {
         loadingOverlay.classList.add('hidden');
@@ -6398,7 +6637,10 @@
       if (billModule) billModule.classList.add('hidden');
       if (addClientModule) addClientModule.classList.add('hidden');
       if (searchModule) searchModule.classList.add('hidden');
-      if (settingsModule) settingsModule.classList.add('hidden');
+      if (settingsModule) {
+        settingsModule.classList.add('hidden');
+        setSettingsTestingFullscreen(false);
+      }
       if (depositWithdrawalNoticeModule) {
         depositWithdrawalNoticeModule.classList.add('hidden');
         const dwnLoad = document.getElementById('dwnModuleLoadingState');
@@ -7418,15 +7660,15 @@
       if (!Array.isArray(customer.chargeHistory)) customer.chargeHistory = [];
 
       // Capture pre-roll state for anchor + bill line amounts (PDF columns match calc before roll)
-      let openingPastDueForAnchor = parseFloat(customer.pastDue || 0);
-      if (openingPastDueForAnchor < -0.005) {
+      const rawPastDueBeforeBill = parseFloat(customer.pastDue || 0);
+      let openingPastDueForAnchor = rawPastDueBeforeBill;
+      let accountCreditBeforeBill = 0;
+      if (rawPastDueBeforeBill < -0.005) {
+        accountCreditBeforeBill = Math.round(Math.abs(rawPastDueBeforeBill) * 100) / 100;
         openingPastDueForAnchor = 0;
-        customer.pastDue = 0;
-        if (typeof syncPastDueCompositionToPastDueField === 'function') {
-          syncPastDueCompositionToPastDueField(customer);
-        }
+      } else {
+        openingPastDueForAnchor = Math.round(Math.max(0, rawPastDueBeforeBill) * 100) / 100;
       }
-      const accountCreditBeforeBill = Math.round(Math.max(0, -openingPastDueForAnchor) * 100) / 100;
       const previousLastBillPrintDate = customer.lastBillPrintDate;
 
       const sewerChargeOnBill = Math.round(Math.max(0, parseFloat(calcBeforeRoll.adjustedServiceCost) || 0) * 100) / 100;
@@ -7485,12 +7727,17 @@
         typeof getSumGiveCreditBeforeIncomingBillOrder === 'function'
           ? getSumGiveCreditBeforeIncomingBillOrder(customer, billSortMs, incomingBillLo)
           : 0;
-      const creditAppliedOnBill = roundMoney2(
-        Math.min(
-          columnSumBill,
-          accountCreditBeforeBill + giveCreditBeforeBill
-        )
+      const totalCreditAvailForBill = roundMoney2(accountCreditBeforeBill + giveCreditBeforeBill);
+      const extraGiveCreditBeforeBill = Math.max(
+        0,
+        roundMoney2(giveCreditBeforeBill - accountCreditBeforeBill)
       );
+      const creditAppliedOnBill =
+        accountCreditBeforeBill > 0.005
+          ? roundMoney2(accountCreditBeforeBill + extraGiveCreditBeforeBill)
+          : giveCreditBeforeBill > 0.005
+            ? roundMoney2(Math.min(columnSumBill, giveCreditBeforeBill))
+            : 0;
       try {
         if (creditAppliedOnBill > 0.005 || giveCreditBeforeBill > 0.005) {
           console.info('[BillRow] creditApplied', {
@@ -7505,9 +7752,7 @@
       } catch (eBillCrLog) {
         /* ignore */
       }
-      const currentDueNetAfterCredit = Math.round(
-        Math.max(0, columnSumBill - creditAppliedOnBill) * 100
-      ) / 100;
+      const currentDueNetAfterCredit = Math.round((columnSumBill - creditAppliedOnBill) * 100) / 100;
       const authRoll = Math.round(Math.max(0, parseFloat(calcBeforeRoll.total) || 0) * 100) / 100;
       // Statement total on the saved row = sum of bill line columns (same as PDF / table). applyBillProductionRollForward
       // uses closedStatementTotalFromBill to raise lastPrintedStatementTotalDue when calc.total understates.
@@ -7582,7 +7827,16 @@
       // Account credit (negative pastDue sentinel) applied on the bill row — not give-credit from a
       // same-day payment toward the next bill (that only affects creditAppliedOnBill on the charge row).
       if (accountCreditBeforeBill > 0.005 && creditAppliedOnBill > 0.005) {
-        customer.pastDue = Math.round((openingPastDueForAnchor + creditAppliedOnBill) * 100) / 100;
+        const creditConsumedOnBill = Math.round(
+          Math.min(columnSumBill, creditAppliedOnBill) * 100
+        ) / 100;
+        const remainingAccountCredit = Math.round(
+          (accountCreditBeforeBill - creditConsumedOnBill) * 100
+        ) / 100;
+        customer.pastDue =
+          remainingAccountCredit > 0.005
+            ? -remainingAccountCredit
+            : Math.round((openingPastDueForAnchor + creditConsumedOnBill) * 100) / 100;
         syncPastDueCompositionToPastDueField(customer);
       }
 
@@ -8615,6 +8869,7 @@
       if (ndRaw === undefined || ndRaw === null || ndRaw === '') return null;
       const nd = parseFloat(ndRaw);
       if (isNaN(nd)) return null;
+      if (nd < -OWED.EPS) return Math.round(nd * 100) / 100;
       return Math.max(0, Math.round(nd * 100) / 100);
     }
 
@@ -8970,7 +9225,11 @@
         dueDateStr: getBillDueDateStr(customer),
         fromFrozen: false
       };
-      if (outLive.total < OWED.EPS) {
+      applyOpenBalanceSnapshotCapToPanelAmounts(customer, outLive);
+      if (typeof reconcileProcessBillPanelTotalInvariants === 'function') {
+        reconcileProcessBillPanelTotalInvariants(customer, outLive);
+      }
+      if (outLive.total > -OWED.EPS && outLive.total < OWED.EPS) {
         if (pastDue > OWED.ZERO || lateRaw > OWED.ZERO) {
           logBillPanelTrace('getProcessBillPanelAmounts:zero_lines_when_total_paid', customer, {
             priorPastDueLine: pastDue,
@@ -9533,11 +9792,16 @@
         );
         pdfPreviousCharges = pdfCredAlloc.pdfPreviousCharges;
         pdfLateFee = pdfCredAlloc.pdfLateFee;
-        const pdfCurrentDueForForm = pdfCurrentDueGrossForForm;
+        const pdfCurrentDueForForm = pdfCredAlloc.creditPdfLineAmount > 0.005
+          ? pdfCurrentDueGrossForForm
+          : pdfCredAlloc.pdfCurrentDueDisplay;
         if (pdfCredAlloc.creditAppliedToLines > 0.005) {
-          pdfTotalAmount = Math.round(
-            (pdfPreviousCharges + pdfLateFee + pdfCredAlloc.pdfCurrentDueDisplay) * 100
-          ) / 100;
+          pdfTotalAmount =
+            pdfCredAlloc.creditPdfLineAmount > 0.005
+              ? pdfCredAlloc.pdfTotalSigned
+              : Math.round(
+                  (pdfPreviousCharges + pdfLateFee + pdfCredAlloc.pdfCurrentDueDisplay) * 100
+                ) / 100;
         }
 
         const naiveFirstFourPlusPucAgain = Math.max(
@@ -9576,7 +9840,11 @@
         formData.append('late_fee', `$${pdfLateFee.toFixed(2)}`);
         const pdfCreditApplied = Math.max(
           0,
-          Math.round((pdfCredAlloc.creditAppliedToLines || 0) * 100) / 100
+          Math.round(
+            ((pdfCredAlloc.creditPdfLineAmount > 0.005
+              ? pdfCredAlloc.creditPdfLineAmount
+              : pdfCredAlloc.creditAppliedToLines) || 0) * 100
+          ) / 100
         );
         formData.append('credit', `$${pdfCreditApplied.toFixed(2)}`);
 
@@ -9585,12 +9853,17 @@
         ) / 100;
         const pdfSummaryLineSum =
           pdfCredAlloc.creditAppliedToLines > 0.005
-            ? Math.round(
-                (pdfPreviousCharges + pdfLateFee + pdfCredAlloc.pdfCurrentDueDisplay) * 100
-              ) / 100
+            ? pdfCredAlloc.creditPdfLineAmount > 0.005
+              ? pdfCredAlloc.pdfTotalSigned
+              : Math.round(
+                  (pdfPreviousCharges + pdfLateFee + pdfCredAlloc.pdfCurrentDueDisplay) * 100
+                ) / 100
             : pdfSummaryLineSumGross;
         const calcRounded = Math.max(0, Math.round((parseFloat(calc.total) || 0) * 100) / 100);
-        const pdfReconcileRounded = Math.max(0, Math.round(pdfTotalAmount * 100) / 100);
+        const pdfReconcileRounded =
+          pdfCredAlloc.creditPdfLineAmount > 0.005 && pdfCredAlloc.pdfTotalSigned < -OWED.EPS
+            ? pdfCredAlloc.pdfTotalSigned
+            : Math.max(0, Math.round(pdfTotalAmount * 100) / 100);
         let unifiedTotalDueForBill = calcRounded;
         if (pdfCredAlloc.creditAppliedToLines > 0.005) {
           unifiedTotalDueForBill = pdfReconcileRounded;
@@ -9974,12 +10247,17 @@
 
             let poNum = Math.max(0, Math.round((parseFloat(pdfOutstanding) || 0) * 100) / 100);
             let lfNum = Math.max(0, Math.round((parseFloat(lateFeeAmount) || 0) * 100) / 100);
+            const pdfCurGrossBatch = pdfCurrentDueDisplay;
             const pdfCredBatch = applyAccountCreditForBillPdf(customer, poNum, lfNum, pdfCurrentDueDisplay);
             poNum = pdfCredBatch.pdfPreviousCharges;
             lfNum = pdfCredBatch.pdfLateFee;
-            const pdfCurFormBatch = pdfCredBatch.pdfCurrentDueDisplay;
+            const pdfCurFormBatch =
+              pdfCredBatch.creditPdfLineAmount > 0.005 ? pdfCurGrossBatch : pdfCredBatch.pdfCurrentDueDisplay;
             if (pdfCredBatch.creditAppliedToLines > 0.005) {
-              pdfTotalNum = Math.round((poNum + lfNum + pdfCurFormBatch) * 100) / 100;
+              pdfTotalNum =
+                pdfCredBatch.creditPdfLineAmount > 0.005
+                  ? pdfCredBatch.pdfTotalSigned
+                  : Math.round((poNum + lfNum + pdfCurFormBatch) * 100) / 100;
             }
 
             const pdfSummaryLineSum = Math.round((pdfCurFormBatch + poNum + lfNum) * 100) / 100;
@@ -10049,8 +10327,19 @@
                 current_due: `$${pdfCurFormBatch.toFixed(2)}`,
                 previous_charges: `$${poNum.toFixed(2)}`,
                 late_fee: `$${lfNum.toFixed(2)}`,
-                credit: `$${Math.max(0, Math.round((pdfCredBatch.creditAppliedToLines || 0) * 100) / 100).toFixed(2)}`,
-                total_amount: `$${unifiedTotalDueForBill.toFixed(2)}`,
+                credit: `$${Math.max(
+                  0,
+                  Math.round(
+                    ((pdfCredBatch.creditPdfLineAmount > 0.005
+                      ? pdfCredBatch.creditPdfLineAmount
+                      : pdfCredBatch.creditAppliedToLines) || 0) * 100
+                  ) / 100
+                ).toFixed(2)}`,
+                total_amount: `$${(
+                  pdfCredBatch.creditPdfLineAmount > 0.005 && pdfCredBatch.pdfTotalSigned < -OWED.EPS
+                    ? pdfCredBatch.pdfTotalSigned
+                    : unifiedTotalDueForBill
+                ).toFixed(2)}`,
                 due_date: dueDateStr,
                 deposit_explaination: depositExplainForSnapshot,
                 deposit_explanation: depositExplainForSnapshot
@@ -10700,11 +10989,25 @@
           Math.max(
             calcTotalBefore,
             panelTotalBefore,
-            ledgerNetBefore != null ? ledgerNetBefore : 0
+            ledgerNetBefore != null ? Math.max(0, ledgerNetBefore) : 0
           ) * 100
         ) / 100;
         if (ledgerNetBefore != null && ledgerNetBefore > totalOwedBeforePayment + 0.005) {
           totalOwedBeforePayment = ledgerNetBefore;
+        }
+        const snapBeforePay =
+          typeof getAuthoritativeOpenBalanceAfterLastPaymentIfStillApplicable === 'function'
+            ? getAuthoritativeOpenBalanceAfterLastPaymentIfStillApplicable(customer)
+            : null;
+        if (snapBeforePay != null && snapBeforePay < -OWED.EPS) {
+          totalOwedBeforePayment = snapBeforePay;
+        } else {
+          const pdLedgerBefore = parseFloat(customer.pastDue);
+          if (!isNaN(pdLedgerBefore) && pdLedgerBefore < -OWED.EPS) {
+            totalOwedBeforePayment = Math.round(pdLedgerBefore * 100) / 100;
+          } else if (ledgerNetBefore != null && ledgerNetBefore < -OWED.EPS) {
+            totalOwedBeforePayment = ledgerNetBefore;
+          }
         }
         try {
           console.info('[Payment] amountDue before tender', {
@@ -10754,7 +11057,7 @@
         // $0 balance (e.g. after full security deposit): do not allocate check/cash into accrual
         // buckets (late/current) — entire tender becomes account credit when "Give credit" is selected.
         let remainingPayment;
-        if (totalOwedBeforePayment <= 0.005) {
+        if (!(totalOwedBeforePayment > 0.005)) {
           remainingPayment = Math.round(Math.max(0, paymentAmount) * 100) / 100;
         } else {
           remainingPayment = applyCustomerPaymentByHierarchy(
@@ -10793,10 +11096,17 @@
         // Any remaining payment becomes credit (overpayment)
 
         if (creditGiven > 0) {
-          if (totalOwedBeforePayment <= 0.005) {
+          if (totalOwedBeforePayment < -OWED.EPS) {
+            customer.pastDue = Math.round((totalOwedBeforePayment - creditGiven) * 100) / 100;
+          } else if (totalOwedBeforePayment <= 0.005) {
             const pastDueBeforeCredit = customer.pastDue || 0;
             subtractFromPastDueComposition(customer, creditGiven);
             customer.pastDue = pastDueBeforeCredit - creditGiven;
+          } else {
+            customer.pastDue = Math.round(-creditGiven * 100) / 100;
+          }
+          if (typeof syncPastDueCompositionToPastDueField === 'function') {
+            syncPastDueCompositionToPastDueField(customer);
           }
           if (billDiagCustomerMatch(customer)) {
             billDiag('processPaymentFromModule:giveCreditStored', customer, {
@@ -10807,10 +11117,14 @@
               towardNextBillOnly: totalOwedBeforePayment > 0.005
             });
           }
-        } else if (remainingPayment > 0.005 && totalOwedBeforePayment <= 0.005) {
-          const pastDueBeforeRemaining = customer.pastDue || 0;
-          subtractFromPastDueComposition(customer, remainingPayment);
-          customer.pastDue = pastDueBeforeRemaining - remainingPayment;
+        } else if (remainingPayment > 0.005 && !(totalOwedBeforePayment > 0.005)) {
+          if (totalOwedBeforePayment < -OWED.EPS) {
+            customer.pastDue = Math.round((totalOwedBeforePayment - remainingPayment) * 100) / 100;
+          } else {
+            const pastDueBeforeRemaining = customer.pastDue || 0;
+            subtractFromPastDueComposition(customer, remainingPayment);
+            customer.pastDue = pastDueBeforeRemaining - remainingPayment;
+          }
         }
 
         syncPastDueCompositionToPastDueField(customer);
@@ -10837,7 +11151,7 @@
         const totalCreditGiven =
           creditGiven > 0.005
             ? creditGiven
-            : totalOwedBeforePayment <= 0.005 && remainingPayment > 0.005
+            : !(totalOwedBeforePayment > 0.005) && remainingPayment > 0.005
               ? remainingPayment
               : 0;
 
@@ -10861,10 +11175,14 @@
           ? Math.round(Math.max(0, parseFloat(panelAfterPayment.total) || 0) * 100) / 100
           : 0;
         const calcTotalAfter = Math.round(Math.max(0, parseFloat(calcAfterPayment.total) || 0) * 100) / 100;
+        const rawSignedAfterPay =
+          Math.round((totalOwedBeforePayment - paymentAmount) * 100) / 100;
         const signedBalanceAfterPayment =
-          totalOwedBeforePayment <= 0.005 && totalCreditGiven > 0.005
-            ? Math.round((totalOwedBeforePayment - totalCreditGiven) * 100) / 100
-            : Math.round(Math.max(0, totalOwedBeforePayment - paymentAmount) * 100) / 100;
+          totalCreditGiven > 0.005
+            ? !(totalOwedBeforePayment > 0.005)
+              ? Math.round((totalOwedBeforePayment - totalCreditGiven) * 100) / 100
+              : rawSignedAfterPay
+            : Math.round(Math.max(0, rawSignedAfterPay) * 100) / 100;
         // Add to payment history (newAmountDue matches Amount Breakdown total after this event)
         const paymentRecord = {
           date: formattedDate,
@@ -17387,7 +17705,7 @@
       }
       if (settingsModule) {
         settingsModule.classList.add('hidden');
-
+        setSettingsTestingFullscreen(false);
       }
 
       // Hide dashboard buttons
@@ -27324,18 +27642,59 @@
         anchorEntry.creditAppliedOnBill != null &&
         parseFloat(anchorEntry.creditAppliedOnBill) > 0.005
       ) {
-        const sewerOb = Math.round(Math.max(0, parseFloat(anchorEntry.sewerChargeOnBill || 0)) * 100) / 100;
-        const pucOb = resolveOnBillCreditResidualPuc(anchorEntry);
         const netOb =
           anchorEntry.netBalanceAfterBill != null && !isNaN(parseFloat(anchorEntry.netBalanceAfterBill))
             ? Math.round(parseFloat(anchorEntry.netBalanceAfterBill) * 100) / 100
+            : 0;
+        if (netOb < -0.005) {
+          const remainingCredit = Math.round(Math.abs(netOb) * 100) / 100;
+          try {
+            if (typeof window.masterTestLog === 'function') {
+              window.masterTestLog('ledger:statusSnapshotAccountCreditAfterBill', {
+                account: customer && (customer.accountNumber || customer.id),
+                creditOnBill: parseFloat(anchorEntry.creditAppliedOnBill),
+                remainingCredit: remainingCredit,
+                balanceAfter: netOb
+              });
+            }
+          } catch (eObCrLog) {
+            /* ignore */
+          }
+          return {
+            sewer: 0,
+            pastDue: 0,
+            taxCodes: 0,
+            puc: 0,
+            lateFee: 0,
+            credit: remainingCredit,
+            balanceAfter: netOb
+          };
+        }
+        const sewerOb = Math.round(Math.max(0, parseFloat(anchorEntry.sewerChargeOnBill || 0)) * 100) / 100;
+        const pucOb = resolveOnBillCreditResidualPuc(anchorEntry);
+        const netObPartial =
+          netOb !== 0
+            ? netOb
             : Math.round(Math.max(0, sewerOb + pucOb - parseFloat(anchorEntry.creditAppliedOnBill)) * 100) / 100;
+        const creditOnBill = Math.round(parseFloat(anchorEntry.creditAppliedOnBill) * 100) / 100;
+        const faceSumOb = Math.round((sewerOb + pucOb + pastDue + lateFee) * 100) / 100;
+        if (creditOnBill > 0.005 && netObPartial > 0.005 && faceSumOb > netObPartial + 0.02) {
+          return {
+            sewer: netObPartial,
+            pastDue: 0,
+            taxCodes: 0,
+            puc: 0,
+            lateFee: 0,
+            credit: 0,
+            balanceAfter: netObPartial
+          };
+        }
         try {
           if (typeof window.masterTestLog === 'function') {
             window.masterTestLog('ledger:statusSnapshotOnBillCredit', {
               account: customer && (customer.accountNumber || customer.id),
               creditOnBill: parseFloat(anchorEntry.creditAppliedOnBill),
-              balanceAfter: netOb
+              balanceAfter: netObPartial
             });
           }
         } catch (eObLog) {
@@ -27348,7 +27707,7 @@
           puc: pucOb,
           lateFee: 0,
           credit: 0,
-          balanceAfter: netOb
+          balanceAfter: netObPartial
         };
       }
       if (
@@ -27568,13 +27927,6 @@
       const credNum =
         typeof row.credit === 'number' && !isNaN(row.credit) ? Math.round(row.credit * 100) / 100 : 0;
       if (row.sourceKind === 'payment') {
-        if (
-          row.balanceAfter != null &&
-          !isNaN(row.balanceAfter) &&
-          row.balanceAfter < -0.005
-        ) {
-          return formatLedgerDisplayMoney(0, { forceDollar: false });
-        }
         if (
           row.ledgerPayment &&
           row.ledgerPayment.source === 'testFreshStart' &&
@@ -28084,7 +28436,8 @@
           ) * 100
         ) / 100;
         const amountPaid = Math.round(Math.max(0, parseFloat(p.amountPaid || 0)) * 100) / 100;
-        const amountDue = Math.round(Math.max(0, parseFloat(p.amountDue || 0)) * 100) / 100;
+        const signedAmountDue = Math.round((parseFloat(p.amountDue || 0) || 0) * 100) / 100;
+        const amountDue = Math.round(Math.max(0, signedAmountDue) * 100) / 100;
         let sewer = Math.round(Math.max(0, parseFloat(p.sewerChargeOnBill || p.sewerCharge || 0)) * 100) / 100;
         let pastDue = Math.round(Math.max(0, parseFloat(p.pastDueOnBill || p.pastDue || 0)) * 100) / 100;
         const initSp = ledgerTaxCodesAndPucFromEntry(p);
@@ -28168,7 +28521,7 @@
               combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
               lateFee = Math.round(Math.max(0, parseFloat(priorBill.lateFeeAmount || 0)) * 100) / 100;
             }
-          } else if (priorBill && !isLedgerSecurityDepositAutoPay(p) && amountDue <= 0.005) {
+          } else if (priorBill && !isLedgerSecurityDepositAutoPay(p) && !(signedAmountDue > 0.005)) {
             sewer = 0;
             pastDue = 0;
             taxCodesAmt = 0;
@@ -28238,7 +28591,9 @@
             stmtCr && parseFloat(stmtCr.creditAppliedOnBill) > 0.005
               ? Math.round(parseFloat(stmtCr.creditAppliedOnBill) * 100) / 100
               : 0;
-        } else if (amountDue > 0.005) {
+        } else if (signedAmountDue < -0.005) {
+          creditAmt = Math.round(Math.abs(signedAmountDue) * 100) / 100;
+        } else if (signedAmountDue > 0.005) {
           creditAmt = 0;
         } else {
           creditAmt = 0;
@@ -30268,7 +30623,9 @@
           detail: detail != null ? detail : null,
           ts: new Date().toISOString()
         };
-        window.__MASTER_TEST_PROGRESS = entry;
+        if (String(step) === 'progress') {
+          window.__MASTER_TEST_PROGRESS = entry;
+        }
         try {
           if (detail != null) {
             console.info('[MasterTest]', entry.step, detail);
@@ -30555,7 +30912,11 @@
         if (!cfg.customerNameMatch && cfg.customerName) {
           cfg.customerNameMatch = cfg.customerName;
         }
+        const wantsCreate =
+          cfg.customerMode === 'create' ||
+          !!(cfg.customerCreatedDate && String(cfg.customerCreatedDate).trim());
         if (
+          wantsCreate &&
           !cfg.customerCreatedDate &&
           Array.isArray(cfg.steps) &&
           cfg.steps[0] &&
@@ -30563,7 +30924,7 @@
         ) {
           cfg.customerCreatedDate = String(cfg.steps[0].advanceDate);
         }
-        if (!cfg.customerFirstName && cfg.customerNameMatch) {
+        if (wantsCreate && !cfg.customerFirstName && cfg.customerNameMatch) {
           const parts = String(cfg.customerNameMatch).trim().split(/\s+/).filter(Boolean);
           if (parts.length) {
             cfg.customerFirstName = parts[0];
@@ -30575,6 +30936,7 @@
 
       function developTestShouldUseCreateMode(cfg) {
         cfg = cfg || {};
+        if (cfg.customerMode === 'existing') return false;
         if (cfg.customerMode === 'create') return true;
         if (cfg.customerCreatedDate && String(cfg.customerCreatedDate).trim()) return true;
         if (
@@ -31784,6 +32146,61 @@
           lastBillRow.netBalanceAfterBill != null &&
           !isNaN(parseFloat(lastBillRow.netBalanceAfterBill))
         ) {
+          const billNetEarly = Math.round(parseFloat(lastBillRow.netBalanceAfterBill) * 100) / 100;
+          if (
+            parseFloat(lastBillRow.creditAppliedOnBill) > 0.005 &&
+            billNetEarly > 0.005
+          ) {
+            const spAmt =
+              typeof ledgerTaxCodesAndPucFromBillEntry === 'function'
+                ? ledgerTaxCodesAndPucFromBillEntry(lastBillRow)
+                : { taxCodes: 0, puc: 0 };
+            const grossSewer =
+              Math.round(Math.max(0, parseFloat(lastBillRow.sewerChargeOnBill || 0)) * 100) / 100;
+            const grossTax = Math.round((spAmt.taxCodes + spAmt.puc) * 100) / 100;
+            const grossPast =
+              Math.round(Math.max(0, parseFloat(lastBillRow.pastDueOnBill || 0)) * 100) / 100;
+            const grossLate =
+              Math.round(Math.max(0, parseFloat(lastBillRow.lateFeeAmount || 0)) * 100) / 100;
+            let creditRem =
+              Math.round(parseFloat(lastBillRow.creditAppliedOnBill) * 100) / 100;
+            let outPast = grossPast;
+            let outLate = grossLate;
+            let outTax = grossTax;
+            let outSewer = grossSewer;
+            const takePast = Math.min(creditRem, outPast);
+            outPast = Math.round((outPast - takePast) * 100) / 100;
+            creditRem = Math.round((creditRem - takePast) * 100) / 100;
+            const takeLate = Math.min(creditRem, outLate);
+            outLate = Math.round((outLate - takeLate) * 100) / 100;
+            creditRem = Math.round((creditRem - takeLate) * 100) / 100;
+            const takeTax = Math.min(creditRem, outTax);
+            outTax = Math.round((outTax - takeTax) * 100) / 100;
+            creditRem = Math.round((creditRem - takeTax) * 100) / 100;
+            outSewer = Math.round(Math.max(0, outSewer - creditRem) * 100) / 100;
+            const composedNet = Math.round((outSewer + outTax + outPast + outLate) * 100) / 100;
+            if (Math.abs(composedNet - billNetEarly) < 0.03) {
+              return (
+                'Sewer Charge\n' +
+                'Tax Charge\n' +
+                'Past Due\n' +
+                'Late Fee\n' +
+                'Credit\n' +
+                'Total amount due\n' +
+                developTestMasterTestMoney(outSewer) +
+                '\n' +
+                developTestMasterTestMoney(outTax) +
+                '\n' +
+                developTestMasterTestMoney(outPast) +
+                '\n' +
+                developTestMasterTestMoney(outLate) +
+                '\n' +
+                developTestMasterTestCreditMoney(0) +
+                '\n' +
+                developTestMasterTestMoney(billNetEarly)
+              );
+            }
+          }
           const billsForAmt = (Array.isArray(customer.chargeHistory) ? customer.chargeHistory : [])
             .filter(function (b) {
               return (
@@ -31822,14 +32239,6 @@
               totalDue = Math.round((totalDue - (pdLine - priorNetAmt)) * 100) / 100;
             }
           }
-        } else if (
-          credit > 0.005 &&
-          lastBillRow &&
-          parseFloat(lastBillRow.creditAppliedOnBill) > 0.005 &&
-          lastBillRow.netBalanceAfterBill != null &&
-          !isNaN(parseFloat(lastBillRow.netBalanceAfterBill))
-        ) {
-          totalDue = Math.round(parseFloat(lastBillRow.netBalanceAfterBill) * 100) / 100;
         } else if (credit > 0.005 && totalDue > credit + 0.02) {
           totalDue = Math.round((totalDue - credit) * 100) / 100;
         }
@@ -32063,8 +32472,9 @@
                 parseFloat(String(f.credit).replace(/[^0-9.-]/g, '')) || 0
               )
             : '$0';
-        let totNum = parseFloat(String(f.total_amount || '').replace(/[^0-9.-]/g, '')) || 0;
-        if (panelTotal > totNum + 0.005) totNum = panelTotal;
+        let totNum = parseFloat(String(f.total_amount || '').replace(/[^0-9.-]/g, ''));
+        if (isNaN(totNum)) totNum = 0;
+        if (totNum >= -0.005 && panelTotal > totNum + 0.005) totNum = panelTotal;
         const tot = developTestMasterTestMoney(totNum);
         return (
           'Current_due\n' +
@@ -32626,17 +33036,47 @@
         return mo + '/' + d + '/' + (y % 100);
       }
 
-      function developTestMasterTestStepDescription(stepDef) {
-        const lines = [];
+      function developTestMasterTestDataCaptures(stepDef) {
+        const caps =
+          stepDef && Array.isArray(stepDef.dataCaptures) && stepDef.dataCaptures.length
+            ? stepDef.dataCaptures.slice()
+            : [
+                'Log what the payments/charges table shows',
+                'Log what the amount breakdown shows',
+                'Log View Past Due Details'
+              ];
+        if (!stepDef || !stepDef.billThem) {
+          return caps.filter(function (c) {
+            return c && !/pdf\s*bill/i.test(String(c));
+          });
+        }
+        return caps.filter(Boolean);
+      }
+
+      function developTestMasterTestCaptureKind(label) {
+        const s = String(label || '').toLowerCase();
+        if (/payment|charge|ledger|table/.test(s)) return 'ledger';
+        if (/amount breakdown/.test(s)) return 'amount';
+        if (/past due/.test(s)) return 'pastDue';
+        if (/pdf/.test(s)) return 'pdf';
+        return 'unknown';
+      }
+
+      function developTestMasterTestStepSubsteps(stepDef) {
+        const items = [];
         if (stepDef && stepDef.advanceDateEnabled && stepDef.advanceDate) {
-          lines.push(
-            'Advance to future date: ' + developTestFormatAdvanceDateLabel(stepDef.advanceDate)
-          );
+          items.push({
+            label:
+              'Advance to future date: ' + developTestFormatAdvanceDateLabel(stepDef.advanceDate),
+            type: 'advance'
+          });
         }
         if (stepDef && stepDef.freshStart) {
-          lines.push('Do a fresh start');
+          items.push({ label: 'Do a fresh start', type: 'freshStart' });
         }
-        if (stepDef && stepDef.billThem) lines.push('Bill them');
+        if (stepDef && stepDef.billThem) {
+          items.push({ label: 'Bill them', type: 'bill' });
+        }
         if (stepDef && stepDef.payEnabled) {
           const raw =
             stepDef.payAmount != null ? String(stepDef.payAmount).trim().replace(/[^0-9.]/g, '') : '';
@@ -32646,40 +33086,90 @@
             amt =
               Math.abs(n - Math.round(n)) < 0.005 ? '$' + String(Math.round(n)) : '$' + n.toFixed(2);
           }
-          lines.push('Have them pay ' + amt);
+          items.push({ label: 'Have them pay ' + amt, type: 'pay' });
         }
-        const caps =
-          stepDef && Array.isArray(stepDef.dataCaptures) && stepDef.dataCaptures.length
-            ? stepDef.dataCaptures
-            : [
-                'Log what the payments/charges table shows',
-                'Log what the amount breakdown shows',
-                'Log View Past Due Details'
-              ];
-        caps.forEach(function (c) {
-          if (c && lines.indexOf(c) === -1) lines.push(c);
+        developTestMasterTestDataCaptures(stepDef).forEach(function (cap) {
+          if (!cap) return;
+          if (items.some(function (it) { return it.label === cap; })) return;
+          items.push({
+            label: cap,
+            type: 'capture',
+            captureKind: developTestMasterTestCaptureKind(cap)
+          });
         });
-        return lines.join('\n');
+        if (stepDef && stepDef.billThem) {
+          const pdfLabel = 'Log what PDF Bill shows';
+          if (!items.some(function (it) { return it.label === pdfLabel; })) {
+            items.push({ label: pdfLabel, type: 'capture', captureKind: 'pdf' });
+          }
+        }
+        return items;
+      }
+
+      window.buildMasterTestSubstepPlan = function (stepDefs, options) {
+        options = options || {};
+        const plan = [];
+        if (options.includePrep !== false) {
+          plan.push({ phase: 'prep', label: 'Signing in…' });
+          plan.push({ phase: 'prep', label: 'Preparing customer…' });
+        }
+        const defs = Array.isArray(stepDefs) ? stepDefs : [];
+        defs.forEach(function (stepDef, i) {
+          const stepNum = i + 1;
+          const substeps = developTestMasterTestStepSubsteps(stepDef || {});
+          substeps.forEach(function (sub, j) {
+            plan.push({
+              phase: 'step',
+              stepNum: stepNum,
+              substepNum: j + 1,
+              substepTotal: substeps.length,
+              label: sub.label,
+              type: sub.type
+            });
+          });
+        });
+        return plan;
+      };
+
+      window.countMasterTestSubsteps = function (stepDefs, options) {
+        return window.buildMasterTestSubstepPlan(stepDefs, options).length;
+      };
+
+      function developTestMasterTestStepDescription(stepDef) {
+        return developTestMasterTestStepSubsteps(stepDef || {})
+          .map(function (sub) { return sub.label; })
+          .join('\n');
       }
 
       function developTestMasterTestStepWantsPdf(stepDef) {
         if (!stepDef) return false;
         if (stepDef.billThem) return true;
-        const caps = stepDef.dataCaptures || [];
-        return caps.some(function (c) {
+        return developTestMasterTestDataCaptures(stepDef).some(function (c) {
           return c && /pdf\s*bill/i.test(String(c));
         });
       }
 
-      function developTestMasterTestReportProgress(current, total, message) {
-        if (typeof window.masterTestLog === 'function') {
-          window.masterTestLog('progress', {
-            current: current,
-            total: total,
-            message: message,
-            percent: total > 0 ? Math.round((current / total) * 100) : 0
-          });
-        }
+      function developTestMasterTestReportProgress(current, total, message, extra) {
+        if (typeof window.masterTestLog !== 'function') return;
+        extra = extra || {};
+        const percent =
+          extra.percent != null
+            ? extra.percent
+            : total > 0
+              ? Math.min(99, Math.round((current / total) * 100))
+              : 0;
+        window.masterTestLog(
+          'progress',
+          Object.assign(
+            {
+              current: current,
+              total: total,
+              message: message,
+              percent: percent
+            },
+            extra
+          )
+        );
       }
 
       /**
@@ -32726,7 +33216,61 @@
         const masterTestSteps = [];
         let errText = '';
         let customer = null;
-        const totalSteps = stepDefs.length;
+        const prepSubstepsCompleted =
+          opts.prepSubstepsCompleted != null ? Math.max(0, parseInt(opts.prepSubstepsCompleted, 10) || 0) : 0;
+        const stepSubstepPlan = window.buildMasterTestSubstepPlan(stepDefs, { includePrep: false });
+        const totalSubsteps = prepSubstepsCompleted + stepSubstepPlan.length;
+        let completedSubsteps = prepSubstepsCompleted;
+
+        function reportSubstepProgress(stepNum, subInStep, subTotal, label) {
+          completedSubsteps += 1;
+          const percent =
+            totalSubsteps > 0 ? Math.min(99, Math.round((completedSubsteps / totalSubsteps) * 100)) : 0;
+          const message = stepNum
+            ? 'Running Step ' + stepNum + ' (' + subInStep + '/' + subTotal + '): ' + label
+            : label;
+          developTestMasterTestReportProgress(completedSubsteps, totalSubsteps, message, {
+            stepNum: stepNum,
+            subInStep: subInStep,
+            subTotal: subTotal,
+            label: label,
+            percent: percent
+          });
+        }
+
+        async function developTestMasterTestRunCapture(customerRef, stepNum, captureKind, captureState) {
+          if (captureKind === 'ledger') {
+            try {
+              captureState.ledgerTsv =
+                typeof developTestExtractLedgerTablePlainText === 'function'
+                  ? developTestExtractLedgerTablePlainText(customerRef)
+                  : '(ledger unavailable)';
+            } catch (eL) {
+              captureState.ledgerTsv = '(ledger error: ' + (eL && eL.message) + ')';
+            }
+            captureState.ledgerVert = developTestMasterTestLedgerVertical(captureState.ledgerTsv);
+            return;
+          }
+          if (captureKind === 'amount') {
+            captureState.amountVert = developTestMasterTestAmountLines(customerRef);
+            return;
+          }
+          if (captureKind === 'pastDue') {
+            try {
+              captureState.pastDueVert =
+                typeof developTestMasterTestPastDueDetailsVertical === 'function'
+                  ? developTestMasterTestPastDueDetailsVertical(customerRef, stepNum)
+                  : '(unavailable)';
+            } catch (ePd) {
+              captureState.pastDueVert = '(past due error: ' + (ePd && ePd.message) + ')';
+            }
+            return;
+          }
+          if (captureKind === 'pdf') {
+            captureState.pdfVert = developTestMasterTestPdfLines(customerRef);
+          }
+        }
+
         try {
           customer = developTestResolveCustomer(cfg);
           if (!customer) {
@@ -32740,54 +33284,6 @@
             developTestBeginConsoleCapture(null);
           }
 
-          async function snap(stepNum, description, withPdf) {
-            if (typeof window.masterTestLog === 'function') {
-              window.masterTestLog('snap:start', { step: stepNum, withPdf: !!withPdf });
-            }
-            let ledgerTsv = '';
-            try {
-              ledgerTsv =
-                typeof developTestExtractLedgerTablePlainText === 'function'
-                  ? developTestExtractLedgerTablePlainText(customer)
-                  : '(ledger unavailable)';
-            } catch (eL) {
-              ledgerTsv = '(ledger error: ' + (eL && eL.message) + ')';
-            }
-            const ledgerVert = developTestMasterTestLedgerVertical(ledgerTsv);
-            const amountVert = developTestMasterTestAmountLines(customer);
-            let pastDueVert = '(unavailable)';
-            try {
-              pastDueVert =
-                typeof developTestMasterTestPastDueDetailsVertical === 'function'
-                  ? developTestMasterTestPastDueDetailsVertical(customer, stepNum)
-                  : '(unavailable)';
-            } catch (ePd) {
-              pastDueVert = '(past due error: ' + (ePd && ePd.message) + ')';
-            }
-            const pdfVert = withPdf ? developTestMasterTestPdfLines(customer) : null;
-            const block = developTestMasterTestFormatStep(
-              stepNum,
-              description,
-              ledgerVert,
-              amountVert,
-              pastDueVert,
-              pdfVert
-            );
-            masterTestSteps.push({
-              step: stepNum,
-              description: description,
-              ledgerTsv: ledgerTsv,
-              ledgerVertical: ledgerVert,
-              amountVertical: amountVert,
-              pastDueVertical: pastDueVert,
-              pdfVertical: pdfVert
-            });
-            if (typeof window.masterTestLog === 'function') {
-              window.masterTestLog('snap:done', { step: stepNum });
-            }
-            return block;
-          }
-
           const parts = [];
           let didSetAnchorDate = false;
 
@@ -32795,69 +33291,84 @@
             const stepDef = stepDefs[i] || {};
             const stepNum = i + 1;
             const dateOpts = developTestMasterTestDateOpts(cfg, skipAnim, stepDef, advanceMode);
-            developTestMasterTestReportProgress(
-              i,
-              totalSteps,
-              'Step ' + stepNum + ' of ' + totalSteps + '…'
-            );
-            if (typeof window.masterTestLog === 'function') {
-              window.masterTestLog('stepDef:' + stepNum, stepDef);
-            }
+            const substeps = developTestMasterTestStepSubsteps(stepDef);
+            const captureState = {
+              ledgerTsv: '',
+              ledgerVert: '',
+              amountVert: '',
+              pastDueVert: '(unavailable)',
+              pdfVert: null
+            };
 
-            if (stepDef.advanceDateEnabled && stepDef.advanceDate) {
-              const advanceIso = developTestNormalizeAdvanceDateIso(stepDef.advanceDate);
-              if (advanceIso) {
-                if (typeof window.masterTestLog === 'function') {
-                  window.masterTestLog('stepDef:' + stepNum + ':advance', { date: advanceIso });
+            for (let j = 0; j < substeps.length; j++) {
+              const sub = substeps[j];
+              reportSubstepProgress(stepNum, j + 1, substeps.length, sub.label);
+
+              if (sub.type === 'advance') {
+                const advanceIso = developTestNormalizeAdvanceDateIso(stepDef.advanceDate);
+                if (advanceIso) {
+                  await window.setTestDate(advanceIso, dateOpts);
+                  didSetAnchorDate = true;
                 }
-                await window.setTestDate(advanceIso, dateOpts);
-                didSetAnchorDate = true;
-              }
-            }
-            if (stepDef.freshStart) {
-              if (!didSetAnchorDate) {
-                await window.setTestDate(
-                  '2026-01-01',
-                  Object.assign(
-                    { skipAnimation: true },
-                    developTestMasterTestDateOpts(cfg, skipAnim, stepDef, advanceMode)
-                  )
+              } else if (sub.type === 'freshStart') {
+                if (!didSetAnchorDate) {
+                  await window.setTestDate(
+                    '2026-01-01',
+                    Object.assign(
+                      { skipAnimation: true },
+                      developTestMasterTestDateOpts(cfg, skipAnim, stepDef, advanceMode)
+                    )
+                  );
+                  didSetAnchorDate = true;
+                }
+                await developTestFreshStartSingleCustomer(customer);
+              } else if (sub.type === 'bill') {
+                await developTestProduceBillFor(customer);
+              } else if (sub.type === 'pay') {
+                const raw =
+                  stepDef.payAmount != null
+                    ? String(stepDef.payAmount).trim().replace(/[^0-9.]/g, '')
+                    : '';
+                const payAmt = parseFloat(raw);
+                if (!isNaN(payAmt) && payAmt > 0.005) {
+                  await developTestProcessCheckPayment(customer, {
+                    checkPaymentAmount: payAmt,
+                    checkNumber: 'MT-' + stepNum
+                  });
+                }
+              } else if (sub.type === 'capture') {
+                await developTestMasterTestRunCapture(
+                  customer,
+                  stepNum,
+                  sub.captureKind,
+                  captureState
                 );
-                didSetAnchorDate = true;
-              }
-              await developTestFreshStartSingleCustomer(customer);
-            }
-            if (stepDef.billThem) {
-              await developTestProduceBillFor(customer);
-            }
-            if (stepDef.payEnabled) {
-              const raw = stepDef.payAmount != null ? String(stepDef.payAmount).trim().replace(/[^0-9.]/g, '') : '';
-              const payAmt = parseFloat(raw);
-              if (!isNaN(payAmt) && payAmt > 0.005) {
-                if (typeof window.masterTestLog === 'function') {
-                  window.masterTestLog('stepDef:' + stepNum + ':pay', { amount: payAmt });
-                }
-                await developTestProcessCheckPayment(customer, {
-                  checkPaymentAmount: payAmt,
-                  checkNumber: 'MT-' + stepNum
-                });
-              } else if (typeof window.masterTestLog === 'function') {
-                window.masterTestLog('stepDef:' + stepNum + ':paySkipped', { raw: stepDef.payAmount });
               }
             }
 
             const description = developTestMasterTestStepDescription(stepDef);
-            const withPdf = developTestMasterTestStepWantsPdf(stepDef);
-            parts.push(await snap(stepNum, description, withPdf));
-            developTestMasterTestReportProgress(
+            const block = developTestMasterTestFormatStep(
               stepNum,
-              totalSteps,
-              'Finished step ' + stepNum + ' of ' + totalSteps
+              description,
+              captureState.ledgerVert,
+              captureState.amountVert,
+              captureState.pastDueVert,
+              captureState.pdfVert
             );
+            masterTestSteps.push({
+              step: stepNum,
+              description: description,
+              ledgerTsv: captureState.ledgerTsv,
+              ledgerVertical: captureState.ledgerVert,
+              amountVertical: captureState.amountVert,
+              pastDueVertical: captureState.pastDueVert,
+              pdfVertical: captureState.pdfVert
+            });
+            parts.push(block);
           }
 
           const masterTestReport = parts.join('\n\n\n') + '\n';
-          developTestMasterTestReportProgress(totalSteps, totalSteps, 'Complete');
+          developTestMasterTestReportProgress(totalSubsteps, totalSubsteps, 'Complete', { percent: 100 });
           const cap = cfg.captureConsole ? DT.lines.slice() : [];
           if (typeof window.masterTestLog === 'function') {
             window.masterTestLog('runMasterTestFromStepDefs:complete', { steps: masterTestSteps.length });
@@ -33493,6 +34004,60 @@
     .modal-show { display: flex !important; }
     .safe-pad { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
     .tap { -webkit-tap-highlight-color: transparent; }
+
+    #settingsModule.settings-module-testing-fullscreen {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: flex;
+      flex-direction: column;
+      width: 100vw;
+      max-width: none;
+      height: 100dvh;
+      margin: 0;
+      border-radius: 0;
+      overflow: hidden;
+      padding: 0.5rem 0.75rem 0.75rem;
+    }
+
+    #settingsModule.settings-module-testing-fullscreen #settingsModuleHeader {
+      margin-bottom: 0.5rem;
+      flex-shrink: 0;
+    }
+
+    #settingsModule.settings-module-testing-fullscreen #settingsModuleHeader h3 {
+      font-size: 1.125rem;
+      line-height: 1.35;
+    }
+
+    #settingsModule.settings-module-testing-fullscreen #settingsModuleTabNav {
+      margin-bottom: 0.5rem;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+      gap: 0.25rem;
+    }
+
+    #settingsModule.settings-module-testing-fullscreen #settingsTestingContent {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+
+    #settingsModule.settings-module-testing-fullscreen .settings-testing-intro {
+      display: none;
+    }
+
+    #settingsModule.settings-module-testing-fullscreen .settings-testing-iframe-wrap {
+      flex: 1 1 auto;
+      min-height: 0;
+      height: auto;
+      border-radius: 0.75rem;
+    }
+
+    body.settings-testing-fullscreen-active {
+      overflow: hidden;
+    }
 
   </style>
 </head>
@@ -34447,7 +35012,7 @@
             </div>
           </div>
 
-          <div class="flex justify-between items-center mb-6">
+          <div id="settingsModuleHeader" class="flex justify-between items-center mb-6">
             <h3 class="text-2xl font-bold text-slate-800 dark:text-slate-200">Settings & Management</h3>
             <button onclick="hideAllModules()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -34457,7 +35022,7 @@
       </div>
 
       <!-- Tab Navigation -->
-      <div class="flex space-x-1 mb-6">
+      <div id="settingsModuleTabNav" class="flex space-x-1 mb-6">
             <button 
               id="settingsAccountsTab"
               onclick="switchSettingsView('accounts')" 
@@ -34513,6 +35078,13 @@
               class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium"
             >
               Toggles
+            </button>
+            <button 
+              id="settingsTestingTab"
+              onclick="switchSettingsView('testing')" 
+              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium hidden"
+            >
+              Testing
             </button>
           </div>
 
@@ -35207,6 +35779,48 @@
             </div>
 
             <div class="space-y-6">
+              <div class="bg-blue-50 dark:bg-blue-900/20 p-6 rounded-xl border border-blue-200 dark:border-blue-700">
+                <div class="flex items-center justify-between gap-4 mb-4">
+                  <div class="flex-1">
+                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">Local database mode</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-300">
+                      When enabled, the app reads and writes to a local MySQL database on this computer instead of Firebase. Online mode uses Firebase as it does today. Switching modes reloads the app. Run <code class="text-xs bg-slate-200 dark:bg-slate-700 px-1 rounded">npm start</code> so the local API is available.
+                    </p>
+                    <p id="localDbStatusText" class="text-xs text-slate-500 dark:text-slate-400 mt-2">Checking local database…</p>
+                  </div>
+                  <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      id="toggleLocalDatabaseMode"
+                      class="sr-only peer"
+                      onchange="handleLocalDatabaseModeToggle()"
+                    />
+                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <div class="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    id="syncFirebaseToLocalBtn"
+                    onclick="syncFirebaseToLocalDatabase()"
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Sync Firebase → Local
+                  </button>
+                  <button
+                    type="button"
+                    id="syncLocalToFirebaseBtn"
+                    onclick="syncLocalDatabaseToFirebase()"
+                    class="px-4 py-2 bg-slate-700 hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Sync Local → Firebase
+                  </button>
+                </div>
+                <p class="text-xs text-slate-500 dark:text-slate-400 mt-3">
+                  Use <strong>Sync Firebase → Local</strong> to copy all billing data from Firebase into an empty local database. Use <strong>Sync Local → Firebase</strong> to push local changes back to Firebase.
+                </p>
+              </div>
+
               <div class="bg-slate-50 dark:bg-slate-900/20 p-6 rounded-xl border border-slate-200 dark:border-slate-700">
                 <div class="flex items-center justify-between">
                   <div class="flex-1">
@@ -35434,6 +36048,28 @@
                   </label>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- Testing Section (localhost:8000 only) -->
+          <div id="settingsTestingContent" class="hidden settings-testing-panel">
+            <div id="settingsTestingIntro" class="settings-testing-intro mb-4">
+              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Master Tests</h2>
+              <p class="text-sm text-slate-500 dark:text-slate-400">
+                Run and review Test 1, 2, and 3 in the Master Test viewer.
+              </p>
+            </div>
+            <div
+              id="settingsTestingIframeWrap"
+              class="settings-testing-iframe-wrap rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-900"
+              style="height: calc(100vh - 16rem); min-height: 480px;"
+            >
+              <iframe
+                id="settingsMasterTestViewerIframe"
+                title="Master Test viewer"
+                class="w-full h-full border-0 block"
+                loading="lazy"
+              ></iframe>
             </div>
           </div>
         </div>

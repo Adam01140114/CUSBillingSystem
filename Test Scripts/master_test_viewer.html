@@ -519,6 +519,35 @@
       visibility: hidden;
       pointer-events: none;
     }
+    .mt-actions-th {
+      width: 2.25rem;
+      padding: 0.35rem 0.25rem !important;
+    }
+    .mt-actions-cell {
+      text-align: center;
+      vertical-align: middle;
+      padding: 0.25rem !important;
+      white-space: nowrap;
+    }
+    .mt-row-delete-btn {
+      font: inherit;
+      font-size: 1rem;
+      line-height: 1;
+      font-weight: 700;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      width: 1.5rem;
+      height: 1.5rem;
+      padding: 0;
+      cursor: pointer;
+    }
+    .mt-row-delete-btn:hover {
+      color: #f87171;
+      border-color: rgba(248, 113, 113, 0.35);
+      background: rgba(248, 113, 113, 0.08);
+    }
     .mt-past-due-label { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.5rem; }
     .mt-past-due-entry-id { display: block; margin-bottom: 0.35rem; color: var(--text); }
     .mt-past-due-entry-id code {
@@ -928,6 +957,10 @@
       margin: 0;
       font-size: 0.85rem;
       color: var(--muted);
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.35rem;
     }
     .test1-view-label strong {
       color: var(--accent);
@@ -1665,6 +1698,45 @@
       return /^n\/?a$/i.test(String(s == null ? '' : s).trim());
     }
 
+    function isLedgerBalanceAfterCreditValue(s) {
+      return /\(credit\)/i.test(String(s == null ? '' : s));
+    }
+
+    function ledgerBalanceAfterCreditStoredValue(text) {
+      const n = parseMoneyNumber(text);
+      if (n >= -0.005) return ledgerCellStoredMoney(text);
+      const a = Math.round(Math.abs(n) * 100) / 100;
+      const numStr =
+        Math.abs(a - Math.round(a)) < 0.005 ? String(Math.round(a)) : a.toFixed(2);
+      return '-' + numStr + ' (credit)';
+    }
+
+    function ledgerBalanceAfterCellDisplay(text) {
+      if (isLedgerNaValue(text)) return 'N/A';
+      if (isLedgerBalanceAfterCreditValue(text)) {
+        return ledgerBalanceAfterCreditStoredValue(text);
+      }
+      const n = parseMoneyNumber(text);
+      if (n < -0.005) return ledgerBalanceAfterCreditStoredValue(text);
+      if (looksLikeMoneyValue(text) || isEditableMoneyValue(text)) {
+        return ledgerCellStoredMoney(text);
+      }
+      return String(text == null ? '' : text).trim();
+    }
+
+    function isBalanceAfterLedgerCol(col) {
+      if (col == null || isNaN(col)) return false;
+      const headers = ledgerHeadersFromAnyStep();
+      const balanceAfterCol = findLedgerColByHeaderPatterns(headers, [/^balance\s*after$/i]);
+      return col === balanceAfterCol;
+    }
+
+    function isBalanceAfterLedgerCell(el) {
+      if (!el || !el.getAttribute) return false;
+      if (el.getAttribute('data-section') !== 'ledger') return false;
+      return isBalanceAfterLedgerCol(parseInt(el.getAttribute('data-col'), 10));
+    }
+
     /** Stored ledger cell text (matches import: 0, 178.49, $178.49, or N/A). */
     function ledgerCellStoredMoney(text) {
       if (isLedgerNaValue(text)) return 'N/A';
@@ -1679,6 +1751,9 @@
 
     function ledgerCellStoredValue(text) {
       if (isLedgerNaValue(text)) return 'N/A';
+      if (isLedgerBalanceAfterCreditValue(text)) {
+        return ledgerBalanceAfterCreditStoredValue(text);
+      }
       if (looksLikeMoneyValue(text) || isEditableMoneyValue(text)) {
         return ledgerCellStoredMoney(text);
       }
@@ -1754,6 +1829,7 @@
         relinkPastDueEntriesToLedger(sn);
         dedupePastDueEntries(sn);
         ensurePastDueEntryIds(sn);
+        syncAllLedgerPastDueFromEntries(sn);
       });
     }
 
@@ -1829,6 +1905,54 @@
     function ledgerPastDueTotalFromEntry(entry) {
       if (!entry || !entry.pairs) return null;
       return kvMoneyByKey(entry.pairs, [/^total\s*\(past\s*due\s*line\)$/i]);
+    }
+
+    /** Ledger Past Due column follows Total (Past Due line) when a details entry exists. */
+    function syncPastDueEntryTotalFromLedger(stepNum, rowIndex, ledgerValue) {
+      const entry = resolvePastDueEntryForLedgerRow(stepNum, rowIndex);
+      if (!entry || !entry.pairs) return;
+      const formatted = ledgerCellStoredMoney(
+        isEditableMoneyValue(ledgerValue) ? stripLeadingDollar(ledgerValue) : String(ledgerValue || '0')
+      );
+      const ti = findPastDuePairIndexByKey(entry, 'Total (Past Due line)');
+      if (ti >= 0) entry.pairs[ti].val = formatted;
+    }
+
+    function syncLedgerPastDueColumnFromEntry(stepNum, rowIndex) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !d.ledger.rows[rowIndex]) return false;
+      const pastDueCol = findPastDueColIndex(d.ledger.headers);
+      if (pastDueCol < 0) return false;
+      const entry = resolvePastDueEntryForLedgerRow(stepNum, rowIndex);
+      if (!entry || !entry.pairs) return false;
+      const totalLine = ledgerPastDueTotalFromEntry(entry);
+      if (totalLine == null) return false;
+      d.ledger.rows[rowIndex][pastDueCol] = ledgerCellStoredMoney(String(totalLine));
+      return true;
+    }
+
+    function syncAllLedgerPastDueFromEntries(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !Array.isArray(d.pastDue)) return;
+      d.pastDue.forEach(function (entry) {
+        if (entry.rowIndex != null && entry.rowIndex >= 0) {
+          syncLedgerPastDueColumnFromEntry(stepNum, entry.rowIndex);
+        }
+      });
+    }
+
+    function effectiveLedgerPastDueDisplayValue(stepNum, storedRi, rawCell) {
+      const entry =
+        storedRi >= 0 ? resolvePastDueEntryForLedgerRow(stepNum, storedRi) : null;
+      if (entry && entry.pairs) {
+        const totalLine = ledgerPastDueTotalFromEntry(entry);
+        if (totalLine != null) {
+          return ledgerCellStoredMoney(String(totalLine));
+        }
+      }
+      return looksLikeMoneyValue(rawCell)
+        ? moneyValueFromNumericPart(rawCell)
+        : String(rawCell || '0');
     }
 
     function ledgerToVertical(ledger) {
@@ -2320,6 +2444,9 @@
             : ledgerHeadersFromAnyStep();
         const pastDueCol = findPastDueColIndex(tgtHeaders);
         applyLedgerCellEdit(sn, ri, targetCol, ledgerStored);
+        if (targetCol === pastDueCol) {
+          syncPastDueEntryTotalFromLedger(sn, ri, ledgerStored);
+        }
         syncLedgerCellsInDom(sn, ri, targetCol, ledgerStored, {
           pastDueCol: targetCol === pastDueCol
         });
@@ -2339,6 +2466,9 @@
         refreshSectionValidationInDom(sn);
       });
       refreshPastDueModalValidationInDom();
+      if (activeEditorTestKey) {
+        refreshViewDocumentValidationIcon(activeEditorTestKey);
+      }
     }
 
     function ledgerHeadersFromAnyStep() {
@@ -2367,9 +2497,12 @@
     function parseMoneyNumber(val) {
       if (val == null || val === '') return 0;
       if (/^n\/?a$/i.test(String(val).trim())) return 0;
-      const raw = isEditableMoneyValue(val) ? stripLeadingDollar(val) : String(val);
-      const n = parseFloat(String(raw).replace(/,/g, '').replace(/[^0-9.-]/g, ''));
+      const str = String(val).trim();
+      const isCredit = isLedgerBalanceAfterCreditValue(str);
+      const raw = isEditableMoneyValue(str) ? stripLeadingDollar(str) : str;
+      let n = parseFloat(String(raw).replace(/,/g, '').replace(/[^0-9.-]/g, ''));
       if (isNaN(n)) return 0;
+      if (isCredit && n > 0) n = -Math.abs(n);
       return Math.round(n * 100) / 100;
     }
 
@@ -2561,6 +2694,11 @@
             const taxCol = ledgerCellMoney(rows[r], c.tax);
             const pucCol = ledgerCellMoney(rows[r], c.puc);
             const colSum = Math.round((sewerCol + taxCol + pucCol) * 100) / 100;
+            const staleProratedFaceOnFullBill =
+              colSum > 0.005 &&
+              charged > colSum + 0.02 &&
+              fullMonth &&
+              fullMonth.sewer > sewerCol + 0.02;
             if (colSum > charged + 0.02) {
               fullMonth = {
                 sewer: charged,
@@ -2569,12 +2707,23 @@
                 taxCombined: 0,
                 total: charged
               };
-            } else if (colSum > 0.005) {
+            } else if (colSum > 0.005 && !staleProratedFaceOnFullBill) {
               fullMonth = {
                 sewer: sewerCol,
                 taxCodes: taxCol,
                 puc: pucCol,
                 taxCombined: Math.round((taxCol + pucCol) * 100) / 100,
+                total: colSum
+              };
+            } else if (staleProratedFaceOnFullBill) {
+              fullMonth = {
+                sewer: fullMonth.sewer,
+                taxCodes: fullMonth.taxCodes > 0.005 ? fullMonth.taxCodes : taxCol,
+                puc: fullMonth.puc > 0.005 ? fullMonth.puc : pucCol,
+                taxCombined:
+                  fullMonth.taxCombined > 0.005
+                    ? fullMonth.taxCombined
+                    : Math.round((taxCol + pucCol) * 100) / 100,
                 total: charged
               };
             } else {
@@ -2597,7 +2746,7 @@
         fullMonth.total > prorated.total + 0.02;
 
       if (fullMonth) {
-        fullMonth = enrichProfileTaxPucFromLedger(fullMonth);
+        fullMonth = enrichProfileTaxPucFromLedger(fullMonth, { preferFullMonth: true });
       }
       if (prorated) {
         prorated = enrichProfileTaxPucFromLedger(prorated, { preferFirstBill: true });
@@ -2615,8 +2764,71 @@
       if (!profile) return profile;
       options = options || {};
 
+      function cycleTotalFromCandidate(sewerCol, taxCol, pucCol, charged, colSum) {
+        const totalRef = profile.total;
+        if (colSum > 0.005 && moneyNearlyEqual(colSum, totalRef)) return colSum;
+        if (charged > 0.005 && moneyNearlyEqual(charged, totalRef)) return totalRef;
+        if (colSum > 0.005) return colSum;
+        if (charged > 0.005) return charged;
+        return totalRef;
+      }
+
+      function pickFromStatusAfterBill(minBill, maxBill) {
+        let best = null;
+        let bestScore = -1;
+        for (let i = 0; i < stepOrder.length; i++) {
+          const d = editableByStep.get(stepOrder[i]);
+          if (!d || !d.ledger) continue;
+          const headers = d.ledger.headers;
+          const rows = d.ledger.rows;
+          const c = ledgerMoneyCols(headers);
+          let billCount = 0;
+          for (let r = 0; r < rows.length - 1; r++) {
+            if (
+              !isLedgerChargeRow(rows[r], headers) ||
+              !isLedgerBilledCustomerRow(rows[r], headers)
+            ) {
+              continue;
+            }
+            billCount++;
+            if (billCount < minBill) continue;
+            if (maxBill != null && billCount > maxBill) continue;
+            const stIdx = r + 1;
+            if (!isLedgerStatusUpdateRow(rows[stIdx], headers)) continue;
+            const sewerCol = ledgerCellMoney(rows[stIdx], c.sewer);
+            const taxCol = ledgerCellMoney(rows[stIdx], c.tax);
+            const pucCol = ledgerCellMoney(rows[stIdx], c.puc);
+            if (taxCol <= 0.005 && pucCol <= 0.005) continue;
+            const cycleSum = Math.round((sewerCol + taxCol + pucCol) * 100) / 100;
+            const totalRef = profile.total;
+            const matchesProfile =
+              moneyNearlyEqual(cycleSum, totalRef) ||
+              (profile.sewer > 0.005 && moneyNearlyEqual(sewerCol, profile.sewer));
+            if (!matchesProfile) continue;
+            const candidate = {
+              sewer: sewerCol,
+              taxCodes: taxCol,
+              puc: pucCol,
+              taxCombined: Math.round((taxCol + pucCol) * 100) / 100,
+              total: cycleSum
+            };
+            let score = 10;
+            if (moneyNearlyEqual(cycleSum, totalRef)) score += 20;
+            if (moneyNearlyEqual(sewerCol, profile.sewer)) score += 10;
+            if (options.preferFirstBill && billCount === 1) score += 5;
+            if (options.preferFullMonth && billCount >= 2) score += 5;
+            if (score > bestScore) {
+              best = candidate;
+              bestScore = score;
+            }
+          }
+        }
+        return best;
+      }
+
       function pickFromLedger(minBill, maxBill) {
         let best = null;
+        let bestScore = -1;
         for (let i = 0; i < stepOrder.length; i++) {
           const d = editableByStep.get(stepOrder[i]);
           if (!d || !d.ledger) continue;
@@ -2642,28 +2854,73 @@
               c.amountCharged >= 0 ? ledgerCellMoney(rows[r], c.amountCharged) : 0;
             const colSum = Math.round((sewerCol + taxCol + pucCol) * 100) / 100;
             const totalRef = profile.total;
+            if (
+              charged > 0.005 &&
+              moneyNearlyEqual(charged, totalRef) &&
+              colSum > 0.005 &&
+              !moneyNearlyEqual(colSum, totalRef) &&
+              profile.sewer > sewerCol + 0.02
+            ) {
+              continue;
+            }
             const matchesProfile =
               moneyNearlyEqual(colSum, totalRef) ||
               (charged > 0.005 && moneyNearlyEqual(charged, totalRef)) ||
-              moneyNearlyEqual(sewerCol, profile.sewer);
+              (profile.sewer > 0.005 && moneyNearlyEqual(sewerCol, profile.sewer));
             if (!matchesProfile) continue;
+            const totalOut = cycleTotalFromCandidate(sewerCol, taxCol, pucCol, charged, colSum);
+            const useProfileSewer =
+              charged > 0.005 &&
+              moneyNearlyEqual(charged, totalRef) &&
+              colSum > 0.005 &&
+              !moneyNearlyEqual(colSum, totalRef) &&
+              profile.sewer > sewerCol + 0.02;
             const candidate = {
-              sewer: sewerCol > 0.005 ? sewerCol : profile.sewer,
+              sewer: useProfileSewer
+                ? profile.sewer
+                : sewerCol > 0.005
+                  ? sewerCol
+                  : profile.sewer,
               taxCodes: taxCol,
               puc: pucCol,
               taxCombined: Math.round((taxCol + pucCol) * 100) / 100,
-              total: charged > 0.005 ? charged : colSum > 0.005 ? colSum : profile.total
+              total: totalOut
             };
-            if (!best || candidate.total > best.total + 0.02) best = candidate;
+            let score = 10;
+            if (taxCol > 0.005 && pucCol > 0.005) score += 100;
+            if (moneyNearlyEqual(sewerCol, profile.sewer)) score += 5;
+            if (moneyNearlyEqual(colSum, totalRef) || moneyNearlyEqual(charged, totalRef)) {
+              score += 8;
+            }
+            if (options.preferFirstBill && billCount === 1) score += 3;
+            if (options.preferFullMonth && billCount >= 2) score += 3;
+            if (score > bestScore) {
+              best = candidate;
+              bestScore = score;
+            }
           }
         }
         return best;
       }
 
       if (options.preferFirstBill) {
-        return pickFromLedger(1, 1) || profile;
+        return (
+          pickFromStatusAfterBill(1, 1) ||
+          pickFromLedger(1, 1) ||
+          pickFromStatusAfterBill(1, null) ||
+          pickFromLedger(1, null) ||
+          profile
+        );
       }
-      return pickFromLedger(2, null) || pickFromLedger(1, 1) || profile;
+      if (options.preferFullMonth) {
+        return (
+          pickFromStatusAfterBill(2, null) ||
+          pickFromLedger(2, null) ||
+          pickFromStatusAfterBill(1, null) ||
+          profile
+        );
+      }
+      return pickFromLedger(1, null) || profile;
     }
 
     function countPriorBilledCustomerChargeRows(rows, headers, rowIndex) {
@@ -3232,6 +3489,121 @@
       );
     }
 
+    function isAmountBreakdownValidatedField(key) {
+      const k = String(key || '').trim();
+      return (
+        /^sewer\s*charge$/i.test(k) ||
+        /^tax\s*charge$/i.test(k) ||
+        /^past\s*due$/i.test(k) ||
+        /^late\s*fee$/i.test(k) ||
+        /^credit$/i.test(k) ||
+        /^total\s*amount\s*due$/i.test(k) ||
+        /^total\s*due$/i.test(k)
+      );
+    }
+
+    function amountBreakdownFieldSlug(key) {
+      const k = String(key || '').trim();
+      if (/^sewer\s*charge$/i.test(k)) return 'sewer-charge';
+      if (/^tax\s*charge$/i.test(k)) return 'tax-charge';
+      if (/^past\s*due$/i.test(k)) return 'past-due';
+      if (/^late\s*fee$/i.test(k)) return 'late-fee';
+      if (/^credit$/i.test(k)) return 'credit';
+      if (/^total\s*amount\s*due$/i.test(k) || /^total\s*due$/i.test(k)) return 'total-amount-due';
+      return '';
+    }
+
+    function getAmountBreakdownFieldValue(amountPairs, key) {
+      const k = String(key || '').trim();
+      if (/^sewer\s*charge$/i.test(k)) return kvMoneyByKey(amountPairs, [/^sewer\s*charge$/i]);
+      if (/^tax\s*charge$/i.test(k)) {
+        return kvMoneyByKey(amountPairs, [/^tax\s*charge$/i, /^tax\s*codes?$/i]);
+      }
+      if (/^past\s*due$/i.test(k)) return kvMoneyByKey(amountPairs, [/^past\s*due$/i]);
+      if (/^late\s*fee$/i.test(k)) return kvMoneyByKey(amountPairs, [/^late\s*fee$/i]);
+      if (/^credit$/i.test(k)) return kvMoneyByKey(amountPairs, [/^credit$/i]);
+      if (/^total\s*amount\s*due$/i.test(k) || /^total\s*due$/i.test(k)) {
+        return kvMoneyByKey(amountPairs, [/^total\s*amount\s*due$/i, /^total\s*due$/i]);
+      }
+      return null;
+    }
+
+    function getAmountBreakdownFieldLedgerLabel(key) {
+      const k = String(key || '').trim();
+      if (/^sewer\s*charge$/i.test(k)) return 'Sewer';
+      if (/^tax\s*charge$/i.test(k)) return 'Tax Codes + PUC Surcharge';
+      if (/^past\s*due$/i.test(k)) return 'Past Due';
+      if (/^late\s*fee$/i.test(k)) return 'Late Fee';
+      if (/^credit$/i.test(k)) return 'Credit';
+      if (/^total\s*amount\s*due$/i.test(k) || /^total\s*due$/i.test(k)) return 'Balance After';
+      return 'Status Update row';
+    }
+
+    function getStatusUpdateLedgerFieldValue(rows, headers, statusIdx, key) {
+      const c = ledgerMoneyCols(headers);
+      const k = String(key || '').trim();
+      if (/^sewer\s*charge$/i.test(k)) {
+        return c.sewer >= 0 ? ledgerCellMoney(rows[statusIdx], c.sewer) : 0;
+      }
+      if (/^tax\s*charge$/i.test(k)) {
+        const tax = c.tax >= 0 ? ledgerCellMoney(rows[statusIdx], c.tax) : 0;
+        const puc = c.puc >= 0 ? ledgerCellMoney(rows[statusIdx], c.puc) : 0;
+        return Math.round((tax + puc) * 100) / 100;
+      }
+      if (/^past\s*due$/i.test(k)) {
+        return c.pastDue >= 0 ? ledgerCellMoney(rows[statusIdx], c.pastDue) : 0;
+      }
+      if (/^late\s*fee$/i.test(k)) {
+        return c.lateFee >= 0 ? ledgerCellMoney(rows[statusIdx], c.lateFee) : 0;
+      }
+      if (/^credit$/i.test(k)) {
+        return c.credit >= 0 ? ledgerCellMoney(rows[statusIdx], c.credit) : 0;
+      }
+      if (/^total\s*amount\s*due$/i.test(k) || /^total\s*due$/i.test(k)) {
+        return c.balanceAfter >= 0 ? ledgerCellMoney(rows[statusIdx], c.balanceAfter) : 0;
+      }
+      return null;
+    }
+
+    /** Amount breakdown field vs matching column on the last Status Update row. */
+    function getAmountBreakdownFieldValidationMeta(stepNum, key) {
+      if (!isAmountBreakdownValidatedField(key)) return null;
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.amount || !d.ledger) return null;
+      const statusIdx = findStatusUpdateRowIndex(d.ledger.rows, d.ledger.headers);
+      if (statusIdx < 0) return null;
+      const expected = getStatusUpdateLedgerFieldValue(
+        d.ledger.rows,
+        d.ledger.headers,
+        statusIdx,
+        key
+      );
+      if (expected == null) return null;
+      const actual = getAmountBreakdownFieldValue(d.amount, key);
+      if (actual == null) return null;
+      const ok = moneyNearlyEqual(actual, expected);
+      const ledgerLabel = getAmountBreakdownFieldLedgerLabel(key);
+      const fieldLabel = String(key || '').trim();
+      return {
+        ok: ok,
+        titleOk:
+          fieldLabel +
+          ' matches Status Update ' +
+          ledgerLabel +
+          ' ($' +
+          expected.toFixed(2) +
+          ')',
+        titleFail:
+          fieldLabel +
+          ' should match Status Update ' +
+          ledgerLabel +
+          ': expected $' +
+          expected.toFixed(2) +
+          ', got $' +
+          actual.toFixed(2)
+      };
+    }
+
     function ledgerCellsMatchForMirror(rowA, rowB, col) {
       if (col < 0) return true;
       const rawA = String(rowA[col] || '').trim();
@@ -3392,6 +3764,31 @@
       return moneyNearlyEqual(lhs, total);
     }
 
+    function isPdfTotalAmountKey(key) {
+      return /^total[_\s-]*amount$/i.test(String(key || '').trim());
+    }
+
+    /** Bill PDF Total_amount must match Amount breakdown Total amount due. */
+    function getPdfTotalAmountVsAmountBreakdownMeta(stepNum) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.pdf || !d.amount) return null;
+      const pdfTotal = kvMoneyByKey(d.pdf, [/^total[_\s-]*amount$/i]);
+      const amountTotal = kvMoneyByKey(d.amount, [/^total\s*amount\s*due$/i, /^total\s*due$/i]);
+      const ok = moneyNearlyEqual(pdfTotal, amountTotal);
+      return {
+        ok: ok,
+        titleOk:
+          'Total_amount matches Total amount due from Amount breakdown ($' +
+          amountTotal.toFixed(2) +
+          ')',
+        titleFail:
+          'Total_amount should match Total amount due from Amount breakdown: expected $' +
+          amountTotal.toFixed(2) +
+          ', got $' +
+          pdfTotal.toFixed(2)
+      };
+    }
+
     function validatePastDueEntryPairs(pairs) {
       if (!pairs || !pairs.length) return true;
       const pastDueAmt = kvMoneyByKey(pairs, [/^past\s*due\s*amount$/i]);
@@ -3451,6 +3848,30 @@
       }
 
       return ledgerMeta;
+    }
+
+    /** Current Status / Status Update rows: Balance After must match the row directly above (skip spacers). */
+    function getStatusUpdateBalanceAfterValidationMeta(rows, headers, rowIndex) {
+      if (!rows || rowIndex < 0 || rowIndex >= rows.length) return null;
+      if (!isLedgerStatusUpdateRow(rows[rowIndex], headers)) return null;
+      const c = ledgerMoneyCols(headers);
+      if (c.balanceAfter < 0) return null;
+      let aboveIdx = rowIndex - 1;
+      while (aboveIdx >= 0 && isLedgerSeparatorRow(rows[aboveIdx])) aboveIdx--;
+      if (aboveIdx < 0) return null;
+      const expected = ledgerCellMoney(rows[aboveIdx], c.balanceAfter);
+      const actual = ledgerCellMoney(rows[rowIndex], c.balanceAfter);
+      const ok = moneyNearlyEqual(actual, expected);
+      return {
+        ok: ok,
+        titleOk:
+          'Balance After matches row directly above ($' + expected.toFixed(2) + ')',
+        titleFail:
+          'Balance After should equal row directly above: expected $' +
+          expected.toFixed(2) +
+          ', got $' +
+          actual.toFixed(2)
+      };
     }
 
     function getPaymentRowBalanceAfterValidationMeta(rows, headers, rowIndex) {
@@ -3574,7 +3995,8 @@
       const amountChargedRuleOk = !amountChargedMeta || amountChargedMeta.ok;
       const balAfterMeta =
         getBilledCustomerBalanceAfterValidationMeta(stepNum, rows, headers, rowIndex) ||
-        getPaymentRowBalanceAfterValidationMeta(rows, headers, rowIndex);
+        getPaymentRowBalanceAfterValidationMeta(rows, headers, rowIndex) ||
+        getStatusUpdateBalanceAfterValidationMeta(rows, headers, rowIndex);
       const balanceAfterRuleOk = !balAfterMeta || balAfterMeta.ok;
       const ok = rowBalOk && pastDueOk && amountChargedRuleOk && balanceAfterRuleOk;
       const eqTitleOk =
@@ -3748,6 +4170,12 @@
         refreshLedgerTestStatusInDom(stepNum, rowIndex + 1);
         refreshLedgerPastDueCellStatusInDom(stepNum);
       }
+      let nextIdx = rowIndex + 1;
+      while (nextIdx < rows.length && isLedgerSeparatorRow(rows[nextIdx])) nextIdx++;
+      if (nextIdx < rows.length && isLedgerStatusUpdateRow(rows[nextIdx], headers)) {
+        refreshLedgerBalanceAfterCellStatusInDom(stepNum, nextIdx);
+        refreshLedgerTestStatusInDom(stepNum, nextIdx);
+      }
     }
 
     function refreshSectionValidationInDom(stepNum) {
@@ -3784,6 +4212,7 @@
           w.remove();
         });
       }
+      refreshAmountBreakdownFieldStatusInDom(stepNum);
       const pdfH = card.querySelector('h3.mt-section-h3[data-section-kind="pdf"]');
       if (pdfH && d.pdf) {
         const okPdf = validatePdfPreviewPairs(d.pdf);
@@ -3794,6 +4223,55 @@
           iconPdf.setAttribute('title', okPdf ? 'Equation balances' : 'Equation does not balance');
           iconPdf.setAttribute('aria-label', okPdf ? 'Pass' : 'Fail');
         }
+      }
+      refreshPdfTotalAmountStatusInDom(stepNum);
+    }
+
+    function refreshAmountBreakdownFieldStatusInDom(stepNum) {
+      const root = getActiveRenderRoot();
+      const d = editableByStep.get(stepNum);
+      if (!root || !d || !d.amount) return;
+      d.amount.forEach(function (p) {
+        if (!isAmountBreakdownValidatedField(p.key)) return;
+        const slug = amountBreakdownFieldSlug(p.key);
+        if (!slug) return;
+        const el = root.querySelector(
+          'span[data-amount-field-status="1"][data-step="' +
+            stepNum +
+            '"][data-amount-field="' +
+            slug +
+            '"]'
+        );
+        if (!el) return;
+        const meta = getAmountBreakdownFieldValidationMeta(stepNum, p.key);
+        if (!meta) {
+          el.innerHTML = '';
+          return;
+        }
+        el.innerHTML = renderTestStatusIcon(meta.ok, meta.titleOk, meta.titleFail);
+        const icon = el.querySelector('.mt-test-status');
+        if (icon) {
+          updateTestStatusIcon(icon, meta.ok, meta.titleOk, meta.titleFail);
+        }
+      });
+    }
+
+    function refreshPdfTotalAmountStatusInDom(stepNum) {
+      const root = getActiveRenderRoot();
+      if (!root || stepNum == null || isNaN(stepNum)) return;
+      const el = root.querySelector(
+        'span[data-pdf-total-status="1"][data-step="' + stepNum + '"]'
+      );
+      if (!el) return;
+      const meta = getPdfTotalAmountVsAmountBreakdownMeta(stepNum);
+      if (!meta) {
+        el.innerHTML = '';
+        return;
+      }
+      el.innerHTML = renderTestStatusIcon(meta.ok, meta.titleOk, meta.titleFail);
+      const icon = el.querySelector('.mt-test-status');
+      if (icon) {
+        updateTestStatusIcon(icon, meta.ok, meta.titleOk, meta.titleFail);
       }
     }
 
@@ -3807,6 +4285,9 @@
       refreshLedgerPastDueCellStatusInDom(stepNum);
       refreshLedgerBalanceAfterCellStatusInDom(stepNum);
       refreshLedgerAmountChargedCellStatusInDom(stepNum);
+      if (activeEditorTestKey) {
+        refreshViewDocumentValidationIcon(activeEditorTestKey);
+      }
     }
 
     function refreshLedgerAmountChargedCellStatusInDom(stepNum, onlyRowIndex) {
@@ -3856,7 +4337,8 @@
         if (!el) continue;
         const meta =
           getBilledCustomerBalanceAfterValidationMeta(stepNum, rows, headers, ri) ||
-          getPaymentRowBalanceAfterValidationMeta(rows, headers, ri);
+          getPaymentRowBalanceAfterValidationMeta(rows, headers, ri) ||
+          getStatusUpdateBalanceAfterValidationMeta(rows, headers, ri);
         if (meta === null) {
           el.innerHTML = '';
           continue;
@@ -3947,6 +4429,7 @@
         }
       });
       if (showTestStatus) thead += '<th>Test Status</th>';
+      if (editable) thead += '<th class="mt-actions-th" aria-label="Row actions"></th>';
       thead += '</tr>';
       const lastStatusHighlightIdx = findLastStatusUpdateDisplayRowIndex(headers, rows);
       const tbody = rows
@@ -4007,13 +4490,13 @@
                   return '<td>' + escapeHtml(c) + '</td>';
                 }
                 if (editable && pastDueCol >= 0 && ci === pastDueCol) {
-                  const num = escapeHtml(
-                    stripLeadingDollar(
-                      looksLikeMoneyValue(c) ? moneyValueFromNumericPart(c) : String(c || '0')
-                    )
-                  );
                   let pdEntry = null;
-                  if (storedRi >= 0) pdEntry = ensurePastDueEntryForRow(stepNum, storedRi);
+                  if (storedRi >= 0) {
+                    pdEntry = resolvePastDueEntryForLedgerRow(stepNum, storedRi);
+                    if (!pdEntry) pdEntry = ensurePastDueEntryForRow(stepNum, storedRi);
+                  }
+                  const cellStored = effectiveLedgerPastDueDisplayValue(stepNum, storedRi, c);
+                  const num = escapeHtml(stripLeadingDollar(cellStored));
                   const hasPd = !!(storedRi >= 0 && pdEntry);
                   const btn = hasPd
                     ? '<br><button type="button" class="mt-past-due-btn" data-past-due-open="1" data-step="' +
@@ -4066,13 +4549,14 @@
                   let balCell = '<td>' + escapeHtml(c) + '</td>';
                   if (
                     editable &&
-                    (isLedgerBilledCustomerRow(r, headers) || isLedgerPaymentRow(r, headers))
+                    (isLedgerBilledCustomerRow(r, headers) ||
+                      isLedgerPaymentRow(r, headers) ||
+                      isLedgerStatusUpdateRow(r, headers) ||
+                      isLedgerBalanceAfterCreditValue(c) ||
+                      isEditableMoneyValue(c) ||
+                      looksLikeMoneyValue(c))
                   ) {
-                    const num = escapeHtml(
-                      stripLeadingDollar(
-                        looksLikeMoneyValue(c) ? moneyValueFromNumericPart(c) : String(c || '0')
-                      )
-                    );
+                    const display = escapeHtml(ledgerBalanceAfterCellDisplay(c));
                     let balStatus = '';
                     const balMeta =
                       getBilledCustomerBalanceAfterValidationMeta(
@@ -4080,7 +4564,9 @@
                         rows,
                         headers,
                         ri
-                      ) || getPaymentRowBalanceAfterValidationMeta(rows, headers, ri);
+                      ) ||
+                      getPaymentRowBalanceAfterValidationMeta(rows, headers, ri) ||
+                      getStatusUpdateBalanceAfterValidationMeta(rows, headers, ri);
                     if (balMeta !== null) {
                       balStatus =
                         '<span class="mt-past-due-cell-status" data-balance-after-status="1" data-step="' +
@@ -4092,7 +4578,7 @@
                         '</span>';
                     }
                     balCell =
-                      '<td class="mt-money-td" data-money-wrap="1" data-section="ledger" data-step="' +
+                      '<td class="mt-balance-after-td" data-section="ledger" data-step="' +
                       stepNum +
                       '" data-row="' +
                       storedRi +
@@ -4101,30 +4587,15 @@
                       '">' +
                       '<span class="mt-past-due-cell-wrap">' +
                       balStatus +
-                      '<span class="mt-currency-prefix">$</span>' +
-                      '<span class="mt-money-value" data-editable="1" data-section="ledger" data-step="' +
+                      '<span class="mt-balance-after-value" data-editable="1" data-section="ledger" data-step="' +
                       stepNum +
                       '" data-row="' +
                       storedRi +
                       '" data-col="' +
                       ci +
                       '">' +
-                      num +
+                      display +
                       '</span></span></td>';
-                  } else if (editable && isEditableMoneyValue(c)) {
-                    const num = escapeHtml(stripLeadingDollar(c));
-                    balCell =
-                      '<td class="mt-money-td" data-money-wrap="1">' +
-                      '<span class="mt-currency-prefix">$</span>' +
-                      '<span class="mt-money-value" data-editable="1" data-section="ledger" data-step="' +
-                      stepNum +
-                      '" data-row="' +
-                      storedRi +
-                      '" data-col="' +
-                      ci +
-                      '">' +
-                      num +
-                      '</span></td>';
                   } else if (editable) {
                     balCell =
                       '<td data-editable="1" data-section="ledger" data-step="' +
@@ -4256,20 +4727,59 @@
               (separatorRow ? '' : buildLedgerTestStatusCellHtml(stepNum, rows, headers, ri)) +
               '</td>';
           }
+          if (editable) {
+            rowHtml += separatorRow
+              ? '<td class="mt-actions-cell"></td>'
+              : '<td class="mt-actions-cell"><button type="button" class="mt-row-delete-btn" data-ledger-row-delete="1" data-step="' +
+                stepNum +
+                '" data-row="' +
+                storedRi +
+                '" title="Delete row" aria-label="Delete row">×</button></td>';
+          }
           rowHtml += '</tr>';
           return rowHtml;
         })
         .join('');
       return (
         '<div class="mt-ledger-table-scroll">' +
-        '<table class="data" data-role="' +
+        '<table class="data mt-ledger-table" data-role="' +
         role +
+        '" data-step="' +
+        stepNum +
         '"><thead>' +
         thead +
         '</thead><tbody>' +
         tbody +
         '</tbody></table></div>'
       );
+    }
+
+    function upgradeLedgerCellDomFromNa(spanEl, stored) {
+      if (!spanEl || isLedgerNaValue(stored)) return;
+      spanEl.removeAttribute('data-na');
+      spanEl.classList.remove('mt-na-value');
+      const td = spanEl.closest('td');
+      if (td) td.classList.remove('mt-na-td');
+      const isBalanceAfter = spanEl.classList.contains('mt-balance-after-value');
+      const isMoney = spanEl.classList.contains('mt-money-value');
+      if (isMoney && !isBalanceAfter) {
+        spanEl.textContent = stripLeadingDollar(stored);
+        if (td && !td.querySelector('.mt-currency-prefix')) {
+          td.classList.add('mt-money-td');
+          if (!td.getAttribute('data-money-wrap')) td.setAttribute('data-money-wrap', '1');
+          const prefix = document.createElement('span');
+          prefix.className = 'mt-currency-prefix';
+          prefix.textContent = '$';
+          const wrap = spanEl.closest('.mt-past-due-cell-wrap');
+          if (wrap) {
+            wrap.insertBefore(prefix, spanEl);
+          } else {
+            td.insertBefore(prefix, spanEl);
+          }
+        }
+      } else if (isBalanceAfter) {
+        spanEl.textContent = ledgerBalanceAfterCellDisplay(stored);
+      }
     }
 
     function pairValueIsMoneyLike(val) {
@@ -4294,9 +4804,11 @@
             t = tdEd;
           }
         }
-        const mw = t.closest('td[data-money-wrap], .kv-money-wrap');
+        const mw = t.closest('td[data-money-wrap], .kv-money-wrap, td.mt-balance-after-td');
         if (mw && !(t.getAttribute && t.getAttribute('data-editable') === '1')) {
-          const inner = mw.querySelector('.mt-money-value[data-editable="1"]');
+          const inner =
+            mw.querySelector('.mt-balance-after-value[data-editable="1"]') ||
+            mw.querySelector('.mt-money-value[data-editable="1"]');
           if (inner) t = inner;
         }
       }
@@ -4323,25 +4835,43 @@
       if (!t || !t.getAttribute || t.getAttribute('data-editable') !== '1') return;
       if (t.getAttribute('contenteditable') !== 'true') return;
       const textRaw = cellText(t);
-      const isNaCell = t.getAttribute('data-na') === '1' || isLedgerNaValue(textRaw);
-      const isMoneyCell =
-        !isNaCell && t.classList && t.classList.contains('mt-money-value');
+      const hadNaMarker =
+        t.getAttribute('data-na') === '1' ||
+        (t.classList && t.classList.contains('mt-na-value'));
+      const isMoneyCell = t.classList && t.classList.contains('mt-money-value');
+      const isBalanceAfterCell =
+        t.classList && t.classList.contains('mt-balance-after-value');
       const step = parseInt(t.getAttribute('data-step'), 10);
       const section = t.getAttribute('data-section');
       let stored = textRaw;
       if (section === 'ledger') {
-        stored = ledgerCellStoredValue(textRaw);
+        if (isBalanceAfterLedgerCell(t)) {
+          stored = ledgerBalanceAfterCellDisplay(textRaw);
+        } else {
+          stored = ledgerCellStoredValue(textRaw);
+        }
       } else if (isMoneyCell) {
         stored = moneyValueFromNumericPart(textRaw);
       }
       if (isLedgerNaValue(stored)) {
         t.textContent = 'N/A';
         t.setAttribute('data-na', '1');
-      } else if (isMoneyCell) {
+        if (isMoneyCell) t.classList.add('mt-na-value');
+      } else if (hadNaMarker && isMoneyCell) {
+        upgradeLedgerCellDomFromNa(t, stored);
+      } else if (isMoneyCell && !isBalanceAfterCell) {
         t.removeAttribute('data-na');
+        t.classList.remove('mt-na-value');
         t.textContent = stripLeadingDollar(stored);
+      } else if (isBalanceAfterCell) {
+        t.removeAttribute('data-na');
+        t.classList.remove('mt-na-value');
+        const td = t.closest('td');
+        if (td) td.classList.remove('mt-na-td');
+        t.textContent = stored;
       } else {
         t.removeAttribute('data-na');
+        t.classList.remove('mt-na-value');
         t.textContent = stored;
       }
       t.removeAttribute('contenteditable');
@@ -4356,7 +4886,14 @@
         if (mappedRow >= 0) row = mappedRow;
         const fp = propagateLedgerCellToAllSteps(step, row, col, stored);
         const ordinal = getLedgerRowMatchOrdinal(step, row);
-        refreshValidationForFingerprint(fp, ordinal);
+        if (hadNaMarker && isBalanceAfterLedgerCol(col)) {
+          stepOrder.forEach(function (sn) {
+            refreshStepLedgerInDom(sn);
+            refreshStepValidationInDom(sn);
+          });
+        } else {
+          refreshValidationForFingerprint(fp, ordinal);
+        }
       } else if (section === 'pastdue-modal' && pastDueModalCtx) {
         const ki = parseInt(t.getAttribute('data-kv'), 10);
         propagatePastDuePairEdit(
@@ -4451,10 +4988,37 @@
                   ? stripLeadingDollar(p.val)
                   : stripLeadingDollar(moneyValueFromNumericPart(p.val))
               );
+              const pdfTotalField = section === 'pdf' && isPdfTotalAmountKey(p.key);
+              const amountField = section === 'amount' && isAmountBreakdownValidatedField(p.key);
+              let fieldStatus = '';
+              if (pdfTotalField) {
+                const pdfMeta = getPdfTotalAmountVsAmountBreakdownMeta(stepNum);
+                if (pdfMeta) {
+                  fieldStatus =
+                    '<span class="mt-past-due-cell-status" data-pdf-total-status="1" data-step="' +
+                    stepNum +
+                    '">' +
+                    renderTestStatusIcon(pdfMeta.ok, pdfMeta.titleOk, pdfMeta.titleFail) +
+                    '</span>';
+                }
+              } else if (amountField) {
+                const amountMeta = getAmountBreakdownFieldValidationMeta(stepNum, p.key);
+                if (amountMeta) {
+                  fieldStatus =
+                    '<span class="mt-past-due-cell-status" data-amount-field-status="1" data-step="' +
+                    stepNum +
+                    '" data-amount-field="' +
+                    amountBreakdownFieldSlug(p.key) +
+                    '">' +
+                    renderTestStatusIcon(amountMeta.ok, amountMeta.titleOk, amountMeta.titleFail) +
+                    '</span>';
+                }
+              }
               return (
                 '<div>' +
                 escapeHtml(p.key) +
                 '</div><div class="kv-money-wrap" data-money-wrap="1">' +
+                fieldStatus +
                 '<span class="mt-currency-prefix">$</span>' +
                 '<span class="kv-val mt-money-value" data-editable="1" data-section="' +
                 section +
@@ -4556,11 +5120,101 @@
       r[col] = text;
     }
 
+    function refreshStepLedgerInDom(stepNum) {
+      const root = getActiveRenderRoot();
+      const d = editableByStep.get(stepNum);
+      if (!root || !d || !d.ledger) return;
+      const lh = d.ledger;
+      const displayRows = ensureLedgerStatusSeparatorRows(lh.headers, lh.rows);
+      const pageScrollY = window.scrollY;
+      const pageScrollX = window.scrollX;
+      root
+        .querySelectorAll('table.mt-ledger-table[data-role="actual"][data-step="' + stepNum + '"]')
+        .forEach(function (table) {
+          const scroll = table.closest('.mt-ledger-table-scroll');
+          const scrollTop = scroll ? scroll.scrollTop : 0;
+          const scrollLeft = scroll ? scroll.scrollLeft : 0;
+          const wrap = document.createElement('div');
+          wrap.innerHTML = renderLedgerTable(lh.headers, displayRows, stepNum, 'actual');
+          const newTable = wrap.querySelector('table.mt-ledger-table');
+          if (table && newTable) {
+            table.replaceWith(newTable);
+          } else if (scroll && wrap.firstElementChild) {
+            scroll.innerHTML = wrap.firstElementChild.innerHTML;
+          }
+          const scrollEl = newTable
+            ? newTable.closest('.mt-ledger-table-scroll')
+            : scroll;
+          if (scrollEl) {
+            scrollEl.scrollTop = scrollTop;
+            scrollEl.scrollLeft = scrollLeft;
+          }
+        });
+      requestAnimationFrame(function () {
+        window.scrollTo(pageScrollX, pageScrollY);
+      });
+    }
+
+    function deletePastDueEntryByFingerprint(stepNum, fingerprint, ordinal) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !Array.isArray(d.pastDue) || !fingerprint) return;
+      const ord = ordinal == null || isNaN(ordinal) ? 0 : ordinal;
+      let seen = 0;
+      for (let i = 0; i < d.pastDue.length; i++) {
+        if (pastDueLabelToFingerprint(d.pastDue[i].label) !== fingerprint) continue;
+        if (seen === ord) {
+          d.pastDue.splice(i, 1);
+          return;
+        }
+        seen++;
+      }
+    }
+
+    function deleteLedgerRowLocal(stepNum, storedRowIndex) {
+      const d = editableByStep.get(stepNum);
+      if (!d || !d.ledger || !Array.isArray(d.ledger.rows)) return false;
+      if (storedRowIndex < 0 || storedRowIndex >= d.ledger.rows.length) return false;
+      if (isLedgerSeparatorRow(d.ledger.rows[storedRowIndex])) return false;
+      d.ledger.rows.splice(storedRowIndex, 1);
+      if (Array.isArray(d.pastDue)) {
+        d.pastDue.forEach(function (e) {
+          if (typeof e.rowIndex === 'number' && e.rowIndex > storedRowIndex) {
+            e.rowIndex--;
+          }
+        });
+      }
+      return true;
+    }
+
+    function deleteLedgerRow(stepNum, storedRowIndex) {
+      const fp = getLedgerRowFingerprint(stepNum, storedRowIndex);
+      const ordinal = getLedgerRowMatchOrdinal(stepNum, storedRowIndex);
+      if (!fp) {
+        deleteLedgerRowLocal(stepNum, storedRowIndex);
+        refreshStepLedgerInDom(stepNum);
+        refreshStepValidationInDom(stepNum);
+        return;
+      }
+      stepOrder.forEach(function (sn) {
+        const ri = findLedgerRowIndexForSync(sn, fp, ordinal);
+        if (ri < 0) return;
+        deletePastDueEntryByFingerprint(sn, fp, ordinal);
+        deleteLedgerRowLocal(sn, ri);
+        relinkPastDueEntriesToLedger(sn);
+      });
+      stepOrder.forEach(function (sn) {
+        refreshStepLedgerInDom(sn);
+        refreshStepValidationInDom(sn);
+      });
+    }
+
     function syncLedgerCellsInDom(stepNum, row, col, fullText, opts) {
       opts = opts || {};
       const root = getActiveRenderRoot();
       if (!root || stepNum == null || isNaN(stepNum)) return;
-      const storedValue = ledgerCellStoredValue(fullText);
+      const storedValue = isBalanceAfterLedgerCol(col)
+        ? ledgerBalanceAfterCellDisplay(fullText)
+        : ledgerCellStoredValue(fullText);
       if (isLedgerNaValue(storedValue)) {
         const selNa =
           'span.mt-na-value[data-editable="1"][data-section="ledger"][data-step="' +
@@ -4591,18 +5245,30 @@
           });
         return;
       }
-      const displayNum = stripLeadingDollar(
-        moneyValueFromNumericPart(isEditableMoneyValue(fullText) ? stripLeadingDollar(fullText) : fullText)
-      );
+      const displayNum = isBalanceAfterLedgerCol(col)
+        ? storedValue
+        : stripLeadingDollar(
+            moneyValueFromNumericPart(
+              isEditableMoneyValue(fullText) ? stripLeadingDollar(fullText) : fullText
+            )
+          );
       const storedDisplay = storedValue;
       const selSpan =
-        'span.mt-money-value[data-editable="1"][data-section="ledger"][data-step="' +
-        stepNum +
-        '"][data-row="' +
-        row +
-        '"][data-col="' +
-        col +
-        '"]';
+        isBalanceAfterLedgerCol(col)
+          ? 'span.mt-balance-after-value[data-editable="1"][data-section="ledger"][data-step="' +
+            stepNum +
+            '"][data-row="' +
+            row +
+            '"][data-col="' +
+            col +
+            '"]'
+          : 'span.mt-money-value[data-editable="1"][data-section="ledger"][data-step="' +
+            stepNum +
+            '"][data-row="' +
+            row +
+            '"][data-col="' +
+            col +
+            '"]';
       const spans = root.querySelectorAll(selSpan);
       if (spans.length) {
         spans.forEach(function (el) {
@@ -5111,6 +5777,18 @@
       } else {
         syncPastDueModalKvInDom(pairIndex, stored);
       }
+      stepOrder.forEach(function (sn) {
+        const ri = findLedgerRowIndexForSync(sn, fp, ordinal);
+        if (ri < 0) return;
+        if (!syncLedgerPastDueColumnFromEntry(sn, ri)) return;
+        const sd = editableByStep.get(sn);
+        const pastDueCol = sd && sd.ledger ? findPastDueColIndex(sd.ledger.headers) : -1;
+        if (pastDueCol >= 0) {
+          syncLedgerCellsInDom(sn, ri, pastDueCol, sd.ledger.rows[ri][pastDueCol], {
+            pastDueCol: true
+          });
+        }
+      });
       refreshValidationForFingerprint(fp, ordinal);
     }
 
@@ -5315,6 +5993,30 @@
       attachEditableListeners(root);
 
       root.addEventListener('click', function (e) {
+        const delBtn = e.target.closest('[data-ledger-row-delete]');
+        if (delBtn) {
+          e.preventDefault();
+          const step = parseInt(delBtn.getAttribute('data-step'), 10);
+          const row = parseInt(delBtn.getAttribute('data-row'), 10);
+          if (!isNaN(step) && !isNaN(row)) {
+            const scrollEl = delBtn.closest('.mt-ledger-table-scroll');
+            const scrollTop = scrollEl ? scrollEl.scrollTop : 0;
+            const scrollLeft = scrollEl ? scrollEl.scrollLeft : 0;
+            const pageScrollY = window.scrollY;
+            const pageScrollX = window.scrollX;
+            if (confirm('Delete this ledger row?')) {
+              deleteLedgerRow(step, row);
+              if (scrollEl) {
+                scrollEl.scrollTop = scrollTop;
+                scrollEl.scrollLeft = scrollLeft;
+              }
+              requestAnimationFrame(function () {
+                window.scrollTo(pageScrollX, pageScrollY);
+              });
+            }
+          }
+          return;
+        }
         const btn = e.target.closest('[data-past-due-open]');
         if (!btn) return;
         e.preventDefault();
@@ -5343,6 +6045,51 @@
       if (wrap) {
         wrap.classList.remove('hidden');
         setTestViewWrapMode(testKey, !!isExpected, wrap);
+      }
+      refreshViewDocumentValidationIcon(testKey);
+    }
+
+    function countValidationFailuresInRoot(rootEl) {
+      if (!rootEl) return 0;
+      return rootEl.querySelectorAll('.mt-test-status.mt-test-fail').length;
+    }
+
+    /** ✓/✗ beside "Viewing: …" when results/expected doc is open — passes when no red validation icons in the table. */
+    function refreshViewDocumentValidationIcon(testKey) {
+      if (!testKey) return;
+      const panel = getTestPanelSection(testKey);
+      const ids = getTestPanelIds(testKey);
+      const labelEl =
+        (panel && panel.querySelector('.test1-view-label')) ||
+        document.getElementById(ids.viewLabel);
+      const wrap =
+        (panel && panel.querySelector('.test1-view-wrap')) ||
+        document.getElementById(ids.viewWrap);
+      if (!labelEl) return;
+      let iconWrap = labelEl.querySelector('[data-view-doc-validation="1"]');
+      if (!iconWrap) {
+        iconWrap = document.createElement('span');
+        iconWrap.setAttribute('data-view-doc-validation', '1');
+        labelEl.insertBefore(iconWrap, labelEl.firstChild);
+      }
+      if (!wrap || wrap.classList.contains('hidden')) {
+        iconWrap.innerHTML = '';
+        return;
+      }
+      const root = getTestRootEl(testKey);
+      const failCount = countValidationFailuresInRoot(root);
+      if (failCount === 0) {
+        iconWrap.innerHTML = renderTestStatusIcon(
+          true,
+          'All validation checks pass in this document',
+          ''
+        );
+      } else {
+        iconWrap.innerHTML = renderTestStatusIcon(
+          false,
+          '',
+          failCount + ' validation check(s) failed in this document'
+        );
       }
     }
 
@@ -5678,17 +6425,33 @@
       exportDownloadAndCopyJson(payload, fname);
     }
 
+    function sanitizeStepDataCaptures(stepDef) {
+      const billThem = !!(stepDef && stepDef.billThem);
+      let caps =
+        stepDef && Array.isArray(stepDef.dataCaptures)
+          ? stepDef.dataCaptures.slice()
+          : DEFAULT_DATA_CAPTURES.slice();
+      if (!billThem) {
+        caps = caps.filter(function (c) {
+          return c !== PDF_DATA_CAPTURE;
+        });
+      } else if (caps.indexOf(PDF_DATA_CAPTURE) === -1) {
+        caps.push(PDF_DATA_CAPTURE);
+      }
+      return caps.length ? caps : DEFAULT_DATA_CAPTURES.slice();
+    }
+
     function normalizeImportedStepDef(sd) {
       if (!sd || typeof sd !== 'object') return null;
-      const caps = Array.isArray(sd.dataCaptures) ? sd.dataCaptures.slice() : DEFAULT_DATA_CAPTURES.slice();
+      const billThem = !!sd.billThem;
       return {
         freshStart: !!sd.freshStart,
         advanceDateEnabled: !!sd.advanceDateEnabled,
         advanceDate: sd.advanceDate ? String(sd.advanceDate) : '',
-        billThem: !!sd.billThem,
+        billThem: billThem,
         payEnabled: !!sd.payEnabled,
         payAmount: sd.payAmount != null ? String(sd.payAmount) : '',
-        dataCaptures: caps.length ? caps : DEFAULT_DATA_CAPTURES.slice()
+        dataCaptures: sanitizeStepDataCaptures(sd)
       };
     }
 
@@ -6973,7 +7736,9 @@
           customerFirstName: t.customerFirstName || '',
           customerLastName: t.customerLastName || '',
           customerCreatedDate: t.customerCreatedDate || '',
-          stepDefs: Array.isArray(t.stepDefs) ? t.stepDefs : [],
+          stepDefs: (Array.isArray(t.stepDefs) ? t.stepDefs : [])
+            .map(normalizeImportedStepDef)
+            .filter(Boolean),
           foundationText: foundationText,
           resultsText: t.resultsText || '',
           expectedText: t.expectedText || ''
@@ -7058,11 +7823,7 @@
       if (stepDef.payEnabled || (stepDef.payAmount != null && String(stepDef.payAmount).trim() !== '')) {
         lines.push('Have them pay ' + formatPayAmountForDescription(stepDef.payAmount));
       }
-      const caps =
-        stepDef && Array.isArray(stepDef.dataCaptures) && stepDef.dataCaptures.length
-          ? stepDef.dataCaptures
-          : DEFAULT_DATA_CAPTURES.slice();
-      caps.forEach(function (cap) {
+      sanitizeStepDataCaptures(stepDef || {}).forEach(function (cap) {
         if (cap && lines.indexOf(cap) === -1) lines.push(cap);
       });
       return lines.join('\n');
@@ -7082,11 +7843,7 @@
 
     function buildBlankStepBlock(stepNum, stepDef) {
       const desc = buildStepDescriptionLines(stepDef);
-      const includePdf =
-        !!stepDef.billThem ||
-        (stepDef.dataCaptures || []).some(function (c) {
-          return c === PDF_DATA_CAPTURE;
-        });
+      const includePdf = !!stepDef.billThem;
       let block =
         'Step ' +
         stepNum +
@@ -7318,6 +8075,11 @@
       });
       const bill = billThem && billThem.checked;
       if (bill && captures.indexOf(PDF_DATA_CAPTURE) === -1) captures.push(PDF_DATA_CAPTURE);
+      if (!bill) {
+        for (let ci = captures.length - 1; ci >= 0; ci--) {
+          if (captures[ci] === PDF_DATA_CAPTURE) captures.splice(ci, 1);
+        }
+      }
       const payOn = !!(payEnabled && payEnabled.checked);
       const advanceOn = !!(advanceDateEnabled && advanceDateEnabled.checked);
       return {
@@ -7348,7 +8110,11 @@
       if (!pdfCap) return;
       const show = billThem && billThem.checked;
       pdfCap.closest('label.chk').style.display = show ? '' : 'none';
-      if (show) pdfCap.checked = true;
+      if (show) {
+        pdfCap.checked = true;
+      } else {
+        pdfCap.checked = false;
+      }
     }
 
     let draggedCreateTestStepCard = null;

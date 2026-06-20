@@ -1,0 +1,2011 @@
+Step 1:
+
+Description: 
+Do a fresh start
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log View Past Due Details
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+$0
+$178.38
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$0
+$0
+$0
+$0
+$0
+$0
+
+View Past Due Details Shows:
+
+[ROW 0]
+[ID PD-S1-0001]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 1]
+[ID PD-S1-0002]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+
+Step 2:
+
+Description: 
+Advance to future date: 2/1/26
+Bill them
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log View Past Due Details
+Log what PDF Bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+$0
+$178.38
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$0
+$0
+$0
+0
+$0
+N/A
+$178.38
+N/A
+$178.38
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+N/A
+$178.38
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.02
+$0
+$0
+$0
+$178.38
+
+View Past Due Details Shows:
+
+[ROW 0]
+[ID PD-S2-0001]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 1]
+[ID PD-S2-0002]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 2]
+[ID PD-S2-0003]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 3]
+[ID PD-S2-0004]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.38
+$0
+$0
+$0
+$178.38
+
+
+Step 3:
+
+Description: 
+Advance to future date: 2/2/26
+Have them pay $200
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log View Past Due Details
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+$0
+$178.38
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$0
+$0
+$0
+0
+$0
+N/A
+$178.38
+N/A
+$178.38
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+N/A
+$178.38
+02/02/2026 12:00 AM
+Payment
+Check
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+$200.00
+$0
+02/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.02
+$0
+$0
+$0
+$178.38
+
+View Past Due Details Shows:
+
+[ROW 0]
+[ID PD-S3-0001]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 1]
+[ID PD-S3-0002]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 2]
+[ID PD-S3-0003]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 3]
+[ID PD-S3-0004]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 4]
+[ID PD-S3-0005]
+02/02/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 5]
+[ID PD-S3-0006]
+02/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+
+Step 4:
+
+Description: 
+Advance to future date: 2/3/26
+Have them pay $200
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log View Past Due Details
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+$0
+$178.38
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$0
+$0
+$0
+0
+$0
+N/A
+$178.38
+N/A
+$178.38
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+N/A
+$178.38
+02/02/2026 12:00 AM
+Payment
+Check
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+$200.00
+$0
+02/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/03/2026 12:00 AM
+Payment
+Check
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+$200.00
+-200 (credit)
+02/03/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+200
+N/A
+N/A
+-200 (credit)
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$0
+$0
+$0
+$0
+$200
+$-200
+
+View Past Due Details Shows:
+
+[ROW 0]
+[ID PD-S4-0001]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 1]
+[ID PD-S4-0002]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 2]
+[ID PD-S4-0003]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 3]
+[ID PD-S4-0004]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 4]
+[ID PD-S4-0005]
+02/02/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 5]
+[ID PD-S4-0006]
+02/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 6]
+[ID PD-S4-0007]
+02/03/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 7]
+[ID PD-S4-0008]
+02/03/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+
+Step 5:
+
+Description: 
+Advance to future date: 3/1/26
+Bill them
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log View Past Due Details
+Log what PDF Bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+$0
+$178.38
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$0
+$0
+$0
+0
+$0
+N/A
+$178.38
+N/A
+$178.38
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+N/A
+$178.38
+02/02/2026 12:00 AM
+Payment
+Check
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+$200.00
+$0
+02/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/03/2026 12:00 AM
+Payment
+Check
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+$200.00
+-200 (credit)
+02/03/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+200
+N/A
+N/A
+-200 (credit)
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0
+$0
+0
+$0
+N/A
+$178.38
+N/A
+$178.38
+03/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+N/A
+$178.38
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.02
+$0
+$0
+$0
+$178.38
+
+View Past Due Details Shows:
+
+[ROW 0]
+[ID PD-S5-0001]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 1]
+[ID PD-S5-0002]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 2]
+[ID PD-S5-0003]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 3]
+[ID PD-S5-0004]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 4]
+[ID PD-S5-0005]
+02/02/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 5]
+[ID PD-S5-0006]
+02/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 6]
+[ID PD-S5-0007]
+02/03/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 7]
+[ID PD-S5-0008]
+02/03/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 8]
+[ID PD-S5-0009]
+03/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 9]
+[ID PD-S5-0010]
+03/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.38
+$0
+$0
+$178.38
+$0
+
+
+Step 6:
+
+Description: 
+Advance to future date: 4/1/26
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log View Past Due Details
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+$0
+$178.38
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$0
+$0
+$0
+0
+$0
+N/A
+$178.38
+N/A
+$178.38
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+N/A
+$178.38
+02/02/2026 12:00 AM
+Payment
+Check
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+$200.00
+$0
+02/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/03/2026 12:00 AM
+Payment
+Check
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+$200.00
+-200 (credit)
+02/03/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+200
+N/A
+N/A
+-200 (credit)
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0
+$0
+0
+$0
+N/A
+$178.38
+N/A
+$178.38
+03/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+N/A
+$178.38
+03/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+5
+N/A
+$183.38
+03/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$5.00
+$0
+N/A
+N/A
+$183.38
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$0
+$0
+$5.00
+$0
+$5.00
+
+View Past Due Details Shows:
+
+[ROW 0]
+[ID PD-S6-0001]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 1]
+[ID PD-S6-0002]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 2]
+[ID PD-S6-0003]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 3]
+[ID PD-S6-0004]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 4]
+[ID PD-S6-0005]
+02/02/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 5]
+[ID PD-S6-0006]
+02/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 6]
+[ID PD-S6-0007]
+02/03/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 7]
+[ID PD-S6-0008]
+02/03/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 8]
+[ID PD-S6-0009]
+03/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 9]
+[ID PD-S6-0010]
+03/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 10]
+[ID PD-S6-0011]
+03/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 11]
+[ID PD-S6-0012]
+03/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+
+Step 7:
+
+Description: 
+Bill them
+Log what the payments/charges table shows
+Log what the amount breakdown shows
+Log View Past Due Details
+Log what PDF Bill shows
+
+Payments/Charges Table Shows:
+
+Date & Time
+Type
+Subtype
+Sewer
+Tax Codes
+PUC Surcharge
+Past Due
+Late Fee
+Credit
+Amount Charged
+Amount Paid
+Balance After
+01/01/2026 12:00 AM
+Payment
+Fresh start
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+$0
+$178.38
+$0
+01/01/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/01/2026 12:00 AM
+Charge
+Billed Customer
+$0
+$0
+$0
+0
+$0
+N/A
+$178.38
+N/A
+$178.38
+02/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+N/A
+$178.38
+02/02/2026 12:00 AM
+Payment
+Check
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+$200.00
+$0
+02/02/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+N/A
+$0
+02/03/2026 12:00 AM
+Payment
+Check
+$0
+$0
+$0
+0
+$0
+$0
+N/A
+$200.00
+-200 (credit)
+02/03/2026 12:00 AM
+Status Update
+Current Status
+$0
+$0
+$0
+0
+$0
+200
+N/A
+N/A
+-200 (credit)
+03/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$0
+$0
+0
+$0
+N/A
+$178.38
+N/A
+$178.38
+03/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+N/A
+N/A
+$178.38
+03/22/2026 12:00 AM
+Charge
+Late Fee
+$168.36
+$2.44
+$7.58
+0
+$0
+$0
+5
+N/A
+$183.38
+03/22/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+0
+$5.00
+$0
+N/A
+N/A
+$183.38
+04/01/2026 12:00 AM
+Charge
+Billed Customer
+$168.36
+$2.44
+$7.58
+178.38
+$5.00
+N/A
+$178.38
+N/A
+$361.76
+04/01/2026 12:00 AM
+Status Update
+Current Status
+$168.36
+$2.44
+$7.58
+178.38
+$5.00
+$0
+N/A
+N/A
+$361.76
+
+Amount Breakdown Shows:
+
+Sewer Charge
+Tax Charge
+Past Due
+Late Fee
+Credit
+Total amount due
+$168.36
+$10.02
+$178.38
+$5.00
+$0
+$361.76
+
+View Past Due Details Shows:
+
+[ROW 0]
+[ID PD-S7-0001]
+01/01/2026 12:00 AM · Payment · Fresh start
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 1]
+[ID PD-S7-0002]
+01/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 2]
+[ID PD-S7-0003]
+02/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 3]
+[ID PD-S7-0004]
+02/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 4]
+[ID PD-S7-0005]
+02/02/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 5]
+[ID PD-S7-0006]
+02/02/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 6]
+[ID PD-S7-0007]
+02/03/2026 12:00 AM · Payment · Check
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 7]
+[ID PD-S7-0008]
+02/03/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 8]
+[ID PD-S7-0009]
+03/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 9]
+[ID PD-S7-0010]
+03/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 10]
+[ID PD-S7-0011]
+03/22/2026 12:00 AM · Charge · Late Fee
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 11]
+[ID PD-S7-0012]
+03/22/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$0
+$0
+$0
+$0
+0
+
+[ROW 12]
+[ID PD-S7-0013]
+04/01/2026 12:00 AM · Charge · Billed Customer
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$0
+$0
+$2.44
+$7.58
+$168.36
+$0
+$178.38
+
+[ROW 13]
+[ID PD-S7-0014]
+04/01/2026 12:00 AM · Status Update · Current Status
+Past due amount
+Late Fees
+Tax Codes
+PUC Surcharge
+Sewer Charge
+Credit
+Total (Past Due line)
+$178.38
+5
+$2.44
+$7.58
+$168.36
+$0
+$178.38
+
+Bill PDF Preview Shows:
+
+Current_due
+Previous_amount
+Late_fee
+Credit
+Total_amount
+$178.38
+$178.38
+$5.00
+$0
+$361.76

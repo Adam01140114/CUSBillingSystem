@@ -35,25 +35,20 @@ function writeJob(jobFile, patch) {
   );
 }
 
-function progressFromMasterTestEntry(p, totalSteps) {
-  if (!p) return { progress: 0, message: 'Starting…' };
+function progressFromMasterTestEntry(p) {
+  if (!p) return null;
+  if (String(p.step) !== 'progress') return null;
   const d = p.detail;
-  if (d && typeof d.percent === 'number') {
-    return {
-      progress: Math.min(100, Math.max(0, d.percent)),
-      message: d.message || p.step || 'Running…'
-    };
-  }
-  if (p.step && String(p.step).indexOf('stepDef:') === 0) {
-    const n = parseInt(String(p.step).replace('stepDef:', ''), 10);
-    if (!isNaN(n) && totalSteps > 0) {
-      return {
-        progress: Math.min(99, Math.round(((n - 1) / totalSteps) * 100)),
-        message: 'Running step ' + n + ' of ' + totalSteps + '…'
-      };
-    }
-  }
-  return { progress: 5, message: p.step ? String(p.step) : 'Running…' };
+  if (!d || typeof d.percent !== 'number') return null;
+  return {
+    progress: Math.min(99, Math.max(0, d.percent)),
+    message: d.message || 'Running…'
+  };
+}
+
+function prepProgressMessage(completed, totalSubsteps, label) {
+  const percent = totalSubsteps > 0 ? Math.min(99, Math.round((completed / totalSubsteps) * 100)) : 0;
+  return { progress: percent, message: label };
 }
 
 async function loadPlaywright() {
@@ -129,13 +124,36 @@ async function main() {
   page.setDefaultTimeout(300000);
   let progressTimer = null;
   let exitCode = 0;
+  let lastProgress = { progress: 0, message: 'Launching browser…' };
+  let totalSubsteps = steps.length * 5 + 2;
+
+  function writeProgress(completed, label) {
+    const next = prepProgressMessage(completed, totalSubsteps, label);
+    lastProgress = next;
+    writeJob(jobFile, { status: 'running', progress: next.progress, message: next.message });
+  }
 
   try {
-    writeJob(jobFile, { status: 'running', progress: 5, message: 'Loading billing app…' });
+    writeJob(jobFile, { status: 'running', progress: 0, message: 'Launching browser…' });
     await page.goto(`${baseUrl}/index.html?masterTestLive=${Date.now()}`, {
       waitUntil: 'load',
       timeout: 120000
     });
+
+    try {
+      const planCount = await page.evaluate((stepDefs) => {
+        return typeof window.countMasterTestSubsteps === 'function'
+          ? window.countMasterTestSubsteps(stepDefs, { includePrep: true })
+          : null;
+      }, steps);
+      if (planCount && planCount > 0) {
+        totalSubsteps = planCount;
+      }
+    } catch (ePlan) {
+      /* use fallback total */
+    }
+
+    writeProgress(0, 'Loading billing app…');
 
     await page.waitForFunction(
       () => {
@@ -153,7 +171,7 @@ async function main() {
       .catch(() => false);
 
     if (authModalShown) {
-      writeJob(jobFile, { status: 'running', progress: 8, message: 'Signing in…' });
+      writeProgress(1, 'Signing in…');
       await page.locator('#firebaseEmail').fill(email);
       await page.locator('#firebasePassword').fill(password);
       await page.locator('#firebaseAuthSubmit').click();
@@ -167,6 +185,8 @@ async function main() {
         },
         { timeout: 180000 }
       );
+    } else {
+      writeProgress(1, 'Signing in…');
     }
 
     await page.waitForFunction(
@@ -174,7 +194,7 @@ async function main() {
       { timeout: 180000 }
     );
 
-    writeJob(jobFile, { status: 'running', progress: 12, message: 'Preparing customer…' });
+    writeProgress(2, 'Preparing customer…');
     const prep = await page.evaluate(async (cfgJson) => {
       window.clearMasterTestOfflineMode();
       if (typeof window.__developTestPrepareLiveMasterTest !== 'function') {
@@ -187,29 +207,31 @@ async function main() {
       throw new Error('Live prep failed: ' + (prep && prep.error ? prep.error : 'unknown'));
     }
 
-    writeJob(jobFile, { status: 'running', progress: 15, message: 'Running test steps…' });
-
     progressTimer = setInterval(async () => {
       try {
         const p = await page.evaluate(() => window.__MASTER_TEST_PROGRESS || null);
-        const prog = progressFromMasterTestEntry(p, steps.length);
-        writeJob(jobFile, {
-          status: 'running',
-          progress: Math.max(15, prog.progress),
-          message: prog.message
-        });
+        const prog = progressFromMasterTestEntry(p);
+        if (prog) {
+          lastProgress = prog;
+          writeJob(jobFile, {
+            status: 'running',
+            progress: prog.progress,
+            message: prog.message
+          });
+        }
       } catch (e) {
         /* page busy */
       }
-    }, 1500);
+    }, 800);
 
     const result = await page.evaluate(
-      async ({ cfgJson, timeoutMs }) => {
+      async ({ cfgJson, timeoutMs, prepSubstepsCompleted }) => {
         window.clearMasterTestOfflineMode();
         if (typeof window.runMasterTestFromStepDefs !== 'function') {
           return { ok: false, error: 'runMasterTestFromStepDefs missing — reload billing app' };
         }
         const cfg = JSON.parse(cfgJson);
+        cfg.prepSubstepsCompleted = prepSubstepsCompleted;
         return await Promise.race([
           window.runMasterTestFromStepDefs(cfg),
           new Promise(function (_, reject) {
@@ -219,7 +241,11 @@ async function main() {
           })
         ]);
       },
-      { cfgJson: JSON.stringify(scenario), timeoutMs: masterTestTimeoutMs }
+      {
+        cfgJson: JSON.stringify(scenario),
+        timeoutMs: masterTestTimeoutMs,
+        prepSubstepsCompleted: 2
+      }
     );
 
     clearInterval(progressTimer);
