@@ -1683,7 +1683,8 @@
 
     /** Plain ledger/PDF-style money only (no suffix text like "(credit)"). */
     function isEditableMoneyValue(s) {
-      return /^\$[-\d.,]+$/.test(String(s || '').trim());
+      const t = String(s || '').trim();
+      return /^\$[-\d.,]+$/.test(t) || /^-\$[\d.,]+$/.test(t);
     }
 
     /** Ledger import often omits "$" (e.g. 178.49 or 0). */
@@ -2499,7 +2500,12 @@
       if (/^n\/?a$/i.test(String(val).trim())) return 0;
       const str = String(val).trim();
       const isCredit = isLedgerBalanceAfterCreditValue(str);
-      const raw = isEditableMoneyValue(str) ? stripLeadingDollar(str) : str;
+      let raw = str;
+      if (/^-\$/.test(str)) {
+        raw = '-' + str.slice(2).replace(/,/g, '');
+      } else if (isEditableMoneyValue(str)) {
+        raw = stripLeadingDollar(str);
+      }
       let n = parseFloat(String(raw).replace(/,/g, '').replace(/[^0-9.-]/g, ''));
       if (isNaN(n)) return 0;
       if (isCredit && n > 0) n = -Math.abs(n);
@@ -3680,6 +3686,58 @@
       return '$' + x.toFixed(2);
     }
 
+    /** Stored KV money: $X.XX or -$X.XX (matches billing export / test files). */
+    function formatSignedUsd(n) {
+      const x = Math.round(parseFloat(n) * 100) / 100;
+      if (isNaN(x) || Math.abs(x) < 0.005) return '$0.00';
+      if (x < 0) return '-$' + Math.abs(x).toFixed(2);
+      return '$' + x.toFixed(2);
+    }
+
+    function kvMoneyDisplayFromStored(stored) {
+      const n = parseMoneyNumber(stored);
+      if (n < -0.005) {
+        return { prefix: '-$', numeric: Math.abs(n).toFixed(2) };
+      }
+      return { prefix: '$', numeric: Math.abs(n).toFixed(2) };
+    }
+
+    function kvMoneyStoredFromCellEdit(textRaw, wrapEl) {
+      let part = String(textRaw || '')
+        .trim()
+        .replace(/,/g, '');
+      let negative = false;
+      if (wrapEl) {
+        const prefixEl = wrapEl.querySelector('.mt-currency-prefix');
+        if (prefixEl && String(prefixEl.textContent || '').indexOf('-') >= 0) {
+          negative = true;
+        }
+      }
+      if (/^-\s*/.test(part)) {
+        negative = true;
+        part = part.replace(/^-\s*/, '');
+      }
+      part = part.replace(/[^\d.]/g, '');
+      if (part === '' || part === '.') part = '0';
+      const n = parseFloat(part);
+      if (isNaN(n)) return '$0.00';
+      return formatSignedUsd(negative ? -Math.abs(n) : Math.abs(n));
+    }
+
+    function normalizeKvMoneyStored(text) {
+      const t = String(text || '').trim();
+      if (!t) return '$0.00';
+      if (isEditableMoneyValue(t) || looksLikeMoneyValue(t)) {
+        return formatSignedUsd(parseMoneyNumber(t));
+      }
+      return t;
+    }
+
+    /** Expected-output edits only: auto-sum PDF / amount breakdown totals. */
+    function shouldAutoRecalcExpectedKvTotals() {
+      return !!activeEditorIsExpected;
+    }
+
     function renderCustomerChargeProfileBlock(title, ch, hint) {
       if (!ch) return '';
       let html =
@@ -4785,7 +4843,7 @@
     function pairValueIsMoneyLike(val) {
       const t = String(val == null ? '' : val).trim();
       if (!t) return false;
-      return isEditableMoneyValue(t) || /^-?\d/.test(t);
+      return isEditableMoneyValue(t) || /^-\$/.test(t) || /^-?\d/.test(t);
     }
 
     function resolveEditableTarget(target) {
@@ -4851,7 +4909,12 @@
           stored = ledgerCellStoredValue(textRaw);
         }
       } else if (isMoneyCell) {
-        stored = moneyValueFromNumericPart(textRaw);
+        const wrap = t.closest('[data-money-wrap="1"]');
+        if (section === 'amount' || section === 'pdf') {
+          stored = kvMoneyStoredFromCellEdit(textRaw, wrap);
+        } else {
+          stored = moneyValueFromNumericPart(textRaw);
+        }
       }
       if (isLedgerNaValue(stored)) {
         t.textContent = 'N/A';
@@ -4862,7 +4925,17 @@
       } else if (isMoneyCell && !isBalanceAfterCell) {
         t.removeAttribute('data-na');
         t.classList.remove('mt-na-value');
-        t.textContent = stripLeadingDollar(stored);
+        if (section === 'amount' || section === 'pdf') {
+          const disp = kvMoneyDisplayFromStored(stored);
+          const wrap = t.closest('[data-money-wrap="1"]');
+          if (wrap) {
+            const prefixEl = wrap.querySelector('.mt-currency-prefix');
+            if (prefixEl) prefixEl.textContent = disp.prefix;
+          }
+          t.textContent = disp.numeric;
+        } else {
+          t.textContent = stripLeadingDollar(stored);
+        }
       } else if (isBalanceAfterCell) {
         t.removeAttribute('data-na');
         t.classList.remove('mt-na-value');
@@ -4982,12 +5055,15 @@
         '<div class="kv">' +
         pairs
           .map(function (p, i) {
-            if (editable && (isEditableMoneyValue(p.val) || (moneySection && pairValueIsMoneyLike(p.val)))) {
-              const num = escapeHtml(
-                isEditableMoneyValue(p.val)
-                  ? stripLeadingDollar(p.val)
-                  : stripLeadingDollar(moneyValueFromNumericPart(p.val))
-              );
+            const moneyLike =
+              isEditableMoneyValue(p.val) ||
+              looksLikeMoneyValue(p.val) ||
+              (moneySection && pairValueIsMoneyLike(p.val));
+            const isComputedTotal =
+              shouldAutoRecalcExpectedKvTotals() && kvPairIsComputedTotalKey(section, p.key);
+            const cellEditable = editable && moneyLike && !isComputedTotal;
+            if (moneyLike) {
+              const disp = kvMoneyDisplayFromStored(p.val);
               const pdfTotalField = section === 'pdf' && isPdfTotalAmountKey(p.key);
               const amountField = section === 'amount' && isAmountBreakdownValidatedField(p.key);
               let fieldStatus = '';
@@ -5014,20 +5090,30 @@
                     '</span>';
                 }
               }
-              return (
-                '<div>' +
-                escapeHtml(p.key) +
-                '</div><div class="kv-money-wrap" data-money-wrap="1">' +
-                fieldStatus +
-                '<span class="mt-currency-prefix">$</span>' +
-                '<span class="kv-val mt-money-value" data-editable="1" data-section="' +
+              const valueAttrs =
+                ' class="kv-val mt-money-value"' +
+                (cellEditable
+                  ? '" data-editable="1"'
+                  : '" data-computed-total="1"') +
+                ' data-section="' +
                 section +
                 '" data-step="' +
                 stepNum +
                 '" data-kv="' +
                 i +
-                '">' +
-                num +
+                '"';
+              return (
+                '<div>' +
+                escapeHtml(p.key) +
+                '</div><div class="kv-money-wrap" data-money-wrap="1">' +
+                fieldStatus +
+                '<span class="mt-currency-prefix">' +
+                disp.prefix +
+                '</span>' +
+                '<span' +
+                valueAttrs +
+                '>' +
+                escapeHtml(disp.numeric) +
                 '</span></div>'
               );
             }
@@ -5817,16 +5903,21 @@
     function syncKvMoneyInStepDom(stepNum, section, pairIndex, fullText) {
       const card = document.querySelector('.step-card[data-step-num="' + stepNum + '"]');
       if (!card || pairIndex == null || isNaN(pairIndex)) return;
-      const display = looksLikeMoneyValue(fullText) ? stripLeadingDollar(fullText) : fullText;
-      card.querySelectorAll(
-        'span.mt-money-value[data-editable="1"][data-section="' +
-          section +
-          '"][data-kv="' +
-          pairIndex +
-          '"]'
-      ).forEach(function (el) {
+      const disp = kvMoneyDisplayFromStored(fullText);
+      const selector =
+        'span.mt-money-value[data-section="' +
+        section +
+        '"][data-kv="' +
+        pairIndex +
+        '"]';
+      card.querySelectorAll(selector).forEach(function (el) {
         if (el.getAttribute('contenteditable') === 'true') return;
-        el.textContent = display;
+        const wrap = el.closest('[data-money-wrap="1"]');
+        if (wrap) {
+          const prefixEl = wrap.querySelector('.mt-currency-prefix');
+          if (prefixEl) prefixEl.textContent = disp.prefix;
+        }
+        el.textContent = disp.numeric;
       });
     }
 
@@ -5840,7 +5931,7 @@
       const late = kvMoneyByKey(d.amount, [/^late\s*fee$/i]);
       const credit = kvMoneyByKey(d.amount, [/^credit$/i]);
       const totalNum = Math.round((sewer + tax + pastDue + late - credit) * 100) / 100;
-      const formatted = formatUsd(totalNum);
+      const formatted = formatSignedUsd(totalNum);
       const ti = findKvPairIndexByKey(d.amount, [/^total\s*amount\s*due$/i, /^total\s*due$/i]);
       if (ti < 0) return null;
       d.amount[ti].val = formatted;
@@ -5857,7 +5948,7 @@
       const late = kvMoneyByKey(d.pdf, [/^late[_\s-]*fee$/i]);
       const credit = kvMoneyByKey(d.pdf, [/^credit$/i]);
       const totalNum = Math.round((cur + prev + late - credit) * 100) / 100;
-      const formatted = formatUsd(totalNum);
+      const formatted = formatSignedUsd(totalNum);
       const ti = findKvPairIndexByKey(d.pdf, [/^total[_\s-]*amount$/i]);
       if (ti < 0) return null;
       d.pdf[ti].val = formatted;
@@ -5876,16 +5967,15 @@
       }
       const list = section === 'pdf' ? d.pdf : d.amount;
       if (!list || !list[index]) return;
-      const stored =
-        looksLikeMoneyValue(text) || isEditableMoneyValue(text)
-          ? moneyValueFromNumericPart(stripLeadingDollar(text))
-          : text;
+      const stored = normalizeKvMoneyStored(text);
       list[index].val = stored;
       const pairKey = list[index].key;
-      if (section === 'amount' && !kvPairIsComputedTotalKey('amount', pairKey)) {
-        recalcAmountBreakdownTotal(stepNum);
-      } else if (section === 'pdf' && !kvPairIsComputedTotalKey('pdf', pairKey)) {
-        recalcPdfPreviewTotal(stepNum);
+      if (shouldAutoRecalcExpectedKvTotals()) {
+        if (section === 'amount' && !kvPairIsComputedTotalKey('amount', pairKey)) {
+          recalcAmountBreakdownTotal(stepNum);
+        } else if (section === 'pdf' && !kvPairIsComputedTotalKey('pdf', pairKey)) {
+          recalcPdfPreviewTotal(stepNum);
+        }
       }
     }
 
@@ -6541,15 +6631,23 @@
       }
     }
 
-    function cloneCustomTest(slug) {
+    async function cloneCustomTest(slug) {
       const test = findCustomTest(slug);
       if (!test) return;
-      const cloneName = String(test.name || 'Test').trim() + ' (Clone)';
+      const newSlug = uniqueTestSlug('');
+      const baseName = String(test.name || 'Test')
+        .trim()
+        .replace(/\s*\(clone\)\s*$/i, '')
+        .trim();
       const copy = {
-        slug: uniqueTestSlug(cloneName),
-        name: cloneName,
+        slug: newSlug,
+        name: baseName + ' (Clone)',
+        customerMode: test.customerMode || 'existing',
         customerName: test.customerName,
         customerId: test.customerId,
+        customerFirstName: test.customerFirstName || '',
+        customerLastName: test.customerLastName || '',
+        customerCreatedDate: test.customerCreatedDate || '',
         stepDefs: JSON.parse(JSON.stringify(test.stepDefs || [])),
         foundationText: test.foundationText || '',
         resultsText: test.resultsText || '',
@@ -6558,11 +6656,28 @@
       if (!copy.foundationText && copy.stepDefs.length) {
         copy.foundationText = buildBlankMasterTestDocument(copy.stepDefs);
       }
-      customTests.push(copy);
-      saveCustomTestsToStorage();
-      renderCustomTestPanels();
-      const panel = document.getElementById(copy.slug + 'Panel');
-      if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      try {
+        const hit = await fetchMasterTestApi('/api/master-test/tests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.assign({ slug: newSlug }, masterTestPackageBody(copy)))
+        });
+        if (!hit.res.ok || !hit.data.ok) {
+          throw new Error((hit.data && hit.data.error) || 'Failed to create test folder on disk');
+        }
+        if (copy.resultsText && String(copy.resultsText).trim()) {
+          await persistTestResultsText(newSlug, copy.resultsText);
+        }
+        if (copy.expectedText && String(copy.expectedText).trim()) {
+          await persistTestExpectedText(newSlug, copy.expectedText);
+        }
+        customTests.push(copy);
+        renderCustomTestPanels();
+        const panel = document.getElementById(copy.slug + 'Panel');
+        if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (eClone) {
+        alert('Could not clone test to disk: ' + (eClone.message || String(eClone)));
+      }
     }
 
     function collapseResultsView(testKey) {
@@ -7598,6 +7713,13 @@
 
     async function persistTestPackage(test) {
       if (!test || !test.slug) return;
+      if (!isValidDiskTestSlug(test.slug)) {
+        throw new Error(
+          'Invalid test slug "' +
+            test.slug +
+            '". Tests must use slugs like test1, test2, … Hard-refresh this page and clone again.'
+        );
+      }
       const hit = await fetchMasterTestApi(
         '/api/master-test/tests/' + encodeURIComponent(test.slug) + '/package',
         {
@@ -7752,6 +7874,19 @@
       });
     }
 
+    function isValidDiskTestSlug(slug) {
+      return /^test\d+$/i.test(String(slug || '').trim());
+    }
+
+    function maxNumericTestSlugIndex() {
+      let max = 0;
+      customTests.forEach(function (t) {
+        const m = /^test(\d+)$/i.exec(String(t.slug || '').trim());
+        if (m) max = Math.max(max, parseInt(m[1], 10));
+      });
+      return max;
+    }
+
     function slugifyTestName(name) {
       const base = String(name || '')
         .trim()
@@ -7760,16 +7895,26 @@
       return base || 'test';
     }
 
+    /** Next unused slug on disk (test1, test2, …). Names like "Test 5 (Clone)" must not become test5clone. */
     function uniqueTestSlug(name) {
       const used = new Set();
       customTests.forEach(function (t) {
-        used.add(t.slug);
+        used.add(String(t.slug || '').trim().toLowerCase());
       });
-      let slug = slugifyTestName(name);
-      if (!used.has(slug)) return slug;
-      let n = 2;
-      while (used.has(slug + n)) n++;
-      return slug + n;
+      const fromName = slugifyTestName(name);
+      if (isValidDiskTestSlug(fromName) && !used.has(fromName.toLowerCase())) {
+        return fromName.toLowerCase();
+      }
+      const numInName = String(name || '')
+        .trim()
+        .match(/test\s*(\d+)/i);
+      if (numInName) {
+        const candidate = 'test' + numInName[1];
+        if (!used.has(candidate)) return candidate;
+      }
+      let n = maxNumericTestSlugIndex() + 1;
+      while (used.has('test' + n)) n++;
+      return 'test' + n;
     }
 
     function formatPayAmountForDescription(amountRaw) {
