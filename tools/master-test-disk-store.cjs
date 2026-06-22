@@ -2,8 +2,8 @@
  * Master Test disk layout (no browser storage):
  *   Test Scripts/Test Script N/
  *     Test_N.master-test.json  — name, customer, stepDefs, foundationText (optional)
- *     testN_results.txt
- *     testN_expected_output.txt
+ *     testN_expected_output.txt   — shared by cloud and on-prem (same golden output)
+ *     testN_onprem_results.txt    — on-prem live run results only
  *     testN_console_logs.txt (optional)
  */
 const fs = require('fs');
@@ -36,7 +36,8 @@ function firstExistingFile(dir, names) {
   return null;
 }
 
-function pathsForSlug(slug) {
+function pathsForSlug(slug, onprem) {
+  const useOnprem = onprem === true;
   const dir = getTestDir(slug);
   if (!dir) return null;
   const n = String(slug).replace(/^test/i, '');
@@ -45,22 +46,24 @@ function pathsForSlug(slug) {
       'Test_' + n + '.master-test.json',
       'test' + n + '.master-test.json'
     ]) || path.join(dir, 'Test_' + n + '.master-test.json');
-  const resultsPath =
-    firstExistingFile(dir, [
-      'test' + n + '_results.txt',
-      'test_script_results.txt'
-    ]) || path.join(dir, 'test' + n + '_results.txt');
+  const resultsPath = useOnprem
+    ? path.join(dir, 'test' + n + '_onprem_results.txt')
+    : firstExistingFile(dir, [
+        'test' + n + '_results.txt',
+        'test_script_results.txt'
+      ]) || path.join(dir, 'test' + n + '_results.txt');
   const expectedPath =
     firstExistingFile(dir, [
       'test' + n + '_expected_output.txt',
       'expected_output.txt'
     ]) || path.join(dir, 'test' + n + '_expected_output.txt');
-  const consolePath =
-    firstExistingFile(dir, [
-      'test' + n + '_console_logs.txt',
-      'test_script_console_logs.txt'
-    ]) || path.join(dir, 'test' + n + '_console_logs.txt');
-  return { dir, packagePath, resultsPath, expectedPath, consolePath, n };
+  const consolePath = useOnprem
+    ? path.join(dir, 'test' + n + '_onprem_console_logs.txt')
+    : firstExistingFile(dir, [
+        'test' + n + '_console_logs.txt',
+        'test_script_console_logs.txt'
+      ]) || path.join(dir, 'test' + n + '_console_logs.txt');
+  return { dir, packagePath, resultsPath, expectedPath, consolePath, n, onprem: useOnprem };
 }
 
 function readTextFile(fp) {
@@ -72,7 +75,8 @@ function readTextFile(fp) {
   }
 }
 
-function listTestsOnDisk() {
+function listTestsOnDisk(onprem) {
+  const useOnprem = onprem === true;
   if (!fs.existsSync(TEST_SCRIPTS_ROOT)) return [];
   const out = [];
   const entries = fs.readdirSync(TEST_SCRIPTS_ROOT, { withFileTypes: true });
@@ -81,7 +85,7 @@ function listTestsOnDisk() {
     if (!ent.isDirectory()) continue;
     const slug = slugFromFolderName(ent.name);
     if (!slug) continue;
-    const paths = pathsForSlug(slug);
+    const paths = pathsForSlug(slug, useOnprem);
     if (!paths) continue;
     const hasPackage = fs.existsSync(paths.packagePath);
     const hasResults = fs.existsSync(paths.resultsPath);
@@ -99,6 +103,15 @@ function listTestsOnDisk() {
         /* ignore */
       }
     }
+    let hasExpected = fs.existsSync(paths.expectedPath);
+    let resultsLastRunMs = null;
+    if (hasResults) {
+      try {
+        resultsLastRunMs = fs.statSync(paths.resultsPath).mtimeMs;
+      } catch (eStat) {
+        resultsLastRunMs = null;
+      }
+    }
     out.push({
       slug,
       name,
@@ -108,7 +121,9 @@ function listTestsOnDisk() {
       relDir: 'Test Scripts/' + ent.name,
       hasPackage,
       hasResults,
-      hasExpected: fs.existsSync(paths.expectedPath)
+      hasExpected: hasExpected,
+      resultsLastRunMs: resultsLastRunMs,
+      onprem: useOnprem
     });
   }
   out.sort(function (a, b) {
@@ -119,8 +134,9 @@ function listTestsOnDisk() {
   return out;
 }
 
-function loadTestFromDisk(slug) {
-  const paths = pathsForSlug(slug);
+function loadTestFromDisk(slug, onprem) {
+  const useOnprem = onprem === true;
+  const paths = pathsForSlug(slug, useOnprem);
   if (!paths) throw new Error('Unknown test slug: ' + slug);
   let data = {
     format: 'cus-master-test-v1',
@@ -147,6 +163,14 @@ function loadTestFromDisk(slug) {
   else if (!data.expectedText) data.expectedText = '';
   data.resultsText = String(data.resultsText || '').replace(/\n+$/, '');
   data.expectedText = String(data.expectedText || '').replace(/\n+$/, '');
+  let resultsLastRunMs = null;
+  if (fs.existsSync(paths.resultsPath)) {
+    try {
+      resultsLastRunMs = fs.statSync(paths.resultsPath).mtimeMs;
+    } catch (eStat) {
+      resultsLastRunMs = null;
+    }
+  }
   return {
     slug,
     paths,
@@ -162,7 +186,8 @@ function loadTestFromDisk(slug) {
       stepDefs: Array.isArray(data.stepDefs) ? data.stepDefs : [],
       foundationText: String(data.foundationText || '').trim(),
       resultsText: data.resultsText,
-      expectedText: data.expectedText
+      expectedText: data.expectedText,
+      resultsLastRunMs: resultsLastRunMs
     }
   };
 }
@@ -188,8 +213,8 @@ function savePackageToDisk(slug, test) {
   return { ok: true, slug, paths };
 }
 
-function saveResultsTextToDisk(slug, resultsText) {
-  const paths = pathsForSlug(slug);
+function saveResultsTextToDisk(slug, resultsText, onprem) {
+  const paths = pathsForSlug(slug, onprem === true);
   if (!paths) throw new Error('Unknown test slug: ' + slug);
   fs.mkdirSync(paths.dir, { recursive: true });
   const text = String(resultsText || '').replace(/\n+$/, '');
@@ -202,8 +227,8 @@ function saveResultsTextToDisk(slug, resultsText) {
   return { ok: true, slug, path: paths.resultsPath };
 }
 
-function saveExpectedTextToDisk(slug, expectedText) {
-  const paths = pathsForSlug(slug);
+function saveExpectedTextToDisk(slug, expectedText, onprem) {
+  const paths = pathsForSlug(slug, onprem === true);
   if (!paths) throw new Error('Unknown test slug: ' + slug);
   fs.mkdirSync(paths.dir, { recursive: true });
   const text = String(expectedText || '').replace(/\n+$/, '');
@@ -225,8 +250,8 @@ function saveTestToDisk(slug, test) {
   return { ok: true, slug, paths };
 }
 
-function saveResultsToDisk(slug, resultsText, consoleText) {
-  const paths = pathsForSlug(slug);
+function saveResultsToDisk(slug, resultsText, consoleText, onprem) {
+  const paths = pathsForSlug(slug, onprem === true);
   if (!paths) throw new Error('Unknown test slug: ' + slug);
   fs.mkdirSync(paths.dir, { recursive: true });
   const text = String(resultsText || '').replace(/\n+$/, '');

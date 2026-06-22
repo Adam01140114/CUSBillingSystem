@@ -36,11 +36,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -138,11 +138,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -162,11 +162,11 @@ $178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -253,11 +253,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -314,11 +314,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -338,11 +338,11 @@ $178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -362,11 +362,11 @@ $183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -477,11 +477,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -513,11 +513,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -610,11 +610,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -634,11 +634,11 @@ $178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -658,11 +658,11 @@ $183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -821,11 +821,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -857,11 +857,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -1026,11 +1026,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1050,11 +1050,11 @@ $178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1074,11 +1074,11 @@ $183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -1170,11 +1170,11 @@ $0
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1194,11 +1194,11 @@ $178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1285,11 +1285,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -1321,11 +1321,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -1501,11 +1501,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -1560,11 +1560,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1584,11 +1584,11 @@ $178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1608,11 +1608,11 @@ $183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -1704,11 +1704,11 @@ $0
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1728,11 +1728,11 @@ $178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1752,11 +1752,11 @@ $183.38
 03/23/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -1843,11 +1843,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -1879,11 +1879,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -2059,11 +2059,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -2095,11 +2095,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -2141,11 +2141,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -2165,11 +2165,11 @@ $178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -2189,11 +2189,11 @@ $183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -2285,11 +2285,11 @@ $0
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -2309,11 +2309,11 @@ $178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -2333,11 +2333,11 @@ $183.38
 03/23/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -2357,11 +2357,11 @@ $173.38
 04/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $0
 $0.02
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -2448,11 +2448,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -2484,11 +2484,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -2664,11 +2664,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -2700,11 +2700,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -2783,11 +2783,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -2807,11 +2807,11 @@ $178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -2831,11 +2831,11 @@ $183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -2927,11 +2927,11 @@ $0
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -2951,11 +2951,11 @@ $178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -2975,11 +2975,11 @@ $183.38
 03/23/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -2999,11 +2999,11 @@ $173.38
 04/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $0
 $0.02
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -3114,11 +3114,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -3150,11 +3150,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -3330,11 +3330,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -3366,11 +3366,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -3499,11 +3499,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -3523,11 +3523,11 @@ $178.38
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -3547,11 +3547,11 @@ $183.38
 01/22/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -3643,11 +3643,11 @@ $0
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -3667,11 +3667,11 @@ $178.38
 03/02/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -3691,11 +3691,11 @@ $183.38
 03/23/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -3715,11 +3715,11 @@ $173.38
 04/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $0
 $0.02
 0
-$5.00
+5
 $0
 N/A
 N/A
@@ -3787,11 +3787,11 @@ $0
 05/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -3811,11 +3811,11 @@ $178.38
 05/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -3902,11 +3902,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -3938,11 +3938,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -4118,11 +4118,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -4154,11 +4154,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -4334,11 +4334,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 

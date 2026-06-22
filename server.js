@@ -1,4 +1,5 @@
 // server.js
+require('./tools/node-buffer-polyfill.cjs');
 const express       = require('express');
 const dotenv        = require('dotenv');
 const fetch         = require('node-fetch');
@@ -129,85 +130,115 @@ app.post('/api/master-test/credentials', (req, res) => {
 app.post('/api/master-test/run', (req, res) => {
   try {
     const body = req.body || {};
-    const steps = body.steps;
-    if (!Array.isArray(steps) || !steps.length) {
-      return res.status(400).json({ ok: false, error: 'At least one step is required.' });
-    }
-    ensureLocalCredentialsFile();
-    const creds = loadBillingTestCredentials();
-    if (!creds.ok) {
-      return res.status(400).json({ ok: false, error: creds.error });
-    }
-    const jobId =
-      'job-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-    const config = {
-      accountNumber: String(body.accountNumber || body.customerId || 'CUS-3011000').trim(),
-      customerName: String(body.customerName || '').trim(),
-      customerMode: String(body.customerMode || 'existing').trim() || 'existing',
-      customerFirstName: String(body.customerFirstName || '').trim(),
-      customerLastName: String(body.customerLastName || '').trim(),
-      customerCreatedDate: String(body.customerCreatedDate || '').trim(),
-      steps: steps,
-      advanceMode: body.advanceMode === 'walk' ? 'walk' : 'instant',
-      testSlug: String(body.testSlug || '').trim()
-    };
-    writeMasterTestJobFile(jobId, {
-      status: 'queued',
-      progress: 0,
-      message: 'Queued…',
-      config: config,
-      resultsText: '',
-      consoleText: '',
-      error: null,
-      startedAt: Date.now()
-    });
-    const runnerPath = path.join(__dirname, 'tools', 'run-dynamic-master-test.mjs');
-    if (!fs.existsSync(runnerPath)) {
-      return res.status(500).json({ ok: false, error: 'Test runner script missing.' });
-    }
-    const jobFile = path.join(masterTestJobsDir, jobId + '.json');
-    const child = spawn(process.execPath, [runnerPath], {
-      cwd: __dirname,
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-      env: Object.assign({}, process.env, {
-        MASTER_TEST_JOB_FILE: jobFile,
-        MASTER_TEST_CONFIG: JSON.stringify(config),
-        FIREBASE_TEST_EMAIL: creds.email,
-        FIREBASE_TEST_PASSWORD: creds.password,
-        BASE_URL: creds.baseUrl
-      })
-    });
-    child.on('error', function (spawnErr) {
-      writeMasterTestJobFile(jobId, {
-        status: 'failed',
-        progress: 100,
-        message: 'Could not start runner',
-        error: spawnErr.message || String(spawnErr)
-      });
-    });
-    child.unref();
-    res.json({ ok: true, jobId: jobId });
+    const onprem = body.onprem === true || body.onprem === 'true';
+    spawnMasterTestRun(body, onprem, res);
   } catch (err) {
     console.error('[master-test] run error:', err);
     res.status(500).json({ ok: false, error: err.message || String(err) });
   }
 });
 
+app.post('/api/master-test/run-onprem', (req, res) => {
+  try {
+    spawnMasterTestRun(req.body || {}, true, res);
+  } catch (err) {
+    console.error('[master-test] run-onprem error:', err);
+    res.status(500).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+function spawnMasterTestRun(body, onprem, res) {
+  const steps = body.steps;
+  if (!Array.isArray(steps) || !steps.length) {
+    return res.status(400).json({ ok: false, error: 'At least one step is required.' });
+  }
+  ensureLocalCredentialsFile();
+  const creds = loadBillingTestCredentials();
+  if (!creds.ok) {
+    return res.status(400).json({ ok: false, error: creds.error });
+  }
+  const jobId =
+    'job-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  const config = {
+    accountNumber: String(body.accountNumber || body.customerId || 'CUS-3011000').trim(),
+    customerName: String(body.customerName || '').trim(),
+    customerMode: String(body.customerMode || 'existing').trim() || 'existing',
+    customerFirstName: String(body.customerFirstName || '').trim(),
+    customerLastName: String(body.customerLastName || '').trim(),
+    customerCreatedDate: String(body.customerCreatedDate || '').trim(),
+    steps: steps,
+    advanceMode: body.advanceMode === 'walk' ? 'walk' : 'instant',
+    testSlug: String(body.testSlug || '').trim(),
+    onprem: onprem === true
+  };
+  writeMasterTestJobFile(jobId, {
+    status: 'queued',
+    progress: 0,
+    message: onprem ? 'Queued (on-prem)…' : 'Queued…',
+    config: config,
+    resultsText: '',
+    consoleText: '',
+    error: null,
+    startedAt: Date.now()
+  });
+  const runnerPath = path.join(__dirname, 'tools', 'run-dynamic-master-test.mjs');
+  if (!fs.existsSync(runnerPath)) {
+    return res.status(500).json({ ok: false, error: 'Test runner script missing.' });
+  }
+  const jobFile = path.join(masterTestJobsDir, jobId + '.json');
+  const child = spawn(process.execPath, [runnerPath], {
+    cwd: __dirname,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: Object.assign({}, process.env, {
+      MASTER_TEST_JOB_FILE: jobFile,
+      MASTER_TEST_CONFIG: JSON.stringify(config),
+      FIREBASE_TEST_EMAIL: creds.email,
+      FIREBASE_TEST_PASSWORD: creds.password,
+      BASE_URL: creds.baseUrl
+    })
+  });
+  child.on('error', function (spawnErr) {
+    writeMasterTestJobFile(jobId, {
+      status: 'failed',
+      progress: 100,
+      message: 'Could not start runner',
+      error: spawnErr.message || String(spawnErr)
+    });
+  });
+  child.unref();
+  res.json({ ok: true, jobId: jobId, onprem: onprem === true });
+}
+
 app.get('/api/master-test/status/:jobId', (req, res) => {
   const job = readMasterTestJobFile(req.params.jobId);
   if (!job) {
     return res.status(404).json({ ok: false, error: 'Job not found' });
   }
-  res.json({ ok: true, job: job });
+  const slim = {
+    jobId: job.jobId,
+    status: job.status,
+    progress: job.progress,
+    message: job.message,
+    error: job.error,
+    updatedAt: job.updatedAt,
+    startedAt: job.startedAt,
+    resultsTextStoredOnDisk: job.resultsTextStoredOnDisk === true,
+    consoleTextStoredOnDisk: job.consoleTextStoredOnDisk === true
+  };
+  if (typeof job.resultsText === 'string' && job.resultsText.length <= 8192) {
+    slim.resultsText = job.resultsText;
+  }
+  res.json({ ok: true, job: slim });
 });
 
 const masterTestDisk = require('./tools/master-test-disk-store.cjs');
 
 app.get('/api/master-test/registry', (req, res) => {
   try {
-    res.json({ ok: true, tests: masterTestDisk.listTestsOnDisk() });
+    const onprem = req.query.onprem === '1' || req.query.onprem === 'true';
+    res.json({ ok: true, onprem: onprem, tests: masterTestDisk.listTestsOnDisk(onprem) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message || String(err) });
   }
@@ -215,8 +246,9 @@ app.get('/api/master-test/registry', (req, res) => {
 
 app.get('/api/master-test/tests/:slug', (req, res) => {
   try {
-    const loaded = masterTestDisk.loadTestFromDisk(req.params.slug);
-    res.json({ ok: true, test: loaded.test });
+    const onprem = req.query.onprem === '1' || req.query.onprem === 'true';
+    const loaded = masterTestDisk.loadTestFromDisk(req.params.slug, onprem);
+    res.json({ ok: true, onprem: onprem, test: loaded.test });
   } catch (err) {
     res.status(404).json({ ok: false, error: err.message || String(err) });
   }
@@ -246,8 +278,18 @@ app.put('/api/master-test/tests/:slug/package', (req, res) => {
 app.put('/api/master-test/tests/:slug/results', masterTestTextBody, (req, res) => {
   try {
     const slug = String(req.params.slug || '').trim();
-    masterTestDisk.saveResultsTextToDisk(slug, req.body || '');
+    masterTestDisk.saveResultsTextToDisk(slug, req.body || '', false);
     res.json({ ok: true, slug: slug });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.put('/api/master-test/tests/:slug/onprem/results', masterTestTextBody, (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    masterTestDisk.saveResultsTextToDisk(slug, req.body || '', true);
+    res.json({ ok: true, slug: slug, onprem: true });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message || String(err) });
   }
@@ -256,8 +298,18 @@ app.put('/api/master-test/tests/:slug/results', masterTestTextBody, (req, res) =
 app.put('/api/master-test/tests/:slug/expected', masterTestTextBody, (req, res) => {
   try {
     const slug = String(req.params.slug || '').trim();
-    masterTestDisk.saveExpectedTextToDisk(slug, req.body || '');
+    masterTestDisk.saveExpectedTextToDisk(slug, req.body || '', false);
     res.json({ ok: true, slug: slug });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.put('/api/master-test/tests/:slug/onprem/expected', masterTestTextBody, (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim();
+    masterTestDisk.saveExpectedTextToDisk(slug, req.body || '', true);
+    res.json({ ok: true, slug: slug, onprem: true });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message || String(err) });
   }
@@ -338,6 +390,9 @@ registerLocalDbRoutes(app, db);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/Master Test/master_test_viewer.html', (req, res) => {
   res.redirect(301, '/test-scripts/master_test_viewer.html');
+});
+app.get('/Master Test/master_test_viewer_onprem.html', (req, res) => {
+  res.redirect(301, '/test-scripts/master_test_viewer_onprem.html');
 });
 app.use('/test-scripts', express.static(path.join(__dirname, 'Test Scripts')));
 

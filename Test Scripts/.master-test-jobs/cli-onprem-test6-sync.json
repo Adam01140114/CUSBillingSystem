@@ -1,0 +1,1 @@
+{"status":"failed","progress":100,"message":"Test failed","updatedAt":1781919517862,"error":"OnPrem Firebase → Local sync failed: Switch to online (Firebase) mode before syncing FROM Firebase. Turn off Local database mode, run sync, then switch back to local mode.. Sign in to Firebase and confirm Sync Firebase → Local works in Settings."}

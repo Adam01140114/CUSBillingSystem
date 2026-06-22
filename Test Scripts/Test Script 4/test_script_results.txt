@@ -35,11 +35,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -138,11 +138,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -162,11 +162,11 @@ $178.38
 02/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -253,11 +253,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -313,11 +313,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -337,11 +337,11 @@ $178.38
 02/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -357,19 +357,19 @@ $0
 $0
 N/A
 $200.00
-$0
+-21.62 (credit)
 02/02/2026 12:00 AM
 Status Update
 Current Status
-$0
-$0
-$0
 0
 $0
 $0
+0
+0
+$21.62
 N/A
 N/A
-$0
+-21.62 (credit)
 
 Amount Breakdown Shows:
 
@@ -379,12 +379,12 @@ Past Due
 Late Fee
 Credit
 Total amount due
-$168.36
-$10.02
 $0
 $0
 $0
-$178.38
+$0
+$21.62
+-$21.62
 
 View Past Due Details Shows:
 
@@ -452,11 +452,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -535,11 +535,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -559,11 +559,11 @@ $178.38
 02/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -579,19 +579,19 @@ $0
 $0
 N/A
 $200.00
-$0
+-21.62 (credit)
 02/02/2026 12:00 AM
 Status Update
 Current Status
-$0
-$0
-$0
 0
 $0
 $0
+0
+0
+$21.62
 N/A
 N/A
-$0
+-21.62 (credit)
 02/03/2026 12:00 AM
 Payment
 Check
@@ -600,22 +600,22 @@ $0
 $0
 0
 $0
-$0
+$21.62
 N/A
 $200.00
--200 (credit)
+-221.62 (credit)
 02/03/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
-200
+0
+$221.62
 N/A
 N/A
--200 (credit)
+-221.62 (credit)
 
 Amount Breakdown Shows:
 
@@ -629,8 +629,8 @@ $0
 $0
 $0
 $0
-$200
-$-200
+$221.62
+-$221.62
 
 View Past Due Details Shows:
 
@@ -698,11 +698,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -818,11 +818,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -842,11 +842,11 @@ $178.38
 02/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -862,19 +862,19 @@ $0
 $0
 N/A
 $200.00
-$0
+-21.62 (credit)
 02/02/2026 12:00 AM
 Status Update
 Current Status
-$0
-$0
-$0
 0
 $0
 $0
+0
+0
+$21.62
 N/A
 N/A
-$0
+-21.62 (credit)
 02/03/2026 12:00 AM
 Payment
 Check
@@ -883,46 +883,46 @@ $0
 $0
 0
 $0
-$0
+$21.62
 N/A
 $200.00
--200 (credit)
+-221.62 (credit)
 02/03/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
-200
+0
+$221.62
 N/A
 N/A
--200 (credit)
+-221.62 (credit)
 03/01/2026 12:00 AM
 Charge
 Billed Customer
-$168.36
+$0
 $0
 $0
 0
 $0
-N/A
+$221.62
 $178.38
 N/A
-$178.38
+-43.24 (credit)
 03/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
-$2.44
-$7.58
 0
 $0
 $0
+0
+0
+$43.24
 N/A
 N/A
-$178.38
+-43.24 (credit)
 
 Amount Breakdown Shows:
 
@@ -932,12 +932,12 @@ Past Due
 Late Fee
 Credit
 Total amount due
-$168.36
-$10.02
 $0
 $0
 $0
-$178.38
+$0
+$43.24
+-$43.24
 
 View Past Due Details Shows:
 
@@ -1005,11 +1005,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -1113,11 +1113,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -1131,8 +1131,8 @@ Total_amount
 $178.38
 $0
 $0
-$178.38
-$0
+$221.62
+-$43.24
 
 
 Step 6:
@@ -1172,11 +1172,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1196,11 +1196,11 @@ $178.38
 02/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1216,19 +1216,19 @@ $0
 $0
 N/A
 $200.00
-$0
+-21.62 (credit)
 02/02/2026 12:00 AM
 Status Update
 Current Status
-$0
-$0
-$0
 0
 $0
 $0
+0
+0
+$21.62
 N/A
 N/A
-$0
+-21.62 (credit)
 02/03/2026 12:00 AM
 Payment
 Check
@@ -1237,70 +1237,46 @@ $0
 $0
 0
 $0
-$0
+$21.62
 N/A
 $200.00
--200 (credit)
+-221.62 (credit)
 02/03/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
-200
+0
+$221.62
 N/A
 N/A
--200 (credit)
+-221.62 (credit)
 03/01/2026 12:00 AM
 Charge
 Billed Customer
-$168.36
+$0
 $0
 $0
 0
 $0
-N/A
+$221.62
 $178.38
 N/A
-$178.38
+-43.24 (credit)
 03/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
-$2.44
-$7.58
 0
 $0
 $0
-N/A
-N/A
-$178.38
-03/22/2026 12:00 AM
-Charge
-Late Fee
-$168.36
-$2.44
-$7.58
 0
-$0
-$0
-5
-N/A
-$183.38
-03/22/2026 12:00 AM
-Status Update
-Current Status
-$168.36
-$2.44
-$7.58
 0
-$5.00
-$0
+$43.24
 N/A
 N/A
-$183.38
+-43.24 (credit)
 
 Amount Breakdown Shows:
 
@@ -1310,12 +1286,12 @@ Past Due
 Late Fee
 Credit
 Total amount due
-$168.36
 $0
 $0
-$5.00
 $0
-$5.00
+$0
+$43.24
+-$43.24
 
 View Past Due Details Shows:
 
@@ -1383,11 +1359,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -1491,47 +1467,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
-$0
 0
-
-[ROW 10]
-[ID PD-S6-0011]
-03/22/2026 12:00 AM · Charge · Late Fee
-Past due amount
-Late Fees
-Tax Codes
-PUC Surcharge
-Sewer Charge
-Credit
-Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
-$0
 0
-
-[ROW 11]
-[ID PD-S6-0012]
-03/22/2026 12:00 AM · Status Update · Current Status
-Past due amount
-Late Fees
-Tax Codes
-PUC Surcharge
-Sewer Charge
-Credit
-Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
 $0
 0
 
@@ -1574,11 +1514,11 @@ $0
 01/01/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1598,11 +1538,11 @@ $178.38
 02/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
+168.36
 $2.44
 $7.58
 0
-$0
+0
 $0
 N/A
 N/A
@@ -1618,19 +1558,19 @@ $0
 $0
 N/A
 $200.00
-$0
+-21.62 (credit)
 02/02/2026 12:00 AM
 Status Update
 Current Status
-$0
-$0
-$0
 0
 $0
 $0
+0
+0
+$21.62
 N/A
 N/A
-$0
+-21.62 (credit)
 02/03/2026 12:00 AM
 Payment
 Check
@@ -1639,94 +1579,70 @@ $0
 $0
 0
 $0
-$0
+$21.62
 N/A
 $200.00
--200 (credit)
+-221.62 (credit)
 02/03/2026 12:00 AM
 Status Update
 Current Status
-$0
+0
 $0
 $0
 0
-$0
-200
+0
+$221.62
 N/A
 N/A
--200 (credit)
+-221.62 (credit)
 03/01/2026 12:00 AM
 Charge
 Billed Customer
-$168.36
+$0
 $0
 $0
 0
 $0
-N/A
+$221.62
 $178.38
 N/A
-$178.38
+-43.24 (credit)
 03/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
-$2.44
-$7.58
 0
 $0
 $0
-N/A
-N/A
-$178.38
-03/22/2026 12:00 AM
-Charge
-Late Fee
-$168.36
-$2.44
-$7.58
 0
-$0
-$0
-5
-N/A
-$183.38
-03/22/2026 12:00 AM
-Status Update
-Current Status
-$168.36
-$2.44
-$7.58
 0
-$5.00
-$0
+$43.24
 N/A
 N/A
-$183.38
+-43.24 (credit)
 04/01/2026 12:00 AM
 Charge
 Billed Customer
-$168.36
-$2.44
-$7.58
-178.38
-$5.00
-N/A
+$0
+$0
+$0
+0
+$0
+$43.24
 $178.38
 N/A
-$361.76
+$135.14
 04/01/2026 12:00 AM
 Status Update
 Current Status
-$168.36
-$2.44
-$7.58
-178.38
-$5.00
+135.14
+$0
+$0
+0
+0
 $0
 N/A
 N/A
-$361.76
+$135.14
 
 Amount Breakdown Shows:
 
@@ -1736,12 +1652,12 @@ Past Due
 Late Fee
 Credit
 Total amount due
-$168.36
-$10.02
-$178.38
-$5.00
+$135.14
 $0
-$361.76
+$0
+$0
+$0
+$135.14
 
 View Past Due Details Shows:
 
@@ -1809,11 +1725,11 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
@@ -1917,17 +1833,17 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
+0
+0
+0
+0
+0
 $0
 0
 
 [ROW 10]
 [ID PD-S7-0011]
-03/22/2026 12:00 AM · Charge · Late Fee
+04/01/2026 12:00 AM · Charge · Billed Customer
 Past due amount
 Late Fees
 Tax Codes
@@ -1945,42 +1861,6 @@ $0
 
 [ROW 11]
 [ID PD-S7-0012]
-03/22/2026 12:00 AM · Status Update · Current Status
-Past due amount
-Late Fees
-Tax Codes
-PUC Surcharge
-Sewer Charge
-Credit
-Total (Past Due line)
-$0
-$0
-$0
-$0
-$0
-$0
-0
-
-[ROW 12]
-[ID PD-S7-0013]
-04/01/2026 12:00 AM · Charge · Billed Customer
-Past due amount
-Late Fees
-Tax Codes
-PUC Surcharge
-Sewer Charge
-Credit
-Total (Past Due line)
-$0
-$0
-$2.44
-$7.58
-$168.36
-$0
-$178.38
-
-[ROW 13]
-[ID PD-S7-0014]
 04/01/2026 12:00 AM · Status Update · Current Status
 Past due amount
 Late Fees
@@ -1989,13 +1869,13 @@ PUC Surcharge
 Sewer Charge
 Credit
 Total (Past Due line)
-$178.38
-5
-$2.44
-$7.58
-$168.36
+0
+0
+0
+0
+0
 $0
-$178.38
+0
 
 Bill PDF Preview Shows:
 
@@ -2005,7 +1885,7 @@ Late_fee
 Credit
 Total_amount
 $178.38
-$178.38
-$5.00
 $0
-$361.76
+$0
+$43.24
+$135.14

@@ -1,5 +1,54 @@
 const LOCAL_MODE_KEY = 'cusLocalDatabaseMode';
 
+/** Must match tools/mysql-local-db.cjs SYNC_COLLECTIONS */
+const SYNC_COLLECTIONS = [
+  'customers',
+  'locations',
+  'codes',
+  'users',
+  'drawers',
+  'settings',
+  'billingCycles',
+  'paymentBatches',
+  'paymentProcessingSessions',
+  'forms'
+];
+
+const SYNC_IMPORT_BATCH_SIZE = 75;
+const SYNC_FIREBASE_WRITE_BATCH = 400;
+
+function serializeFirebaseDataForImport(value) {
+  if (value == null) return value;
+  if (typeof value === 'object' && typeof value.toDate === 'function') {
+    try {
+      return value.toDate().toISOString();
+    } catch {
+      return String(value);
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map(serializeFirebaseDataForImport);
+  }
+  if (typeof value === 'object') {
+    if (typeof value.path === 'string' && value.firestore) {
+      return { __firestoreRef: value.path };
+    }
+    if (typeof value.latitude === 'number' && typeof value.longitude === 'number') {
+      return {
+        __geoPoint: true,
+        latitude: value.latitude,
+        longitude: value.longitude
+      };
+    }
+    const out = {};
+    for (const [key, nested] of Object.entries(value)) {
+      out[key] = serializeFirebaseDataForImport(nested);
+    }
+    return out;
+  }
+  return value;
+}
+
 export function isLocalDatabaseMode() {
   try {
     return localStorage.getItem(LOCAL_MODE_KEY) === 'local';
@@ -113,6 +162,110 @@ export function installLocalDbLayer(firebaseApi) {
     writeBatch: fbWriteBatch,
     deleteField: fbDeleteField
   } = firebaseApi;
+
+  let syncApp = null;
+  let syncProjectId = '';
+
+  function bindSyncContext(ctx) {
+    syncApp = ctx && ctx.app ? ctx.app : null;
+    syncProjectId = ctx && ctx.clientProjectId ? String(ctx.clientProjectId) : '';
+  }
+
+  function requireOnlineFirestoreDb() {
+    if (isLocalDatabaseMode()) {
+      throw new Error(
+        'Switch to online (Firebase) mode before syncing FROM Firebase. Turn off Local database mode, run sync, then switch back to local mode.'
+      );
+    }
+    if (!syncApp) {
+      throw new Error('Firebase is not ready yet. Reload the page and try again.');
+    }
+    return getFirestore(syncApp);
+  }
+
+  async function importDocsToLocal(collectionName, docs, clearFirst) {
+    let imported = 0;
+    for (let i = 0; i < docs.length; i += SYNC_IMPORT_BATCH_SIZE) {
+      const chunk = docs.slice(i, i + SYNC_IMPORT_BATCH_SIZE);
+      const body = await apiFetch('/api/local-db/sync/import-collection', {
+        method: 'POST',
+        body: JSON.stringify({
+          collection: collectionName,
+          docs: chunk,
+          clearFirst: clearFirst && i === 0
+        })
+      });
+      imported += body.count || chunk.length;
+    }
+    if (clearFirst && docs.length === 0) {
+      await apiFetch('/api/local-db/sync/import-collection', {
+        method: 'POST',
+        body: JSON.stringify({
+          collection: collectionName,
+          docs: [],
+          clearFirst: true
+        })
+      });
+    }
+    return imported;
+  }
+
+  async function syncFirebaseToLocal(options) {
+    options = options || {};
+    let db;
+    if (options.readFirebaseWhileLocal === true) {
+      if (!syncApp) {
+        throw new Error('Firebase is not ready yet. Reload the page and try again.');
+      }
+      db = getFirestore(syncApp);
+    } else {
+      db = requireOnlineFirestoreDb();
+    }
+    const summary = {};
+    for (const collectionName of SYNC_COLLECTIONS) {
+      const snap = await fbGetDocs(fbCollection(db, collectionName));
+      const docs = snap.docs.map(docSnap => ({
+        id: docSnap.id,
+        data: serializeFirebaseDataForImport(docSnap.data())
+      }));
+      summary[collectionName] = await importDocsToLocal(collectionName, docs, true);
+    }
+    return {
+      ok: true,
+      direction: 'firebase-to-local',
+      projectId: syncProjectId || undefined,
+      summary
+    };
+  }
+
+  async function syncLocalToFirebase() {
+    if (!syncApp) {
+      throw new Error('Firebase is not ready yet. Reload the page and try again.');
+    }
+    const db = getFirestore(syncApp);
+    const summary = {};
+    for (const collectionName of SYNC_COLLECTIONS) {
+      const body = await apiFetch(
+        `/api/local-db/collections/${encodeURIComponent(collectionName)}/docs`
+      );
+      const docs = body.docs || [];
+      for (let i = 0; i < docs.length; i += SYNC_FIREBASE_WRITE_BATCH) {
+        const batch = fbWriteBatch(db);
+        const chunk = docs.slice(i, i + SYNC_FIREBASE_WRITE_BATCH);
+        for (const item of chunk) {
+          batch.set(fbDoc(db, collectionName, item.id), item.data || {}, { merge: false });
+        }
+        await batch.commit();
+      }
+      summary[collectionName] = docs.length;
+    }
+    return {
+      ok: true,
+      direction: 'local-to-firebase',
+      projectId: syncProjectId || undefined,
+      summary
+    };
+  }
 
   function getDb(app) {
     return isLocalDatabaseMode() ? LOCAL_DB_MARKER : getFirestore(app);
@@ -252,14 +405,6 @@ export function installLocalDbLayer(firebaseApi) {
     }
   }
 
-  async function syncFirebaseToLocal() {
-    return apiFetch('/api/local-db/sync/firebase-to-local', { method: 'POST', body: '{}' });
-  }
-
-  async function syncLocalToFirebase() {
-    return apiFetch('/api/local-db/sync/local-to-firebase', { method: 'POST', body: '{}' });
-  }
-
   function wrappedDeleteField() {
     if (isLocalDatabaseMode()) {
       return { __deleteField: true };
@@ -282,6 +427,7 @@ export function installLocalDbLayer(firebaseApi) {
     fetchLocalDbStatus,
     syncFirebaseToLocal,
     syncLocalToFirebase,
+    bindSyncContext,
     isLocalDatabaseMode,
     setLocalDatabaseMode
   };

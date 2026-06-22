@@ -59,6 +59,11 @@
     const db = localDbLayer.getDb(app);
     const auth = getAuth(app);
 
+    localDbLayer.bindSyncContext({
+      app: app,
+      clientProjectId: firebaseConfig.projectId
+    });
+
     window.localDbLayer = localDbLayer;
 
     // Firebase Authentication helper functions
@@ -1896,8 +1901,9 @@
         }
         if (statusEl) statusEl.textContent = 'Syncing Firebase → Local…';
         const result = await window.localDbLayer.syncFirebaseToLocal();
+        const projectLine = result.projectId ? `Project: ${result.projectId}\n\n` : '';
         const lines = Object.entries(result.summary || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
-        alert(`Firebase → Local sync complete.\n\n${lines || 'No documents copied.'}`);
+        alert(`Firebase → Local sync complete.\n\n${projectLine}${lines || 'No documents copied.'}`);
         await updateLocalDatabaseModeUi();
       } catch (err) {
         alert('Sync failed: ' + (err.message || String(err)));
@@ -1924,8 +1930,9 @@
         }
         if (statusEl) statusEl.textContent = 'Syncing Local → Firebase…';
         const result = await window.localDbLayer.syncLocalToFirebase();
+        const projectLine = result.projectId ? `Project: ${result.projectId}\n\n` : '';
         const lines = Object.entries(result.summary || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
-        alert(`Local → Firebase sync complete.\n\n${lines || 'No documents copied.'}`);
+        alert(`Local → Firebase sync complete.\n\n${projectLine}${lines || 'No documents copied.'}`);
         await updateLocalDatabaseModeUi();
       } catch (err) {
         alert('Sync failed: ' + (err.message || String(err)));
@@ -2983,6 +2990,9 @@
     document.addEventListener('DOMContentLoaded', async function() {
       if (typeof syncSettingsTestingTabVisibility === 'function') {
         syncSettingsTestingTabVisibility();
+      }
+      if (typeof wireSettingsTestingTabContextMenus === 'function') {
+        wireSettingsTestingTabContextMenus();
       }
 
       // Load users immediately on page load (don't wait for settings to be opened)
@@ -4125,27 +4135,49 @@
       return (host === 'localhost' || host === '127.0.0.1') && port === '8000';
     }
 
-    function getMasterTestViewerUrl() {
-      return (
+    function getMasterTestViewerUrl(forEmbed) {
+      const base =
         window.location.protocol +
         '//' +
         window.location.hostname +
-        ':8000/test-scripts/master_test_viewer.html'
-      );
+        ':8000/test-scripts/master_test_viewer.html';
+      return forEmbed ? base + '?embed=1' : base;
+    }
+
+    function getMasterTestOnPremViewerUrl(forEmbed) {
+      const origin =
+        window.location.protocol + '//' + window.location.hostname + ':8000/test-scripts/';
+      if (forEmbed) {
+        return origin + 'master_test_viewer.html?onprem=1&embed=1';
+      }
+      return origin + 'master_test_viewer_onprem.html';
     }
 
     window.syncSettingsTestingTabVisibility = function () {
       const tab = document.getElementById('settingsTestingTab');
+      const onPremTab = document.getElementById('settingsOnPremTestingTab');
       const content = document.getElementById('settingsTestingContent');
+      const onPremContent = document.getElementById('settingsOnPremTestingContent');
       const show = isLocalMasterTestHost();
       if (tab) tab.classList.toggle('hidden', !show);
+      if (onPremTab) onPremTab.classList.toggle('hidden', !show);
       if (content && !show) content.classList.add('hidden');
+      if (onPremContent && !show) onPremContent.classList.add('hidden');
     };
 
     function loadSettingsTestingIframe() {
       const iframe = document.getElementById('settingsMasterTestViewerIframe');
       if (!iframe || !isLocalMasterTestHost()) return;
-      const url = getMasterTestViewerUrl();
+      const url = getMasterTestViewerUrl(true);
+      if (iframe.getAttribute('src') !== url) {
+        iframe.setAttribute('src', url);
+      }
+    }
+
+    function loadSettingsOnPremTestingIframe() {
+      const iframe = document.getElementById('settingsOnPremMasterTestViewerIframe');
+      if (!iframe || !isLocalMasterTestHost()) return;
+      const url = getMasterTestOnPremViewerUrl(true);
       if (iframe.getAttribute('src') !== url) {
         iframe.setAttribute('src', url);
       }
@@ -4159,6 +4191,78 @@
       document.body.classList.toggle('settings-testing-fullscreen-active', !!active);
     }
 
+    function wireSettingsTestingTabContextMenus() {
+      if (window.__settingsTestingTabContextMenusWired) return;
+      window.__settingsTestingTabContextMenusWired = true;
+
+      const menu = document.createElement('div');
+      menu.id = 'settingsTestingTabContextMenu';
+      menu.className = 'settings-testing-tab-context-menu hidden';
+      menu.innerHTML =
+        '<button type="button" data-action="copy">Copy link</button>' +
+        '<button type="button" data-action="open">Open link in new tab</button>';
+      document.body.appendChild(menu);
+
+      let contextMenuUrl = '';
+
+      function hideContextMenu() {
+        menu.classList.add('hidden');
+        contextMenuUrl = '';
+      }
+
+      function showContextMenu(event, url) {
+        event.preventDefault();
+        event.stopPropagation();
+        contextMenuUrl = url;
+        menu.classList.remove('hidden');
+        const menuWidth = 220;
+        const menuHeight = 88;
+        let left = event.clientX;
+        let top = event.clientY;
+        if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth - 8;
+        if (top + menuHeight > window.innerHeight) top = window.innerHeight - menuHeight - 8;
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+      }
+
+      menu.addEventListener('click', function (event) {
+        const btn = event.target.closest('button[data-action]');
+        if (!btn || !contextMenuUrl) return;
+        const action = btn.getAttribute('data-action');
+        if (action === 'copy') {
+          const copied = navigator.clipboard && navigator.clipboard.writeText
+            ? navigator.clipboard.writeText(contextMenuUrl).then(function () { return true; }).catch(function () { return false; })
+            : Promise.resolve(false);
+          copied.then(function (ok) {
+            if (!ok) {
+              window.prompt('Copy this link:', contextMenuUrl);
+            }
+          });
+        } else if (action === 'open') {
+          window.open(contextMenuUrl, '_blank', 'noopener,noreferrer');
+        }
+        hideContextMenu();
+      });
+
+      document.addEventListener('click', hideContextMenu);
+      document.addEventListener('scroll', hideContextMenu, true);
+      window.addEventListener('resize', hideContextMenu);
+
+      const testingTab = document.getElementById('settingsTestingTab');
+      if (testingTab) {
+        testingTab.addEventListener('contextmenu', function (event) {
+          showContextMenu(event, getMasterTestViewerUrl(false));
+        });
+      }
+
+      const onPremTab = document.getElementById('settingsOnPremTestingTab');
+      if (onPremTab) {
+        onPremTab.addEventListener('contextmenu', function (event) {
+          showContextMenu(event, getMasterTestOnPremViewerUrl(false));
+        });
+      }
+    }
+
     // Switch between settings accounts, locations, and codes views
     window.switchSettingsView = async function(view) {
       const accountsTab = document.getElementById('settingsAccountsTab');
@@ -4170,6 +4274,7 @@
       const drawersTab = document.getElementById('settingsDrawersTab');
       const togglesTab = document.getElementById('settingsTogglesTab');
       const testingTab = document.getElementById('settingsTestingTab');
+      const onPremTestingTab = document.getElementById('settingsOnPremTestingTab');
       const accountsContent = document.getElementById('settingsAccountsContent');
       const locationsContent = document.getElementById('settingsLocationsContent');
       const codesContent = document.getElementById('settingsCodesContent');
@@ -4179,11 +4284,13 @@
       const drawersContent = document.getElementById('settingsDrawersContent');
       const togglesContent = document.getElementById('settingsTogglesContent');
       const testingContent = document.getElementById('settingsTestingContent');
+      const onPremTestingContent = document.getElementById('settingsOnPremTestingContent');
 
       setSettingsTestingFullscreen(false);
+      wireSettingsTestingTabContextMenus();
 
       // Reset all tabs and content
-      [accountsTab, locationsTab, codesTab, usersTab, cleanupTab, hierarchyTab, drawersTab, togglesTab, testingTab].forEach(tab => {
+      [accountsTab, locationsTab, codesTab, usersTab, cleanupTab, hierarchyTab, drawersTab, togglesTab, testingTab, onPremTestingTab].forEach(tab => {
         if (!tab) return;
         tab.classList.remove('bg-blue-600', 'text-white');
         tab.classList.add('bg-slate-200', 'text-slate-700');
@@ -4197,6 +4304,7 @@
       if (drawersContent) drawersContent.classList.add('hidden');
       if (togglesContent) togglesContent.classList.add('hidden');
       if (testingContent) testingContent.classList.add('hidden');
+      if (onPremTestingContent) onPremTestingContent.classList.add('hidden');
 
       if (view === 'accounts') {
         accountsTab.classList.add('bg-blue-600', 'text-white');
@@ -4266,6 +4374,17 @@
           testingContent.classList.remove('hidden');
           setSettingsTestingFullscreen(true);
           loadSettingsTestingIframe();
+        }
+      } else if (view === 'onprem-testing') {
+        if (!isLocalMasterTestHost()) return;
+        if (onPremTestingTab) {
+          onPremTestingTab.classList.add('bg-blue-600', 'text-white');
+          onPremTestingTab.classList.remove('bg-slate-200', 'text-slate-700');
+        }
+        if (onPremTestingContent) {
+          onPremTestingContent.classList.remove('hidden');
+          setSettingsTestingFullscreen(true);
+          loadSettingsOnPremTestingIframe();
         }
       }
     };
@@ -8331,12 +8450,30 @@
         });
         let trueOwed = Math.round(Math.max(0, parseFloat(calcBeforeDeposit.total) || 0) * 100) / 100;
         let lateFeeAmt = Math.max(0, parseFloat(calcBeforeDeposit.lateFeeAmount) || 0);
+        let lateFeeDetailsRows = null;
+        const paidAfterLastBill =
+          typeof getSumPaymentAmountsAfterLastBillPrint === 'function'
+            ? getSumPaymentAmountsAfterLastBillPrint(customer)
+            : 0;
+
+        // Real payments after the last bill print already reduced live balance (e.g. $500 check leaving
+        // $45.14 sewer-only). Do not rebuild trueOwed from the frozen statement late/total or deposit
+        // hierarchy mis-allocates $5 to late fees and leaves a phantom credit.
+        if (paidAfterLastBill > 0.005) {
+          const panelForDeposit =
+            typeof getProcessBillPanelAmounts === 'function'
+              ? getProcessBillPanelAmounts(customer)
+              : null;
+          if (panelForDeposit && typeof panelForDeposit.total === 'number') {
+            trueOwed = Math.round(Math.max(0, parseFloat(panelForDeposit.total) || 0) * 100) / 100;
+            lateFeeAmt = Math.max(0, parseFloat(panelForDeposit.lateFee) || 0);
+          }
+        } else {
         const cumLateForDeposit =
           typeof getLatestCumulativeLateFeeAmount === 'function'
             ? getLatestCumulativeLateFeeAmount(customer)
             : 0;
         const frozenSnapForDeposit = customer.processBillPanelFrozenSnapshot;
-        let lateFeeDetailsRows = null;
         if (frozenSnapForDeposit && typeof frozenSnapForDeposit.amountDue === 'number') {
           const frozenTotalForDeposit = Math.max(0, parseFloat(frozenSnapForDeposit.amountDue) || 0);
           const frozenLateForDeposit = Math.max(0, parseFloat(frozenSnapForDeposit.lateFee) || 0);
@@ -8379,16 +8516,18 @@
             trueOwed = owedWithCumLate;
           }
         }
+        }
         try {
           console.info('[PastDueExport] depositAutoApplyOwed', {
             account: customer.accountNumber || customer.id,
             trueOwed: trueOwed,
             lateFeeAmt: lateFeeAmt,
-            cumLateForDeposit: cumLateForDeposit,
+            paidAfterLastBill: paidAfterLastBill,
             calcLate: calcBeforeDeposit.lateFeeAmount,
             frozenPanelDue:
-              frozenSnapForDeposit && typeof frozenSnapForDeposit.amountDue === 'number'
-                ? frozenSnapForDeposit.amountDue
+              customer.processBillPanelFrozenSnapshot &&
+              typeof customer.processBillPanelFrozenSnapshot.amountDue === 'number'
+                ? customer.processBillPanelFrozenSnapshot.amountDue
                 : null
           });
         } catch (eDepLog) {
@@ -8399,6 +8538,23 @@
 
           }
           return;
+        }
+
+        const stHistForOwed = Array.isArray(customer.ledgerStatusHistory)
+          ? customer.ledgerStatusHistory
+          : [];
+        if (stHistForOwed.length) {
+          const lastStatus = stHistForOwed[stHistForOwed.length - 1];
+          const statusBal = roundMoney2(parseFloat(lastStatus.netBalanceAfterBill || 0));
+          const statusLate = roundMoney2(parseFloat(lastStatus.lateFeeAmount || 0));
+          if (
+            statusBal > trueOwed + 0.03 &&
+            statusLate > lateFeeAmt + 0.005 &&
+            Math.abs(statusBal - trueOwed - (statusLate - lateFeeAmt)) < 0.03
+          ) {
+            lateFeeAmt = statusLate;
+            trueOwed = statusBal;
+          }
         }
 
         const appliedRaw = Math.min(deposit, trueOwed);
@@ -26231,6 +26387,46 @@
         row &&
         row.sourceKind === 'payment' &&
         row.ledgerPayment &&
+        (typeof isLedgerSecurityDepositAutoPay !== 'function' ||
+          !isLedgerSecurityDepositAutoPay(row.ledgerPayment))
+      ) {
+        const stmtPay =
+          typeof getMostRecentBillingChargeBeforePayment === 'function'
+            ? getMostRecentBillingChargeBeforePayment(customer, row.ledgerPayment)
+            : null;
+        if (stmtPay) {
+          const detailPay = getBillingChargePastDueDetailComposition(customer, stmtPay);
+          if (
+            detailPay &&
+            typeof sumPastDueComposition === 'function' &&
+            sumPastDueComposition(detailPay) > 0.005
+          ) {
+            return detailPay;
+          }
+          if (billingChargeFollowsPartialPastDuePayment(customer, stmtPay, row.pastDue)) {
+            const facePay = resolvePastDueResidualFace(
+              customer,
+              stmtPay,
+              row,
+              pack,
+              'checkPaymentAfterPartialPayBill',
+              { stmtDate: stmtPay.date }
+            );
+            if (facePay) return facePay;
+            const partialPay = getPartialPaymentStatementPastDueComposition(
+              customer,
+              stmtPay,
+              pack && pack.separateLateFeeForPastDueUi,
+              roundMoney2(Math.max(0, parseFloat(stmtPay.pastDueOnBill) || 0))
+            );
+            if (partialPay) return partialPay;
+          }
+        }
+      }
+      if (
+        row &&
+        row.sourceKind === 'payment' &&
+        row.ledgerPayment &&
         typeof isLedgerSecurityDepositAutoPay === 'function' &&
         isLedgerSecurityDepositAutoPay(row.ledgerPayment)
       ) {
@@ -26376,6 +26572,35 @@
       if (p.source === 'depositAutoApply') return true;
       const m = String(p.paymentMethod || '').toLowerCase();
       return m.includes('security deposit') && m.includes('auto');
+    }
+
+    /** True when a non-deposit payment cleared part of the balance after the last bill before this deposit row. */
+    function ledgerDepositAutoPayFollowsPartialPayment(customer, payment) {
+      if (!customer || !payment || !isLedgerSecurityDepositAutoPay(payment)) return false;
+      const stmt =
+        typeof getMostRecentBillingChargeBeforeLedgerEntry === 'function'
+          ? getMostRecentBillingChargeBeforeLedgerEntry(customer, payment)
+          : null;
+      if (!stmt) return false;
+      const pays = Array.isArray(customer.paymentHistory) ? customer.paymentHistory : [];
+      const depMs = getLedgerEntrySortMs(payment);
+      const depOrder = getLedgerEntryOrder(payment);
+      const stmtMs = getLedgerEntrySortMs(stmt);
+      let partialPaidSum = 0;
+      for (let i = 0; i < pays.length; i++) {
+        const pay = pays[i];
+        if (!pay || pay === payment) continue;
+        if (!(parseFloat(pay.amountPaid) > 0.005)) continue;
+        if (isLedgerSecurityDepositAutoPay(pay)) continue;
+        const pMs = getLedgerEntrySortMs(pay);
+        if (pMs < stmtMs) continue;
+        if (pMs > depMs) continue;
+        if (pMs === depMs && getLedgerEntryOrder(pay) >= depOrder) continue;
+        partialPaidSum = Math.round((partialPaidSum + parseFloat(pay.amountPaid)) * 100) / 100;
+      }
+      if (partialPaidSum < 0.005) return false;
+      const depApply = Math.round(parseFloat(payment.amountPaid) * 100) / 100;
+      return partialPaidSum > depApply + 0.05;
     }
 
     /**
@@ -27716,16 +27941,43 @@
         typeof ledgerPostPaymentRemainingSnapshotFields === 'function'
       ) {
         const rem = ledgerPostPaymentRemainingSnapshotFields(customer, balanceAfter);
-        const anchorLate = Math.round(Math.max(0, parseFloat(anchorEntry.lateFeeAmount || 0)) * 100) / 100;
-        const pucResidual = Math.round(
+        let anchorLate = Math.round(Math.max(0, parseFloat(anchorEntry.lateFeeAmount || 0)) * 100) / 100;
+        let sewerOut = rem.sewer;
+        let pastDueOut = rem.pastDue;
+        let taxOut = rem.taxCodes;
+        let pucOut = Math.round(
           Math.max(0, rem.balanceAfter - rem.sewer - anchorLate - rem.taxCodes) * 100
         ) / 100;
+        let lateOut = anchorLate;
+        if (pastDueOut > balanceAfter + 0.02) {
+          pastDueOut = 0;
+        }
+        if (
+          pastDueOut < 0.005 &&
+          balanceAfter > 0.005 &&
+          Math.abs(sewerOut + taxOut + pucOut + lateOut - balanceAfter) > 0.02
+        ) {
+          sewerOut = balanceAfter;
+          taxOut = 0;
+          pucOut = 0;
+          lateOut = 0;
+        } else if (
+          pastDueOut < 0.005 &&
+          lateOut > 0.005 &&
+          Math.abs(sewerOut + lateOut + taxOut + pucOut - balanceAfter) < 0.03
+        ) {
+          const hasItemizedSurcharges = taxOut + pucOut > 0.005;
+          if (!hasItemizedSurcharges) {
+            sewerOut = roundMoney2(sewerOut + lateOut);
+            lateOut = 0;
+          }
+        }
         return {
-          sewer: rem.sewer,
-          pastDue: rem.pastDue,
-          taxCodes: rem.taxCodes,
-          puc: pucResidual,
-          lateFee: anchorLate,
+          sewer: sewerOut,
+          pastDue: pastDueOut,
+          taxCodes: taxOut,
+          puc: pucOut,
+          lateFee: lateOut,
           credit: rem.credit,
           balanceAfter: rem.balanceAfter
         };
@@ -28581,6 +28833,42 @@
           (isLedgerSecurityDepositAutoPay(p) ? 'Security deposit (auto)' : 'Payment');
         if (p.source === 'testFreshStart') subtype = 'Fresh start';
         else if (isLedgerSecurityDepositAutoPay(p)) subtype = 'Security deposit';
+        if (isLedgerSecurityDepositAutoPay(p) && amountPaid > 0.005) {
+          if (ledgerDepositAutoPayFollowsPartialPayment(customer, p)) {
+            const depApply = Math.round(Math.max(0, parseFloat(p.amountPaid) || amountDue) * 100) / 100;
+            sewer = depApply;
+            pastDue = 0;
+            taxCodesAmt = 0;
+            pucAmt = 0;
+            combinedSurcharges = 0;
+            lateFee = 0;
+          } else {
+            const depBd = getAuthoritativeDepositPaymentBreakdown(p, customer);
+            sewer = Math.round((depBd['Current amount due'] || 0) * 100) / 100;
+            pastDue = Math.round((depBd['Past due amount'] || 0) * 100) / 100;
+            taxCodesAmt = Math.round((depBd['Tax Codes'] || 0) * 100) / 100;
+            pucAmt = Math.round((depBd['Puc surcharge'] || 0) * 100) / 100;
+            combinedSurcharges = Math.round((taxCodesAmt + pucAmt) * 100) / 100;
+            lateFee = Math.round((depBd['Late fees'] || 0) * 100) / 100;
+            const stHist = Array.isArray(customer.ledgerStatusHistory)
+              ? customer.ledgerStatusHistory
+              : [];
+            const depMs = getLedgerEntrySortMs(p);
+            const depOrder = getLedgerEntryOrder(p);
+            for (let si = stHist.length - 1; si >= 0; si--) {
+              const st = stHist[si];
+              if (!st) continue;
+              const stMs = getLedgerEntrySortMs(st);
+              if (stMs > depMs) continue;
+              if (stMs === depMs && getLedgerEntryOrder(st) >= depOrder) continue;
+              const statusLate = Math.round(parseFloat(st.lateFeeAmount || 0) * 100) / 100;
+              if (statusLate > lateFee + 0.005) {
+                lateFee = statusLate;
+              }
+              break;
+            }
+          }
+        }
         let creditAmt = 0;
         if (isLedgerSecurityDepositAutoPay(p)) {
           const stmtCr =
@@ -29100,6 +29388,18 @@
           if (stmt) pack.statementForPayment = snapshotBillForPastDueModal(stmt);
           if (
             typeof isLedgerSecurityDepositAutoPay === 'function' &&
+            !isLedgerSecurityDepositAutoPay(row.ledgerPayment) &&
+            stmt
+          ) {
+            pack.separateLateFeeForPastDueUi = roundMoney2(
+              Math.max(
+                parseFloat(stmt.lateFeeAmount || 0) || 0,
+                parseFloat(row.lateFee || 0) || 0
+              )
+            );
+          }
+          if (
+            typeof isLedgerSecurityDepositAutoPay === 'function' &&
             isLedgerSecurityDepositAutoPay(row.ledgerPayment)
           ) {
             pack.separateLateFeeForPastDueUi = roundMoney2(
@@ -29234,6 +29534,9 @@
             if (stmtPastDep > 0.005 && onBillPastDep > 0.005 && stmtPastDep + 0.02 < onBillPastDep) {
               pack.separateLateFeeForPastDueUi = 0;
             }
+          }
+          if (ledgerDepositAutoPayFollowsPartialPayment(customer, row.ledgerPayment)) {
+            pack.depositPastDueExportAllZeros = true;
           }
         }
         if (row.sourceKind === 'charge') {
@@ -31098,6 +31401,20 @@
                 (colIdx === 3 || colIdx === 4 || colIdx === 5)
               ) {
                 t = t.replace(/^\$/, '');
+              } else if (
+                !isHead &&
+                subtypeLow.includes('current status') &&
+                colIdx === 3 &&
+                rowPastDueNum < 0.005
+              ) {
+                t = developTestLedgerPastDueColumnExport(t);
+              } else if (
+                !isHead &&
+                subtypeLow.includes('current status') &&
+                colIdx === 7 &&
+                rowPastDueNum < 0.005
+              ) {
+                t = developTestLedgerPastDueColumnExport(t);
               }
               parts.push(t);
               const tag = isHead ? 'th' : 'td';
@@ -32412,6 +32729,16 @@
           sewer = 0;
           tax = 0;
         }
+        if (!usedLastBillFace && pastDue < 0.005 && totalDue > 0.005 && lateFee > 0.005) {
+          const hasItemizedSurcharges = tax > 0.005;
+          if (
+            !hasItemizedSurcharges &&
+            Math.abs(sewer + tax + pastDue + lateFee - credit - totalDue) < 0.03
+          ) {
+            sewer = roundMoney2(sewer + lateFee);
+            lateFee = 0;
+          }
+        }
         return (
           'Sewer Charge\n' +
           'Tax Charge\n' +
@@ -32538,6 +32865,31 @@
       }
 
       function developTestMasterTestPastDuePackToEntry(rowIndex, pack) {
+        if (pack.rowKind === 'payment' && /security deposit/i.test(String(pack.subtype || ''))) {
+          const compForDep = developTestPastDueCompositionForPack(pack);
+          const depCompSum =
+            compForDep && typeof sumPastDueComposition === 'function'
+              ? sumPastDueComposition(compForDep)
+              : 0;
+          if (pack.depositPastDueExportAllZeros || !(depCompSum > 0.005)) {
+            const label =
+              (pack.dateTime || '') + ' · Payment · ' + (pack.subtype || 'Security deposit');
+            const zeroBare = { bareZero: true };
+            return {
+              rowIndex: rowIndex,
+              label: label,
+              pairs: [
+                { key: 'Past due amount', val: developTestMasterTestMoneyExportLine(0, zeroBare) },
+                { key: 'Late Fees', val: developTestMasterTestMoneyExportLine(0, zeroBare) },
+                { key: 'Tax Codes', val: developTestMasterTestMoneyExportLine(0, zeroBare) },
+                { key: 'PUC Surcharge', val: developTestMasterTestMoneyExportLine(0, zeroBare) },
+                { key: 'Sewer Charge', val: developTestMasterTestMoneyExportLine(0, zeroBare) },
+                { key: 'Credit', val: developTestMasterTestCreditMoney(0) },
+                { key: 'Total (Past Due line)', val: developTestMasterTestMoneyExportLine(0, zeroBare) }
+              ]
+            };
+          }
+        }
         const comp = developTestPastDueCompositionForPack(pack);
         const bucket = function (k) {
           if (!comp || comp[k] == null) return 0;
@@ -32547,7 +32899,8 @@
         if (
           !comp &&
           pack.rowKind === 'payment' &&
-          pack.paymentPastDueApplied != null
+          pack.paymentPastDueApplied != null &&
+          /security deposit/i.test(String(pack.subtype || ''))
         ) {
           pastDueAmt = Math.round(parseFloat(pack.paymentPastDueApplied) * 100) / 100;
         }
@@ -32601,8 +32954,16 @@
             pack.separateLateFeeForPastDueUi > 0.005 &&
             pastDueCol > 0.005 &&
             Math.abs(compNonLateSum - pastDueCol) < 0.03;
+          const paymentZeroAllocationExport =
+            pack.rowKind === 'payment' &&
+            (pack.paymentPastDueApplied == null || pack.paymentPastDueApplied < 0.005) &&
+            pastDueAmt < 0.005 &&
+            lateFeesAmt < 0.005 &&
+            taxExport < 0.005 &&
+            pucExport < 0.005 &&
+            sewerExport < 0.005;
           if (
-            pack.rowKind === 'payment' ||
+            (pack.rowKind === 'payment' && !paymentZeroAllocationExport) ||
             ((pack.rowKind === 'charge' || pack.rowKind === 'status') &&
               pastDueAmt > 0.005 &&
               !hideSeparateLateOnExport)
@@ -32623,22 +32984,46 @@
             lateFeesAmt: lateFeesAmt
           });
         }
+        const allZerosStatusFace =
+          pack.rowKind === 'status' &&
+          comp &&
+          bucket('Past due amount') < 0.005 &&
+          bucket('Late fees') < 0.005 &&
+          bucket('Tax Codes') < 0.005 &&
+          bucket('Puc surcharge') < 0.005 &&
+          bucket('Current amount due') < 0.005 &&
+          pastDue < 0.005;
+        const bareZeroExport = allZerosStatusFace ? { bareZero: true } : {};
+        let totalPastDueExport = pastDue;
+        if (
+          pack.rowKind === 'payment' &&
+          pack.paymentPastDueApplied != null &&
+          !/security deposit/i.test(String(pack.subtype || ''))
+        ) {
+          totalPastDueExport = Math.round(parseFloat(pack.paymentPastDueApplied) * 100) / 100;
+        }
+        const totalPastDueLineVal =
+          pack.rowKind === 'payment' &&
+          pack.paymentPastDueApplied != null &&
+          !/security deposit/i.test(String(pack.subtype || ''))
+            ? developTestLedgerPastDueColumnExport(String(totalPastDueExport))
+            : developTestMasterTestMoneyExportLine(totalPastDueExport, { bareZero: true });
         return {
           rowIndex: rowIndex,
           label: label,
           pairs: [
-            { key: 'Past due amount', val: developTestMasterTestMoneyExportLine(pastDueAmt) },
-            { key: 'Late Fees', val: developTestMasterTestMoneyExportLine(lateFeesAmt) },
-            { key: 'Tax Codes', val: developTestMasterTestMoneyExportLine(taxExport) },
-            { key: 'PUC Surcharge', val: developTestMasterTestMoneyExportLine(pucExport) },
-            { key: 'Sewer Charge', val: developTestMasterTestMoneyExportLine(sewerExport) },
+            { key: 'Past due amount', val: developTestMasterTestMoneyExportLine(pastDueAmt, bareZeroExport) },
+            { key: 'Late Fees', val: developTestMasterTestMoneyExportLine(lateFeesAmt, bareZeroExport) },
+            { key: 'Tax Codes', val: developTestMasterTestMoneyExportLine(taxExport, bareZeroExport) },
+            { key: 'PUC Surcharge', val: developTestMasterTestMoneyExportLine(pucExport, bareZeroExport) },
+            { key: 'Sewer Charge', val: developTestMasterTestMoneyExportLine(sewerExport, bareZeroExport) },
             {
               key: 'Credit',
               val: developTestMasterTestCreditMoney(Math.round(creditAmt * 100) / 100)
             },
             {
               key: 'Total (Past Due line)',
-              val: developTestMasterTestMoneyExportLine(pastDue, { bareZero: true })
+              val: totalPastDueLineVal
             }
           ]
         };
@@ -32686,6 +33071,32 @@
             const pack = packs[idx];
             if (!pack) continue;
             entries.push(developTestMasterTestPastDuePackToEntry(idx, pack));
+          }
+          for (let pi = 1; pi < entries.length; pi++) {
+            const prevPack = packs[indices[pi - 1]];
+            const curPack = packs[indices[pi]];
+            const curComp = developTestPastDueCompositionForPack(curPack);
+            const curPastFace =
+              curComp && curComp['Past due amount'] != null
+                ? Math.round(parseFloat(curComp['Past due amount']) * 100) / 100
+                : 0;
+            if (
+              curPack &&
+              curPack.rowKind === 'payment' &&
+              curPack.paymentPastDueApplied > 0.005 &&
+              !/security deposit/i.test(String(curPack.subtype || '')) &&
+              prevPack &&
+              prevPack.rowKind === 'status' &&
+              /current status/i.test(String(prevPack.subtype || '')) &&
+              curPastFace < 0.005
+            ) {
+              const prevComp =
+                prevPack.displayComposition || developTestPastDueCompositionForPack(prevPack);
+              if (prevComp) {
+                curPack.displayComposition = JSON.parse(JSON.stringify(prevComp));
+                entries[pi] = developTestMasterTestPastDuePackToEntry(indices[pi], curPack);
+              }
+            }
           }
           if (typeof hideAllLedgerModal === 'function') hideAllLedgerModal();
           return developTestMasterTestPastDueEntriesVertical(entries, stepNum);
@@ -33798,6 +34209,44 @@
       };
 
       /**
+       * On-prem master tests: refresh local MySQL from Firebase (browser session) and reload in-memory billing data.
+       */
+      window.__masterTestOnpremSyncFromFirebase = async function () {
+        if (!window.localDbLayer || !window.localDbLayer.isLocalDatabaseMode()) {
+          return { ok: false, error: 'Not in local database mode' };
+        }
+        if (typeof window.masterTestLog === 'function') {
+          window.masterTestLog('onpremSync:start', null);
+        }
+        const syncResult = await window.localDbLayer.syncFirebaseToLocal({
+          readFirebaseWhileLocal: true
+        });
+        if (typeof loadCodesFromFirestore === 'function') await loadCodesFromFirestore();
+        if (typeof loadCustomersFromFirestore === 'function') await loadCustomersFromFirestore();
+        if (window.__billModuleCustomersReady) {
+          try {
+            await window.__billModuleCustomersReady;
+          } catch (eCustReady) {
+            /* ignore */
+          }
+        }
+        if (typeof loadLocationsFromFirestore === 'function') await loadLocationsFromFirestore();
+        if (typeof loadDrawersFromFirestore === 'function') await loadDrawersFromFirestore();
+        if (typeof loadUsersFromFirestore === 'function') await loadUsersFromFirestore();
+        if (typeof loadTogglesSettings === 'function') await loadTogglesSettings();
+        if (typeof loadSewerChargeFromFirestore === 'function') await loadSewerChargeFromFirestore();
+        if (typeof loadLateFeeFromFirestore === 'function') await loadLateFeeFromFirestore();
+        if (typeof loadPucSurchargeFromFirestore === 'function') await loadPucSurchargeFromFirestore();
+        if (typeof updateDashboard === 'function') updateDashboard();
+        if (typeof window.masterTestLog === 'function') {
+          window.masterTestLog('onpremSync:done', {
+            summary: syncResult && syncResult.summary ? syncResult.summary : null
+          });
+        }
+        return syncResult || { ok: true };
+      };
+
+      /**
        * Live master test: wait for Firestore customers, verify toggles, select testing drawer,
        * set simulated date to 2026-01-01 (overlay day-walk when cfg.advanceMode is walk).
        */
@@ -34037,11 +34486,18 @@
       gap: 0.25rem;
     }
 
-    #settingsModule.settings-module-testing-fullscreen #settingsTestingContent {
+    #settingsModule.settings-module-testing-fullscreen #settingsTestingContent:not(.hidden),
+    #settingsModule.settings-module-testing-fullscreen #settingsOnPremTestingContent:not(.hidden) {
       display: flex;
       flex-direction: column;
-      flex: 1 1 auto;
+      flex: 1 1 0;
       min-height: 0;
+      overflow: hidden;
+    }
+
+    #settingsModule.settings-module-testing-fullscreen #settingsTestingContent.hidden,
+    #settingsModule.settings-module-testing-fullscreen #settingsOnPremTestingContent.hidden {
+      display: none !important;
     }
 
     #settingsModule.settings-module-testing-fullscreen .settings-testing-intro {
@@ -34049,14 +34505,65 @@
     }
 
     #settingsModule.settings-module-testing-fullscreen .settings-testing-iframe-wrap {
-      flex: 1 1 auto;
+      flex: 1 1 0;
       min-height: 0;
-      height: auto;
-      border-radius: 0.75rem;
+      height: auto !important;
+      min-height: 0 !important;
+    }
+
+    .settings-testing-iframe-wrap iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
     }
 
     body.settings-testing-fullscreen-active {
       overflow: hidden;
+    }
+
+    .settings-testing-tab-context-menu {
+      position: fixed;
+      z-index: 10050;
+      min-width: 12rem;
+      padding: 0.35rem 0;
+      border-radius: 0.5rem;
+      border: 1px solid rgb(203 213 225);
+      background: white;
+      box-shadow: 0 10px 25px rgba(15, 23, 42, 0.18);
+    }
+
+    .dark .settings-testing-tab-context-menu {
+      border-color: rgb(71 85 105);
+      background: rgb(30 41 59);
+    }
+
+    .settings-testing-tab-context-menu button {
+      display: block;
+      width: 100%;
+      padding: 0.5rem 0.875rem;
+      text-align: left;
+      font-size: 0.875rem;
+      color: rgb(51 65 85);
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+    }
+
+    .dark .settings-testing-tab-context-menu button {
+      color: rgb(226 232 240);
+    }
+
+    .settings-testing-tab-context-menu button:hover {
+      background: rgb(241 245 249);
+    }
+
+    .dark .settings-testing-tab-context-menu button:hover {
+      background: rgb(51 65 85);
+    }
+
+    .settings-testing-tab-context-menu.hidden {
+      display: none;
     }
 
   </style>
@@ -35086,6 +35593,13 @@
             >
               Testing
             </button>
+            <button 
+              id="settingsOnPremTestingTab"
+              onclick="switchSettingsView('onprem-testing')" 
+              class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium hidden"
+            >
+              OnPrem Testing
+            </button>
           </div>
 
           <!-- Accounts Section -->
@@ -36056,17 +36570,37 @@
             <div id="settingsTestingIntro" class="settings-testing-intro mb-4">
               <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Master Tests</h2>
               <p class="text-sm text-slate-500 dark:text-slate-400">
-                Run and review Test 1, 2, and 3 in the Master Test viewer.
+                Run and review Test 1, 2, and 3 in the Master Test viewer (Firebase / cloud database).
               </p>
             </div>
             <div
               id="settingsTestingIframeWrap"
               class="settings-testing-iframe-wrap rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-900"
-              style="height: calc(100vh - 16rem); min-height: 480px;"
             >
               <iframe
                 id="settingsMasterTestViewerIframe"
                 title="Master Test viewer"
+                class="w-full h-full border-0 block"
+                loading="lazy"
+              ></iframe>
+            </div>
+          </div>
+
+          <!-- OnPrem Testing Section (localhost:8000 only) -->
+          <div id="settingsOnPremTestingContent" class="hidden settings-testing-panel">
+            <div id="settingsOnPremTestingIntro" class="settings-testing-intro mb-4">
+              <h2 class="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">OnPrem Master Tests</h2>
+              <p class="text-sm text-slate-500 dark:text-slate-400">
+                Same master tests against the local MySQL database. Sync Firebase → Local before running.
+              </p>
+            </div>
+            <div
+              id="settingsOnPremTestingIframeWrap"
+              class="settings-testing-iframe-wrap rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-900"
+            >
+              <iframe
+                id="settingsOnPremMasterTestViewerIframe"
+                title="OnPrem Master Test viewer"
                 class="w-full h-full border-0 block"
                 loading="lazy"
               ></iframe>

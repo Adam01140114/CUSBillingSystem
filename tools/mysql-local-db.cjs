@@ -321,11 +321,32 @@ async function clearCollection(collectionName) {
   return result.affectedRows || 0;
 }
 
+function isFirestoreTimestamp(value) {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    typeof value.toDate === 'function' &&
+    typeof value.seconds === 'number'
+  );
+}
+
+function isPlainTimestampObject(value) {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    typeof value.seconds === 'number' &&
+    typeof value.nanoseconds === 'number' &&
+    typeof value.toDate !== 'function'
+  );
+}
+
 function serializeFirestoreValue(value) {
   if (value == null) return value;
-  if (value instanceof adminTimestamp(value)) return value;
-  if (typeof value.toDate === 'function') {
+  if (isFirestoreTimestamp(value)) {
     return value.toDate().toISOString();
+  }
+  if (isPlainTimestampObject(value)) {
+    return new Date(value.seconds * 1000 + value.nanoseconds / 1e6).toISOString();
   }
   if (Array.isArray(value)) {
     return value.map(serializeFirestoreValue);
@@ -340,7 +361,51 @@ function serializeFirestoreValue(value) {
   return value;
 }
 
-function adminTimestamp() {}
+async function importCollectionDocs(collectionName, docs, options = {}) {
+  await ensureSchema();
+  const collection = sanitizeCollection(collectionName);
+  const list = Array.isArray(docs) ? docs : [];
+  if (options.clearFirst) {
+    await clearCollection(collection);
+  }
+  if (!list.length) return 0;
+
+  const maxAttempts = 4;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const p = await getPool();
+    const conn = await p.getConnection();
+    try {
+      await conn.beginTransaction();
+      for (const item of list) {
+        const id = sanitizeDocId(item.id);
+        const clean = stripDeleteSentinels(item.data || {});
+        await conn.query(
+          `INSERT INTO firestore_documents (collection_path, doc_id, data)
+           VALUES (?, ?, ?)
+           ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = CURRENT_TIMESTAMP`,
+          [collection, id, JSON.stringify(clean)]
+        );
+      }
+      await conn.commit();
+      return list.length;
+    } catch (err) {
+      await conn.rollback();
+      const msg = String(err && err.message ? err.message : err);
+      const isDeadlock =
+        err && (err.code === 'ER_LOCK_DEADLOCK' || /deadlock/i.test(msg));
+      if (isDeadlock && attempt < maxAttempts) {
+        lastErr = err;
+        await new Promise((r) => setTimeout(r, 150 * attempt));
+        continue;
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+  throw lastErr || new Error('importCollectionDocs failed after retries');
+}
 
 async function syncFromFirebase(firestoreDb, collections = SYNC_COLLECTIONS) {
   await ensureSchema();
@@ -401,6 +466,7 @@ module.exports = {
   addDoc,
   runBatch,
   clearCollection,
+  importCollectionDocs,
   syncFromFirebase,
   syncToFirebase,
   closePool

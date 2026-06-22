@@ -4,6 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Master Test — results viewer</title>
+  <script>
+    try {
+      if (new URLSearchParams(window.location.search).get('embed') === '1') {
+        document.documentElement.classList.add('embed-mode');
+      }
+    } catch (eEmbedHead) {
+      /* ignore */
+    }
+  </script>
   <style>
     :root {
       --bg: #0f1419;
@@ -24,6 +33,24 @@
       line-height: 1.5;
       min-height: 100vh;
       padding-bottom: 5.5rem;
+    }
+    html.embed-mode,
+    html.embed-mode body {
+      min-height: 0;
+      height: 100%;
+    }
+    html.embed-mode body {
+      padding-bottom: 1rem;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+    html.embed-mode .export-bar {
+      position: static;
+      box-shadow: none;
+      margin-top: 1.5rem;
+    }
+    html.embed-mode header {
+      display: none;
     }
     header {
       padding: 1.25rem 1.5rem;
@@ -1186,6 +1213,107 @@
   </footer>
 
   <script>
+    const MASTER_TEST_ONPREM_MODE =
+      window.__MASTER_TEST_VIEWER_ONPREM__ === true ||
+      (function () {
+        try {
+          const p = new URLSearchParams(window.location.search);
+          return p.get('onprem') === '1' || p.get('mode') === 'onprem';
+        } catch (eOnprem) {
+          return false;
+        }
+      })();
+
+    const MASTER_TEST_VIEWER_URL =
+      (window.location.protocol === 'http:' || window.location.protocol === 'https:'
+        ? window.location.origin
+        : 'http://127.0.0.1:8000') +
+      (MASTER_TEST_ONPREM_MODE
+        ? '/test-scripts/master_test_viewer_onprem.html'
+        : '/test-scripts/master_test_viewer.html');
+
+    function masterTestApiQuery() {
+      return MASTER_TEST_ONPREM_MODE ? '?onprem=1' : '';
+    }
+
+    function masterTestLoadUrl(slug) {
+      return '/api/master-test/tests/' + encodeURIComponent(slug) + masterTestApiQuery();
+    }
+
+    function masterTestRegistryUrl() {
+      return '/api/master-test/registry' + masterTestApiQuery();
+    }
+
+    function masterTestResultsUrl(slug) {
+      return MASTER_TEST_ONPREM_MODE
+        ? '/api/master-test/tests/' + encodeURIComponent(slug) + '/onprem/results'
+        : '/api/master-test/tests/' + encodeURIComponent(slug) + '/results';
+    }
+
+    function masterTestExpectedUrl(slug) {
+      return MASTER_TEST_ONPREM_MODE
+        ? '/api/master-test/tests/' + encodeURIComponent(slug) + '/onprem/expected'
+        : '/api/master-test/tests/' + encodeURIComponent(slug) + '/expected';
+    }
+
+    function masterTestRunApiPath() {
+      return '/api/master-test/run';
+    }
+
+    function formatMasterTestLastRunDate(ms) {
+      const n = Number(ms);
+      if (!n || isNaN(n)) return '';
+      const d = new Date(n);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleString('en-US', {
+        month: 'numeric',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      });
+    }
+
+    function masterTestValidationLastRunSuffix(test) {
+      const formatted = formatMasterTestLastRunDate(
+        test && (test.lastResultsRunMs || test.resultsLastRunMs)
+      );
+      return formatted ? ' Last test: ' + formatted + '.' : '';
+    }
+
+    function masterTestResultsFileBasename(slug) {
+      return MASTER_TEST_ONPREM_MODE ? slug + '_onprem_results.txt' : slug + '_results.txt';
+    }
+
+    function masterTestExpectedFileBasename(slug) {
+      return slug + '_expected_output.txt';
+    }
+
+    function isMasterTestJobFinished(job) {
+      if (!job) return false;
+      if (job.status === 'complete' || job.status === 'failed') return true;
+      if (job.status !== 'running') return false;
+      if (Number(job.progress) >= 100) return true;
+      if (job.resultsTextStoredOnDisk === true) return true;
+      const msg = String(job.message || '').toLowerCase();
+      return msg.indexOf('complete') !== -1 && msg.indexOf('incomplete') === -1;
+    }
+
+    function applyMasterTestViewerModeUi() {
+      if (!MASTER_TEST_ONPREM_MODE) return;
+      document.title = 'OnPrem Master Test — results viewer';
+      const h1 = document.querySelector('header h1');
+      if (h1) h1.textContent = 'OnPrem Master Test viewer';
+      const intro = document.querySelector('header p');
+      if (intro) {
+        intro.innerHTML =
+          'Runs the same master tests against the <strong>local MySQL database</strong> (on-prem mode). ' +
+          'Step definitions are shared with cloud tests; results are saved as ' +
+          '<code>testN_onprem_results.txt</code>. Requires <code>npm start</code>, local MySQL, and a ' +
+          '<strong>Sync Firebase → Local</strong> before running. Double-click a test title to edit steps; double-click cells to edit results.';
+      }
+    }
+
     function normalizeLines(s) {
       return String(s || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     }
@@ -6342,6 +6470,9 @@
     function getExportFilenameForView(testKey, isExpected) {
       const test = findCustomTest(testKey);
       const base = test ? sanitizeTestExportFilename(test.name) : 'custom';
+      if (MASTER_TEST_ONPREM_MODE) {
+        return base + (isExpected ? '_expected_output.txt' : '_onprem_results.txt');
+      }
       return base + (isExpected ? '_expected_output.txt' : '_results.txt');
     }
 
@@ -6838,6 +6969,7 @@
     ];
     let test1ActualCached = '';
     let test1ExpectedCached = '';
+    let test1LastResultsRunMs = null;
 
     function test1LinesEquivalent(el, al) {
       if (el === al) return true;
@@ -6910,7 +7042,7 @@
         icon.classList.add('ok');
         icon.textContent = '✓';
         icon.title = 'Test1 results match expected output';
-        if (meta) meta.textContent = 'Validation passed — test1_results.txt matches test1_expected_output.txt.';
+        if (meta) meta.textContent = 'Validation passed — test1_results.txt matches test1_expected_output.txt.' + masterTestValidationLastRunSuffix({ lastResultsRunMs: test1LastResultsRunMs });
       } else {
         icon.classList.add('fail');
         icon.textContent = '✗';
@@ -7380,7 +7512,15 @@
 
     function getMasterTestApiUrl(path) {
       const p = path.charAt(0) === '/' ? path : '/' + path;
-      if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+      const protocol = window.location.protocol;
+      const host = String(window.location.hostname || '').toLowerCase();
+      if (protocol === 'http:' || protocol === 'https:') {
+        if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+          const port = String(window.location.port || '');
+          if (port && port !== '8000') {
+            return protocol + '//' + window.location.hostname + ':8000' + p;
+          }
+        }
         return window.location.origin + p;
       }
       return 'http://127.0.0.1:8000' + p;
@@ -7462,11 +7602,25 @@
         }
         const job = hit.data.job || {};
         updateTestRunProgress(test.slug, job.progress, job.message || 'Test is running…');
-        if (job.status === 'complete') {
+        if (isMasterTestJobFinished(job)) {
+          if (job.status === 'failed') {
+            throw new Error(job.error || job.message || 'Test run failed');
+          }
+          test.lastResultsRunMs = job.updatedAt || Date.now();
+          if (test.slug === 'test1') {
+            test1LastResultsRunMs = test.lastResultsRunMs;
+          }
           test.resultsText = job.resultsText || '';
+          if (!String(test.resultsText || '').trim()) {
+            const loadHit = await fetchMasterTestApi(masterTestLoadUrl(test.slug));
+            if (loadHit.res.ok && loadHit.data.ok && loadHit.data.test) {
+              test.resultsText = loadHit.data.test.resultsText || '';
+            }
+          }
           const stored = findCustomTest(test.slug);
           if (stored) {
             stored.resultsText = test.resultsText;
+            stored.lastResultsRunMs = test.lastResultsRunMs;
             stored.foundationText = buildBlankMasterTestDocument(stored.stepDefs || []);
             try {
               await persistTestPackage(stored);
@@ -7475,6 +7629,14 @@
               }
             } catch (eSave) {
               console.error('[master-test-viewer] save results to disk failed', eSave);
+            }
+            const reloadHit = await fetchMasterTestApi(masterTestLoadUrl(test.slug));
+            if (reloadHit.res.ok && reloadHit.data.ok && reloadHit.data.test) {
+              stored.lastResultsRunMs =
+                reloadHit.data.test.resultsLastRunMs || stored.lastResultsRunMs;
+              if (test.slug === 'test1') {
+                test1LastResultsRunMs = stored.lastResultsRunMs;
+              }
             }
             await refreshCustomTestValidation(stored);
           }
@@ -7519,7 +7681,7 @@
       updateTestRunProgress(test.slug, 0, 'Starting test…');
       let jobId = null;
       try {
-        const hit = await fetchMasterTestApi('/api/master-test/run', {
+        const hit = await fetchMasterTestApi(masterTestRunApiPath(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -7531,7 +7693,8 @@
             customerCreatedDate: test.customerCreatedDate || '',
             steps: test.stepDefs,
             advanceMode: 'instant',
-            testSlug: test.slug
+            testSlug: test.slug,
+            onprem: MASTER_TEST_ONPREM_MODE === true
           })
         });
         if (!hit.res.ok || !hit.data.ok) {
@@ -7734,9 +7897,7 @@
     }
 
     async function persistTestResultsText(slug, text) {
-      const hit = await fetchMasterTestApi(
-        '/api/master-test/tests/' + encodeURIComponent(slug) + '/results',
-        {
+      const hit = await fetchMasterTestApi(masterTestResultsUrl(slug), {
           method: 'PUT',
           headers: { 'Content-Type': 'text/plain; charset=utf-8' },
           body: text != null ? String(text) : ''
@@ -7748,9 +7909,7 @@
     }
 
     async function persistTestExpectedText(slug, text) {
-      const hit = await fetchMasterTestApi(
-        '/api/master-test/tests/' + encodeURIComponent(slug) + '/expected',
-        {
+      const hit = await fetchMasterTestApi(masterTestExpectedUrl(slug), {
           method: 'PUT',
           headers: { 'Content-Type': 'text/plain; charset=utf-8' },
           body: text != null ? String(text) : ''
@@ -7833,16 +7992,14 @@
 
     async function loadAllCustomTestsFromDisk() {
       customTests = [];
-      const reg = await fetchMasterTestApi('/api/master-test/registry');
+      const reg = await fetchMasterTestApi(masterTestRegistryUrl());
       if (!reg.res.ok || !reg.data.ok) {
         throw new Error((reg.data && reg.data.error) || 'Could not load tests from disk');
       }
       const list = reg.data.tests || [];
       for (let i = 0; i < list.length; i++) {
         const meta = list[i];
-        const hit = await fetchMasterTestApi(
-          '/api/master-test/tests/' + encodeURIComponent(meta.slug)
-        );
+        const hit = await fetchMasterTestApi(masterTestLoadUrl(meta.slug));
         if (!hit.res.ok || !hit.data.ok || !hit.data.test) continue;
         const t = hit.data.test;
         let foundationText = String(t.foundationText || '').trim();
@@ -7863,8 +8020,12 @@
             .filter(Boolean),
           foundationText: foundationText,
           resultsText: t.resultsText || '',
-          expectedText: t.expectedText || ''
+          expectedText: t.expectedText || '',
+          lastResultsRunMs: t.resultsLastRunMs || meta.resultsLastRunMs || null
         });
+        if (meta.slug === 'test1') {
+          test1LastResultsRunMs = t.resultsLastRunMs || meta.resultsLastRunMs || null;
+        }
       }
     }
 
@@ -8060,10 +8221,11 @@
         if (meta) {
           meta.textContent =
             'Validation passed — ' +
-            test.slug +
-            '_results.txt matches ' +
-            test.slug +
-            '_expected_output.txt on disk.';
+            masterTestResultsFileBasename(test.slug) +
+            ' matches ' +
+            masterTestExpectedFileBasename(test.slug) +
+            ' on disk.' +
+            masterTestValidationLastRunSuffix(test);
         }
       } else {
         icon.classList.add('fail');
@@ -9075,6 +9237,7 @@
     }
 
     async function initMasterTestViewer() {
+      applyMasterTestViewerModeUi();
       wireTestLoginModal();
       await checkMasterTestApiOnLoad();
       try {

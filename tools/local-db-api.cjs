@@ -93,10 +93,37 @@ function registerLocalDbRoutes(app, firestoreDb) {
     }
   });
 
+  app.post('/api/local-db/sync/import-collection', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const collectionName = body.collection;
+      if (!collectionName) {
+        return res.status(400).json({ ok: false, error: 'collection is required' });
+      }
+      const count = await localDb.importCollectionDocs(collectionName, body.docs || [], {
+        clearFirst: !!body.clearFirst
+      });
+      res.json({ ok: true, collection: collectionName, count });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err.message || String(err) });
+    }
+  });
+
   app.post('/api/local-db/sync/firebase-to-local', async (req, res) => {
     try {
       if (!firestoreDb) {
         return res.status(500).json({ ok: false, error: 'Firebase is not configured on the server.' });
+      }
+      const clientProject =
+        process.env.BILLING_FIREBASE_PROJECT_ID || 'cus-billing-e84eb';
+      const serverProject = process.env.FIREBASE_PROJECT_ID || '';
+      if (serverProject && clientProject && serverProject !== clientProject) {
+        return res.status(409).json({
+          ok: false,
+          error:
+            `Server Firebase project (${serverProject}) is not the billing app project (${clientProject}). ` +
+            'Use Sync Firebase → Local from Settings in the browser — it reads from the same Firebase project as the app.'
+        });
       }
       const collections = Array.isArray(req.body?.collections)
         ? req.body.collections
@@ -112,6 +139,17 @@ function registerLocalDbRoutes(app, firestoreDb) {
     try {
       if (!firestoreDb) {
         return res.status(500).json({ ok: false, error: 'Firebase is not configured on the server.' });
+      }
+      const clientProject =
+        process.env.BILLING_FIREBASE_PROJECT_ID || 'cus-billing-e84eb';
+      const serverProject = process.env.FIREBASE_PROJECT_ID || '';
+      if (serverProject && clientProject && serverProject !== clientProject) {
+        return res.status(409).json({
+          ok: false,
+          error:
+            `Server Firebase project (${serverProject}) is not the billing app project (${clientProject}). ` +
+            'Use Sync Local → Firebase from Settings in the browser — it writes to the same Firebase project as the app.'
+        });
       }
       const collections = Array.isArray(req.body?.collections)
         ? req.body.collections

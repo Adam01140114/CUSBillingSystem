@@ -27,12 +27,23 @@ function readJob(jobFile) {
 function writeJob(jobFile, patch) {
   if (!jobFile) return;
   const cur = readJob(jobFile);
+  if (cur.status === 'complete' || cur.status === 'failed') {
+    if (patch && patch.status === 'running') {
+      patch = Object.assign({}, patch);
+      delete patch.status;
+    }
+  }
+  const next = Object.assign({}, cur, patch, { updatedAt: Date.now() });
+  if (typeof next.resultsText === 'string' && next.resultsText.length > 65536) {
+    next.resultsTextStoredOnDisk = true;
+    delete next.resultsText;
+  }
+  if (typeof next.consoleText === 'string' && next.consoleText.length > 65536) {
+    next.consoleTextStoredOnDisk = true;
+    delete next.consoleText;
+  }
   fs.mkdirSync(path.dirname(jobFile), { recursive: true });
-  fs.writeFileSync(
-    jobFile,
-    JSON.stringify(Object.assign({}, cur, patch, { updatedAt: Date.now() }), null, 0),
-    'utf8'
-  );
+  fs.writeFileSync(jobFile, JSON.stringify(next, null, 0), 'utf8');
 }
 
 function progressFromMasterTestEntry(p) {
@@ -122,6 +133,12 @@ async function main() {
   const browser = await chromium.launch({ headless: !headed });
   const page = await browser.newPage();
   page.setDefaultTimeout(300000);
+  const onprem = config.onprem === true;
+  if (onprem) {
+    await page.addInitScript(() => {
+      localStorage.setItem('cusLocalDatabaseMode', 'local');
+    });
+  }
   let progressTimer = null;
   let exitCode = 0;
   let lastProgress = { progress: 0, message: 'Launching browser…' };
@@ -189,12 +206,51 @@ async function main() {
       writeProgress(1, 'Signing in…');
     }
 
+    if (onprem) {
+      writeProgress(2, 'Verifying on-prem (local MySQL) mode…');
+      const localOk = await page.evaluate(() => {
+        return !!(window.localDbLayer && window.localDbLayer.isLocalDatabaseMode());
+      });
+      if (!localOk) {
+        throw new Error(
+          'Billing app did not start in local database mode. Sync Firebase → Local first, then retry OnPrem tests.'
+        );
+      }
+
+      writeProgress(3, 'Syncing Firebase → Local…');
+      let syncOk = null;
+      for (let syncAttempt = 1; syncAttempt <= 4; syncAttempt++) {
+        syncOk = await page.evaluate(async () => {
+          if (typeof window.__masterTestOnpremSyncFromFirebase !== 'function') {
+            return { ok: false, error: '__masterTestOnpremSyncFromFirebase missing — reload index.html' };
+          }
+          try {
+            return await window.__masterTestOnpremSyncFromFirebase();
+          } catch (eSync) {
+            return { ok: false, error: eSync && eSync.message ? eSync.message : String(eSync) };
+          }
+        });
+        const syncErr = syncOk && syncOk.error ? String(syncOk.error) : '';
+        const syncDeadlock = /deadlock/i.test(syncErr);
+        if ((syncOk && syncOk.ok !== false) || !syncDeadlock || syncAttempt >= 4) break;
+        writeProgress(3, 'Syncing Firebase → Local (retry ' + syncAttempt + ')…');
+        await page.waitForTimeout(200 * syncAttempt);
+      }
+      if (!syncOk || syncOk.ok === false) {
+        throw new Error(
+          'OnPrem Firebase → Local sync failed: ' +
+            (syncOk && syncOk.error ? syncOk.error : 'unknown') +
+            '. Sign in to Firebase and confirm Sync Firebase → Local works in Settings.'
+        );
+      }
+    }
+
     await page.waitForFunction(
       () => document.querySelectorAll('#customerTableBody tr').length > 0,
-      { timeout: 180000 }
+      { timeout: onprem ? 300000 : 180000 }
     );
 
-    writeProgress(2, 'Preparing customer…');
+    writeProgress(onprem ? 4 : 2, 'Preparing customer…');
     const prep = await page.evaluate(async (cfgJson) => {
       window.clearMasterTestOfflineMode();
       if (typeof window.__developTestPrepareLiveMasterTest !== 'function') {
@@ -207,11 +263,13 @@ async function main() {
       throw new Error('Live prep failed: ' + (prep && prep.error ? prep.error : 'unknown'));
     }
 
+    let allowProgressJobWrites = true;
     progressTimer = setInterval(async () => {
+      if (!allowProgressJobWrites) return;
       try {
         const p = await page.evaluate(() => window.__MASTER_TEST_PROGRESS || null);
         const prog = progressFromMasterTestEntry(p);
-        if (prog) {
+        if (prog && allowProgressJobWrites) {
           lastProgress = prog;
           writeJob(jobFile, {
             status: 'running',
@@ -248,6 +306,7 @@ async function main() {
       }
     );
 
+    allowProgressJobWrites = false;
     clearInterval(progressTimer);
     progressTimer = null;
 
@@ -258,7 +317,7 @@ async function main() {
     const testSlug = config.testSlug ? String(config.testSlug).trim() : '';
     if (testSlug && report) {
       try {
-        saveResultsToDisk(testSlug, report, consoleText);
+        saveResultsToDisk(testSlug, report, consoleText, !!config.onprem);
       } catch (eDisk) {
         console.error('[dynamic-master-test] disk save failed:', eDisk.message || eDisk);
       }
